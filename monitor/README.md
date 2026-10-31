@@ -26,11 +26,23 @@ project does not include its paid source code.
   `scaling/sql/005_execution_history.sql` applied in order
 - .NET SDK 10 for `src/samples/WorkflowCore.Scaling.Api`
 - Node.js 22+ with npm
+- PowerShell 7+ (`pwsh`) on Windows, macOS or Linux
+- Docker Compose v2 (Docker Desktop on Windows/macOS) for local PostgreSQL
 
 ## Run locally
 
-**Recommended: bootstrap from the repository root** using GNU Make, Docker
-Compose v2, the .NET 10 SDK, Node.js 22+, and npm:
+**Recommended: bootstrap from the repository root** using **PowerShell 7** on
+Windows, macOS, or Linux. GNU Make is optional.
+
+```powershell
+pwsh -NoProfile -File ./scripts/dev.ps1 bootstrap
+pwsh -NoProfile -File ./scripts/dev.ps1 up
+# In a second terminal after the API starts:
+pwsh -NoProfile -File ./scripts/dev.ps1 seed
+```
+
+If you have GNU Make installed, these are equivalent:
+
 
 ```bash
 make bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + npm packages
@@ -39,17 +51,22 @@ make dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
 make seed
 ```
 
-The root [Makefile](../Makefile) includes `make help`, `make up` (one-command
-bootstrap and run), `make test`, `make build`, `make api`, `make ui`,
+The root [Makefile](../Makefile) only delegates to
+[the PowerShell script](../scripts/dev.ps1); there are no Unix-only shell
+recipes. Commands include `make help`, `make up`, `make test`, `make build`,
+`make api`, `make ui`,
 `make db-down`, and `make db-reset CONFIRM=reset` (deletes local data).
 PostgreSQL listens on **127.0.0.1:55432** by default to avoid conflicts with
 existing installations. The named Docker volume preserves data after shutdown.
 Override `PG_PORT`, `API_PORT`, or `UI_PORT` in the Make invocation, e.g.
-`make up PG_PORT=55433 API_PORT=5001 UI_PORT=3001`.
+`make up PG_PORT=55433 API_PORT=5001 UI_PORT=3001`. Without Make, use
+`pwsh ./scripts/dev.ps1 up -PgPort 55433 -ApiPort 5001 -UiPort 3001`.
+Windows PowerShell (`powershell.exe`) version 5.1 is **not** supported; use
+PowerShell 7 (`pwsh`). The script works without Git Bash or WSL.
 Development credentials are **not suitable for production**. Docker is only
 needed when using Make targets that provision the local database.
 
-**Manual setup** (when not using Make):
+**Manual setup** (if not using the PowerShell runner):
 
 From the repository root, first run the sample .NET API:
 
