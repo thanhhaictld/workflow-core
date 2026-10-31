@@ -9,7 +9,7 @@ dispatch/control-plane path for the **same workflow rows**.
 - .NET 10 build/runtime; PostgreSQL 17 is the CI test target.
 - One writable PostgreSQL primary reachable from all replicas.
 - The original Workflow Core PostgreSQL/EF schema (`wfc`) installed first.
-- The three `wfc_scale` SQL migrations applied in ascending order.
+- The four `wfc_scale` SQL migrations applied in ascending order.
 - Identical workflow definitions, step assemblies, serializer types and
   deployment version across worker replicas.
 - Secrets provisioned through a secret manager, not source files.
@@ -33,6 +33,7 @@ export PGHOST=localhost PGPORT=5432 PGDATABASE=workflow PGUSER=workflow
 psql -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
 psql -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
 psql -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
+psql -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
 ```
 
 Verify:
