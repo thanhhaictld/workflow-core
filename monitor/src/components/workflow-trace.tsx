@@ -317,6 +317,26 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approvalSent, setApprovalSent] = useState(false);
+
+  async function approveOnboarding() {
+    setApproving(true); setError(null);
+    try {
+      const response = await fetch(`/backend/demo/onboardings/${encodeURIComponent(workflowId)}/approve`, {
+        method: "POST", headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(`Unable to approve onboarding: HTTP ${response.status}`);
+      }
+      setApprovalSent(true);
+      setRefreshSeq(value => value + 1);
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : "Unable to approve demo onboarding");
+    } finally {
+      setApproving(false);
+    }
+  }
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -393,6 +413,11 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
+        {workflow?.definitionId === "tenant-onboarding-approval" && workflow.status === "Runnable" &&
+          <Button variant="primary" disabled={approving || approvalSent} onClick={approveOnboarding}>
+            {approving ? <LoaderCircle size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+            {approvalSent ? "Approval sent" : "Approve sample onboarding"}
+          </Button>}
         <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
           <input type="checkbox" className="accent-blue-600" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />Auto-refresh
         </label>
