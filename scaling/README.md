@@ -1,5 +1,7 @@
 # Distributed Workflow Core runtime (PostgreSQL)
 
+> **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
+
 This branch introduces a **new .NET 10-only execution runtime** for Workflow Core.
 It intentionally does not preserve compatibility with the legacy queue/lock
 contracts. The original engine, workflow definitions, and execution pointers
