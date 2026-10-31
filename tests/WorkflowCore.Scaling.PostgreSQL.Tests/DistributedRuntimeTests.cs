@@ -195,6 +195,9 @@ public sealed class DistributedRuntimeTests
         var a = await engine.StartAsync("distributed-smoke", idempotencyKey: requestKey);
         var b = await engine.StartAsync("distributed-smoke", idempotencyKey: requestKey);
         Assert.Equal(a, b);
+        var idempotencyHistory = provider.GetRequiredService<ExecutionHistoryReader>();
+        Assert.Single((await idempotencyHistory.ReadAsync(a))
+            .Where(e => e.EventType == "WorkflowStarted"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             engine.StartAsync("distributed-smoke", reference: "different", idempotencyKey: requestKey));
 
@@ -268,6 +271,9 @@ public sealed class DistributedRuntimeTests
                 .Where(x => x.InstanceId == workflowId).Select(x => x.Status).SingleAsync();
         }
         Assert.Equal(WorkflowStatus.Complete, finalStatus);
+        var journal = provider.GetRequiredService<ExecutionHistoryReader>();
+        var delivered = await journal.ReadAsync(workflowId);
+        Assert.Contains(delivered, entry => entry.EventType == "SignalDelivered");
     }
 
     private static async Task RunWorkflowAsync(
