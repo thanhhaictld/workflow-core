@@ -7,6 +7,8 @@ on:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
       - 'src/WorkflowCore/**'
       - 'src/samples/WorkflowCore.Scaling.Api/**'
+      - 'src/samples/WorkflowCore.Scaling.Samples/**'
+      - 'src/samples/WorkflowCore.Scaling.Worker/**'
       - 'scaling/**'
       - 'monitor/**'
       - 'Makefile'
@@ -48,6 +50,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
       - name: Build benchmark API
         run: dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
+      - name: Build standalone sample worker
+        run: dotnet build src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
       - name: Restore and test
         run: dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
 
