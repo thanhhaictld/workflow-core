@@ -172,6 +172,7 @@ falls back to chronological attempts without guessed indentation.
 | `/api/monitor/overview` | Global workflow counts, recent activity, historical errors |
 | `/api/monitor/workflows?search=&status=All&page=1&take=20` | Paginated workflow snapshots |
 | `/api/monitor/workflows/{id}` | Instance, pointers, errors and recent work ledger |
+| `/api/monitor/workflows/{id}/topology` | Exact-version workflow definition steps, branch child roots and continuation IDs |
 | `/api/workflows/{id}/history?after=0&take=300` | Existing append-only history read API |
 
 Supported filters: `All`, `Runnable`, `Complete`, `Suspended`,
