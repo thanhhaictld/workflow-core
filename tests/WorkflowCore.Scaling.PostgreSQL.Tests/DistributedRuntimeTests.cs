@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 using WorkflowCore.Interface;
 using WorkflowCore.Models;
@@ -112,6 +113,49 @@ public sealed class DistributedRuntimeTests
             "SELECT state FROM wfc_scale.work_item WHERE id = @id", command);
         count.Parameters.AddWithValue("id", work.Id);
         Assert.Equal((short)2, Convert.ToInt16(await count.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task HostedWorkerPoolProcessesNewWorkflowWithoutManualDispatch()
+    {
+        await using (var db = new PostgresContext(Connection, "wfc"))
+            await db.Database.MigrateAsync();
+        using var host = Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddDistributedWorkflowCore(Connection, o =>
+                {
+                    o.Concurrency = 4;
+                    o.IdleDelay = TimeSpan.FromMilliseconds(25);
+                });
+                services.AddTransient<NoopStep>();
+            }).Build();
+
+        host.Services.GetRequiredService<IWorkflowHost>()
+            .RegisterWorkflow<ExampleWorkflow>();
+        await host.StartAsync();
+        try
+        {
+            var engine = host.Services.GetRequiredService<DistributedWorkflowEngine>();
+            var id = await engine.StartAsync("distributed-smoke");
+            var completed = false;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (!timeout.IsCancellationRequested)
+            {
+                await using var db = new PostgresContext(Connection, "wfc");
+                var status = await db.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedWorkflow>()
+                    .AsNoTracking().Where(w => w.InstanceId == id)
+                    .Select(w => w.Status).SingleAsync();
+                if (status == WorkflowStatus.Complete)
+                {
+                    completed = true;
+                    break;
+                }
+                await Task.Delay(50);
+            }
+            Assert.True(completed, "Hosted workers did not complete the workflow");
+        }
+        finally { await host.StopAsync(); }
     }
 
     [Fact]
