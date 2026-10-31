@@ -175,6 +175,7 @@ public sealed class DistributedWorkflowEngine
         var pointerStatuses = instance.ExecutionPointers.ToDictionary(p => p.Id, p => p.Status);
         WorkflowExecutorResult? result = null;
         var stepEvents = new List<ExecutionHistoryEvent>();
+        var stepAttempts = new Dictionary<string, Guid>();
         if (instance.Status == WorkflowStatus.Runnable)
         {
             using var capture = ExecutionHistoryScope.Begin(work.Id, fence.Revision + 1);
@@ -182,6 +183,8 @@ public sealed class DistributedWorkflowEngine
             var executor = scope.ServiceProvider.GetRequiredService<IWorkflowExecutor>();
             result = await executor.Execute(instance, ct);
             stepEvents.AddRange(capture.Pending);
+            foreach (var attempt in capture.StepAttempts)
+                stepAttempts[attempt.Key] = attempt.Value;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -206,7 +209,9 @@ public sealed class DistributedWorkflowEngine
             {
                 db.Set<PersistedExecutionError>().Add(error.ToPersistable());
                 stepEvents.Add(new ExecutionHistoryEvent(work.ItemId, "StepErrorRecorded",
-                    work.Id, error.ExecutionPointerId, Revision: fence.Revision + 1));
+                    work.Id, error.ExecutionPointerId,
+                    StepAttemptId: stepAttempts.GetValueOrDefault(error.ExecutionPointerId),
+                    Revision: fence.Revision + 1));
             }
 
             foreach (var pointer in instance.ExecutionPointers)
@@ -228,7 +233,9 @@ public sealed class DistributedWorkflowEngine
                         _ => "StepStatusChanged"
                     };
                     stepEvents.Add(new ExecutionHistoryEvent(work.ItemId, eventType,
-                        work.Id, pointer.Id, pointer.StepId, Revision: fence.Revision + 1,
+                        work.Id, pointer.Id, pointer.StepId,
+                        StepAttemptId: stepAttempts.GetValueOrDefault(pointer.Id),
+                        Revision: fence.Revision + 1,
                         Details: ExecutionHistoryEvent.Json(new
                         {
                             previous = previous.ToString(), current = pointer.Status.ToString(),
