@@ -28,6 +28,7 @@ public static class DistributedWorkflowServiceCollection
 
         services.AddSingleton(settings);
         services.AddSingleton(new FencedWorkQueue(connectionString));
+        services.AddSingleton(new ExecutionHistoryReader(connectionString));
         services.AddSingleton(sp => new DistributedWorkflowEngine(
             connectionString,
             sp.GetRequiredService<FencedWorkQueue>(),
