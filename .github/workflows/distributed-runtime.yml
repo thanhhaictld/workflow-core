@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
       - 'src/WorkflowCore/**'
+      - 'src/samples/WorkflowCore.Scaling.Api/**'
       - 'scaling/**'
       - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
