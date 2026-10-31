@@ -92,23 +92,6 @@ jobs:
           docker compose -f scaling/compose.monitor.yaml config --quiet
       - name: Bootstrap complete local stack
         run: pwsh -NoProfile -File scripts/dev.ps1 bootstrap
-      - name: Verify API starts against bootstrapped schema
-        shell: bash
-        run: |
-          set -euo pipefail
-          make api > /tmp/workflow-monitor-api.log 2>&1 &
-          api_pid=$!
-          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
-          healthy=0
-          for attempt in {1..40}; do
-            if curl -fsS http://127.0.0.1:5000/health/ready; then healthy=1; break; fi
-            sleep 2
-          done
-          if [ "$healthy" -ne 1 ]; then
-            cat /tmp/workflow-monitor-api.log
-            exit 1
-          fi
-          curl -fsS http://127.0.0.1:5000/api/monitor/overview
       - name: Run dedicated worker and test sample onboarding end-to-end
         shell: bash
         run: |
@@ -121,7 +104,8 @@ jobs:
             if curl -fsS http://127.0.0.1:5000/health/ready > /dev/null; then break; fi
             sleep 2
           done
-          curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
+          curl --fail-with-body -sS http://127.0.0.1:5000/health/ready
+          curl --fail-with-body -sS http://127.0.0.1:5000/api/monitor/overview
           pwsh -NoProfile -File scripts/dev.ps1 worker > /tmp/onboarding-worker.log 2>&1 &
           worker_pid=$!
           if ! pwsh -NoProfile -File scripts/test-onboarding.ps1 -TimeoutSeconds 90; then
