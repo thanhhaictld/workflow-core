@@ -9,6 +9,8 @@ on:
       - 'src/samples/WorkflowCore.Scaling.Api/**'
       - 'scaling/**'
       - 'monitor/**'
+      - 'Makefile'
+      - 'scaling/compose.monitor.yaml'
       - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
   workflow_dispatch:
@@ -64,3 +66,42 @@ jobs:
         run: npm run check-types
       - name: Build monitoring dashboard
         run: npm run build
+
+  bootstrap-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate Makefile targets and Compose syntax
+        run: |
+          make help
+          make -n bootstrap
+          make -n dev
+          docker compose -f scaling/compose.monitor.yaml config --quiet
+      - name: Bootstrap complete local stack
+        run: make bootstrap
+      - name: Verify API starts against bootstrapped schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          make api > /tmp/workflow-monitor-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          healthy=0
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:5000/health/ready; then healthy=1; break; fi
+            sleep 2
+          done
+          if [ "$healthy" -ne 1 ]; then
+            cat /tmp/workflow-monitor-api.log
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:5000/api/monitor/overview
+      - name: Stop local PostgreSQL
+        if: always()
+        run: make db-down
