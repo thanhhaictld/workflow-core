@@ -15,9 +15,9 @@ export interface WorkflowTopology {
 }
 
 export type TraceLayoutRow =
-  | { kind: "step" | "fork"; stepId: number; depth: number; label: string; groupId?: number }
-  | { kind: "branch"; branchIndex: number; groupId: number; depth: number; label: string }
-  | { kind: "join"; groupId: number; stepId: number; depth: number; label: string };
+  | { kind: "step" | "fork"; stepId: number; depth: number; label: string; groupId?: number; ancestors: number[] }
+  | { kind: "branch"; branchIndex: number; groupId: number; depth: number; label: string; ancestors: number[] }
+  | { kind: "join"; groupId: number; stepId: number; depth: number; label: string; ancestors: number[] };
 
 /**
  * Turns Workflow Core's Sequence.Children branch roots and Outcomes into
@@ -34,14 +34,14 @@ export function buildTraceLayout(topology: WorkflowTopology): TraceLayoutRow[] {
   const emitted = new Set<number>();
   const rows: TraceLayoutRow[] = [];
 
-  function walk(startId: number, depth: number, excluded: ReadonlySet<number> = new Set()) {
+  function walk(startId: number, depth: number, excluded: ReadonlySet<number> = new Set(), ancestors: number[] = []) {
     let id: number | undefined = startId;
     while (id !== undefined && byId.has(id) && !excluded.has(id) && !emitted.has(id)) {
       const step: TopologyStep = byId.get(id)!;
       emitted.add(id);
 
       if (step.kind === "parallel" && step.children.length > 1) {
-        rows.push({ kind: "fork", stepId: step.id, depth, label: `Parallel · ${step.children.length} branches`, groupId: step.id });
+        rows.push({ kind: "fork", stepId: step.id, depth, label: `Parallel · ${step.children.length} branches`, groupId: step.id, ancestors });
 
         // A separate Do() contributes a root child. Its continuation is the
         // next outcome of the Sequence container, not an outcome of a branch.
@@ -51,17 +51,17 @@ export function buildTraceLayout(topology: WorkflowTopology): TraceLayoutRow[] {
           const label = byId.get(root)?.name ?? `Step ${root}`;
           rows.push({
             kind: "branch", groupId: step.id, branchIndex: index,
-            depth: depth + 1, label: `Branch ${index + 1} · ${label}`
+            depth: depth + 1, label: `Branch ${index + 1} · ${label}`, ancestors: [...ancestors, step.id]
           });
           // Sibling roots cannot be traversed as part of another branch.
           const blocked = new Set<number>([...excluded, ...roots.filter(value => value !== root)]);
           if (continuation !== undefined) blocked.add(continuation);
-          walk(root, depth + 2, blocked);
+          walk(root, depth + 2, blocked, [...ancestors, step.id]);
         });
-        rows.push({ kind: "join", groupId: step.id, stepId: step.id, depth, label: "Join · all branches" });
+        rows.push({ kind: "join", groupId: step.id, stepId: step.id, depth, label: "Join · all branches", ancestors });
         id = continuation;
       } else {
-        rows.push({ kind: "step", stepId: step.id, depth, label: step.name });
+        rows.push({ kind: "step", stepId: step.id, depth, label: step.name, ancestors });
         // Outcome arrays can contain decisions; a linear path follows the
         // first valid target. Other branches are included below as unmatched.
         id = step.nextStepIds.find(target => byId.has(target) && !excluded.has(target) && !emitted.has(target));
