@@ -7,6 +7,7 @@ namespace WorkflowCore.Scaling.PostgreSQL;
 
 public sealed class DistributedRuntimeOptions
 {
+    public bool StartWorker { get; set; } = true;
     public int Concurrency { get; set; } = 8;
     public int MaxAttempts { get; set; } = 12;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromSeconds(60);
