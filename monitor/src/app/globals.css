@@ -1,0 +1,69 @@
+/*
+ * Theme tokens adapted from Shadcn Studio AdminCN Free (MIT).
+ * Source: https://github.com/shadcnstudio/shadcn-nextjs-admincn-admin-template-free
+ * Original license: https://github.com/shadcnstudio/shadcn-nextjs-admincn-admin-template-free/blob/main/LICENSE.md
+ */
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-destructive: var(--destructive);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-sm: calc(var(--radius) * 0.6);
+}
+:root {
+  color-scheme: light;
+  --background: oklch(0.98 0.003 260);
+  --foreground: oklch(0.20 0.014 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.20 0.014 260);
+  --primary: oklch(0.30 0.07 259);
+  --primary-foreground: oklch(0.99 0 0);
+  --muted: oklch(0.955 0.006 260);
+  --muted-foreground: oklch(0.51 0.018 260);
+  --border: oklch(0.916 0.008 260);
+  --sidebar: oklch(0.992 0.002 260);
+  --sidebar-foreground: oklch(0.32 0.025 260);
+  --sidebar-border: oklch(0.917 0.010 260);
+  --destructive: oklch(0.58 0.23 27);
+  --radius: 0.65rem;
+}
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.17 0.014 260);
+  --foreground: oklch(0.97 0.004 260);
+  --card: oklch(0.23 0.016 260);
+  --card-foreground: oklch(0.97 0.004 260);
+  --primary: oklch(0.75 0.09 259);
+  --primary-foreground: oklch(0.20 0.014 260);
+  --muted: oklch(0.29 0.014 260);
+  --muted-foreground: oklch(0.73 0.014 260);
+  --border: oklch(0.34 0.016 260);
+  --sidebar: oklch(0.21 0.015 260);
+  --sidebar-foreground: oklch(0.96 0.004 260);
+  --sidebar-border: oklch(0.33 0.014 260);
+  --destructive: oklch(0.70 0.17 25);
+}
+@layer base {
+  * { @apply border-border; }
+  html { @apply font-sans antialiased; }
+  body { @apply bg-background text-foreground; }
+  button, select { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+}
+.compact-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.compact-scrollbar::-webkit-scrollbar-thumb { border-radius: 8px; background: #9ca3af60; }
+.timeline-track { background: linear-gradient(90deg,#93c5fd,#4f46e5); }
