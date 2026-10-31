@@ -10,7 +10,7 @@ an immutable audit trail.
 Apply `scaling/sql/005_execution_history.sql` **after** migrations 002–004.
 Each journal row has a database-generated `history_id`, `workflow_id`,
 `recorded_at` (database insertion time), `occurred_at` (event occurrence
- time), `event_type`, optional work-item/pointer/step/attempt IDs,
+time), `event_type`, optional work-item/pointer/step/attempt IDs,
 the fenced workflow revision when available, and optional JSONB metadata.
 Payloads and step input/output values are **not recorded by default**.
 
