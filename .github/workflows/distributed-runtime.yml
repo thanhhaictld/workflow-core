@@ -109,6 +109,28 @@ jobs:
             exit 1
           fi
           curl -fsS http://127.0.0.1:5000/api/monitor/overview
+      - name: Run dedicated worker and test sample onboarding end-to-end
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwsh -NoProfile -File scripts/dev.ps1 api > /tmp/onboarding-api.log 2>&1 &
+          api_pid=$!
+          worker_pid=''
+          trap 'kill "$api_pid" "$worker_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:5000/health/ready > /dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
+          pwsh -NoProfile -File scripts/dev.ps1 worker > /tmp/onboarding-worker.log 2>&1 &
+          worker_pid=$!
+          if ! pwsh -NoProfile -File scripts/test-onboarding.ps1 -TimeoutSeconds 90; then
+            echo 'API output:'
+            tail -100 /tmp/onboarding-api.log
+            echo 'Worker output:'
+            tail -100 /tmp/onboarding-worker.log
+            exit 1
+          fi
       - name: Stop local PostgreSQL
         if: always()
         run: make db-down
