@@ -18,6 +18,7 @@ internal sealed class ExecutionHistoryScope : IDisposable
     public Guid WorkItemId { get; }
     public long Revision { get; }
     public List<ExecutionHistoryEvent> Pending { get; } = new();
+    public Dictionary<string, Guid> StepAttempts { get; } = new();
 
     private ExecutionHistoryScope(Guid workItemId, long revision)
     {
@@ -65,6 +66,7 @@ public sealed class ExecutionHistoryMiddleware : IWorkflowStepMiddleware
             workflowId, "StepAttemptStarted", capture.WorkItemId,
             pointer.Id, pointer.StepId, attemptId, capture.Revision, metadata),
             context.CancellationToken);
+        capture.StepAttempts[pointer.Id] = attemptId;
 
         try
         {
