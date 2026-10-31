@@ -8,8 +8,8 @@ Two schemas are used by the default implementation:
   `ExecutionError` and related tables. Created by the original PostgreSQL
   provider migrations.
 - `wfc_scale`: this branch's new distributed runtime tables, created by
-  `scaling/sql/002_distributed_runtime.sql`, `003_signal_delivery.sql` and
-  `004_request_dedupe.sql` **in that order**.
+  `scaling/sql/002_distributed_runtime.sql`, `003_signal_delivery.sql`,
+  `004_request_dedupe.sql`, and `005_execution_history.sql` **in that order**.
 
 ```mermaid
 erDiagram
@@ -66,6 +66,14 @@ database enforces them. The only new explicit FK in these migrations is
 `signal_delivery.event_id -> signal_event.id` with cascade delete.
 
 ## Tables and indexes
+
+### `execution_history`
+
+Append-only journal of workflow and step attempts, committed pointer state
+transitions, and signal deliveries. An independent `StepAttemptStarted` write
+precedes each step body; outcome writes are atomic with fenced workflow state.
+See [Execution history](execution-history.md) for guarantees, pagination,
+retention and crash interpretation.
 
 ### `work_item`
 
@@ -148,7 +156,9 @@ ORDER BY count(*) DESC LIMIT 50;
 
 ## Growth, vacuum, retention and safety
 
-There is **no implemented retention/archival job**. `work_item` rows in state
+There is **no implemented retention/archival job**. This includes the new
+`execution_history` table, which adds a write on every step attempt and additional
+records for successful state transitions. `work_item` rows in state
 2, signal deliveries, request dedupe keys, and stale signal events may grow
 indefinitely. Before production, define retention per business SLA and
 workflow replay window, add bounded background deletion/archiving and
