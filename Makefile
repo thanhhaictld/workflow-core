@@ -14,7 +14,7 @@ CONFIRM ?=
 
 export PG_PORT PG_USER PG_PASSWORD PG_DATABASE API_PORT UI_PORT CONFIRM
 
-TASKS := help check-tools bootstrap setup up dev api ui install db-up db-ef db-schema db-down db-logs db-reset seed test build check clean
+TASKS := help check-tools bootstrap setup up dev api worker ui install db-up db-ef db-schema db-down db-logs db-reset seed approve test build check clean
 .PHONY: $(TASKS)
 
 # No shell-specific logic here. All task orchestration belongs to scripts/dev.ps1.
