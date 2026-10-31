@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WorkflowCore.Interface;
 using WorkflowCore.Models;
+using WorkflowCore.Primitives;
 using WorkflowCore.Persistence.EntityFramework.Models;
 using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
@@ -57,8 +58,10 @@ app.MapPost("/api/demo/onboardings", async (
         RequiresApproval = request.RequiresApproval,
         SimulateTransientFailure = request.SimulateTransientFailure
     };
-    var definitionId = request.RequiresApproval
-        ? "tenant-onboarding-approval" : "tenant-onboarding-auto";
+    if (request.Parallel && (request.RequiresApproval || request.SimulateTransientFailure))
+        return Results.BadRequest(new { error = "Parallel demo cannot combine with approval or transient-failure scenarios" });
+    var definitionId = request.Parallel ? "tenant-onboarding-parallel"
+        : request.RequiresApproval ? "tenant-onboarding-approval" : "tenant-onboarding-auto";
     var id = await engine.StartAsync(definitionId, state, reference: state.TenantId,
         idempotencyKey: http.Request.Headers["Idempotency-Key"].FirstOrDefault(), ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new
@@ -176,6 +179,36 @@ app.MapGet("/api/monitor/workflows/{id:guid}", async (
     return detail is null ? Results.NotFound() : Results.Ok(detail);
 });
 
+// Definition topology is the source of fork/branch/join indentation. The
+// branch graph is static, but span timestamps and status remain journal-backed.
+// Join() returns the Sequence container: it does not create a separate step.
+app.MapGet("/api/monitor/workflows/{id:guid}/topology", async (
+    Guid id, IWorkflowRegistry registry, CancellationToken ct) =>
+{
+    await using var db = new PostgresContext(connectionString, "wfc");
+    var instance = await db.Set<PersistedWorkflow>().AsNoTracking()
+        .Where(w => w.InstanceId == id)
+        .Select(w => new { w.WorkflowDefinitionId, w.Version })
+        .FirstOrDefaultAsync(ct);
+    if (instance is null) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(instance.WorkflowDefinitionId))
+        return Results.NotFound(new { error = "Definition missing from workflow instance" });
+    var definition = registry.GetDefinition(instance.WorkflowDefinitionId, instance.Version);
+    if (definition is null)
+        return Results.NotFound(new { error = "Exact workflow definition version is not registered" });
+
+    var steps = definition.Steps.Select(step => new
+    {
+        id = step.Id,
+        name = step.Name ?? step.BodyType.Name,
+        kind = step.BodyType == typeof(Sequence) && step.Children.Count > 1 ? "parallel" : "step",
+        children = step.Children.Distinct().ToArray(),
+        nextStepIds = step.Outcomes.Select(outcome => outcome.NextStep).Distinct().ToArray()
+    }).OrderBy(step => step.id).ToArray();
+
+    return Results.Ok(new { definitionId = definition.Id, version = definition.Version, steps });
+});
+
 app.MapGet("/health/ready", async (FencedWorkQueue queue, CancellationToken ct) =>
 {
     try
@@ -191,6 +224,6 @@ app.Run();
 
 public sealed record DemoOnboardingRequest(
     string TenantId, string OrganizationName, bool RequiresApproval = false,
-    bool SimulateTransientFailure = false);
+    bool SimulateTransientFailure = false, bool Parallel = false);
 public sealed record StartRequest(string TenantId);
 public sealed record PublishRequest(string Name, string Key, string? Value);
