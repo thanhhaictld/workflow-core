@@ -112,6 +112,7 @@ and use **Onboarding workflow playground** to create three types of instances:
 | Happy path | `tenant-onboarding-auto` | Validate → identity → workspace → access → activate → welcome → Complete |
 | Retry | `tenant-onboarding-auto` | Workspace throws once, retries with another attempt ID, then completes |
 | Manual approval | `tenant-onboarding-approval` | Steps → WaitFor `OnboardingApproved` → approval signal → resume → Complete |
+| Parallel fork/join | `tenant-onboarding-parallel` | Validate → three nested infrastructure/identity/billing lanes → Join → Activate → Welcome |
 
 All steps are simulated in persisted workflow data. They intentionally **do
 not create cloud resources, identities, tenants, or send emails**. The
