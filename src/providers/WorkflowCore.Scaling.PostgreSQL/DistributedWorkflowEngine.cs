@@ -242,14 +242,15 @@ public sealed class DistributedWorkflowEngine
                         {
                             previous = previous.ToString(), current = pointer.Status.ToString(),
                             retryCount = pointer.RetryCount
-                        })));
+                        })) { OccurredAt = pointer.EndTime ?? DateTime.UtcNow });
                 }
             }
             if (instance.Status != initialStatus)
                 stepEvents.Add(new ExecutionHistoryEvent(work.ItemId,
                     instance.Status == WorkflowStatus.Complete ? "WorkflowCompleted" : "WorkflowStatusChanged",
                     work.Id, Revision: fence.Revision + 1,
-                    Details: ExecutionHistoryEvent.Json(new { status = instance.Status.ToString() })));
+                    Details: ExecutionHistoryEvent.Json(new { status = instance.Status.ToString() }))
+                    { OccurredAt = instance.CompleteTime ?? DateTime.UtcNow });
 
             if (instance.Status == WorkflowStatus.Runnable && instance.NextExecution.HasValue)
             {
