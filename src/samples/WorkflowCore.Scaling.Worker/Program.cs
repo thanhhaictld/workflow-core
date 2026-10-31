@@ -15,9 +15,11 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
     options.IdleDelay = TimeSpan.FromMilliseconds(100);
 });
 builder.Services.AddTenantOnboardingDemo();
+builder.Services.AddBenchmarkProvisionDemo();
 
 // A worker registers the exact same workflow definitions as the API. Workflow
 // instances can move between replicas because their state is in PostgreSQL.
 using var host = builder.Build();
 host.Services.GetRequiredService<IWorkflowHost>().RegisterTenantOnboardingDemo();
+host.Services.GetRequiredService<IWorkflowHost>().RegisterBenchmarkProvisionDemo();
 await host.RunAsync();
