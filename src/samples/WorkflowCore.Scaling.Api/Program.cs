@@ -58,6 +58,26 @@ app.MapGet("/api/workflows/{id:guid}", async (Guid id, CancellationToken ct) =>
     return row is null ? Results.NotFound() : Results.Ok(row);
 });
 
+// Development API only: add authentication and per-tenant authorization before
+// exposing workflow history in a real SaaS application.
+app.MapGet("/api/workflows/{id:guid}/history", async (
+    Guid id, long? after, int? take, ExecutionHistoryStore history, CancellationToken ct) =>
+{
+    if (after < 0 || take is < 1 or > 1000)
+        return Results.BadRequest("after must be nonnegative; take must be 1..1000");
+    await using var db = new PostgresContext(connectionString, "wfc");
+    var exists = await db.Set<PersistedWorkflow>().AsNoTracking()
+        .AnyAsync(w => w.InstanceId == id, ct);
+    if (!exists) return Results.NotFound();
+
+    var entries = await history.ReadAsync(id, after ?? 0, take ?? 100, ct);
+    return Results.Ok(new
+    {
+        items = entries,
+        nextAfter = entries.Count == 0 ? after ?? 0 : entries[^1].HistoryId
+    });
+});
+
 app.MapGet("/health/ready", async (FencedWorkQueue queue, CancellationToken ct) =>
 {
     try
