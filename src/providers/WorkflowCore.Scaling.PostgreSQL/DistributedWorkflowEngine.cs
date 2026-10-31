@@ -268,10 +268,16 @@ public sealed class DistributedWorkflowEngine
         await using (var db = Context())
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
-            if (subscriptions.Count > 0)
-                await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    UPDATE wfc_scale.signal_event SET processed = true WHERE id = {work.ItemId}
-                    """, ct);
+            // If delivery finished before an earlier attempt crashed, the
+            // subscription rows may already be gone. Delivery markers preserve
+            // evidence that at least one subscriber consumed this event.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE wfc_scale.signal_event
+                SET processed = true
+                WHERE id = {work.ItemId}
+                  AND (EXISTS (SELECT 1 FROM wfc_scale.signal_delivery WHERE event_id = {work.ItemId})
+                       OR {subscriptions.Count} > 0)
+                """, ct);
             if (!await AckAsync(db, work, owner, ct))
                 throw new InvalidOperationException("Event queue lease expired");
             await tx.CommitAsync(ct);

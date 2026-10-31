@@ -1,0 +1,42 @@
+name: Distributed PostgreSQL Runtime
+on:
+  push:
+    branches: [feat/distributed-postgres-runtime]
+  pull_request:
+    paths:
+      - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
+      - 'scaling/**'
+      - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
+      - '.github/workflows/distributed-runtime.yml'
+  workflow_dispatch:
+
+jobs:
+  distributed-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      WFC_TEST_PG: Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only
+      PGPASSWORD: workflow_dev_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Apply distributed runtime schema
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
+      - name: Restore and test
+        run: dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
