@@ -71,6 +71,8 @@ jobs:
         run: npm run check-types
       - name: Build monitoring dashboard
         run: npm run build
+      - name: Test parallel trace layout and nested joins
+        run: npm run test:topology
 
   bootstrap-smoke:
     runs-on: ubuntu-latest
