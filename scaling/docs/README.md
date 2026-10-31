@@ -11,6 +11,7 @@
 |---|---|---|
 | [Architecture](architecture.md) | Architects/engineers | Context, boundaries, component diagram, scaling model |
 | [Execution and event semantics](execution-semantics.md) | Runtime developers | Sequence diagrams, transaction boundaries, retries, `WaitFor` |
+| [Execution history](execution-history.md) | Runtime developers and SREs | Durable step attempts, append-only events, audit guarantees, query API |
 | [PostgreSQL data model](persistence.md) | Database engineers | Schema, indexes, queries, retention, reconciliation |
 | [Public API and configuration](api-and-configuration.md) | Application developers | DI setup, APIs, runtime knobs, endpoint contract |
 | [Design decisions](design-decisions.md) | Reviewers | Accepted choices, alternatives, consequences |
