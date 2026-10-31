@@ -182,6 +182,38 @@ public sealed class DistributedRuntimeTests
     }
 
     [Fact]
+    public async Task RetriesCreateDifferentStepAttemptIdsAndPreserveFailureHistory()
+    {
+        await using (var db = new PostgresContext(Connection, "wfc"))
+            await db.Database.MigrateAsync();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDistributedWorkflowCore(Connection);
+        services.AddTransient<FailOnceStep>();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowHost>().RegisterWorkflow<RetryWorkflow, RetryData>();
+
+        var engine = provider.GetRequiredService<DistributedWorkflowEngine>();
+        var queue = provider.GetRequiredService<FencedWorkQueue>();
+        var history = provider.GetRequiredService<ExecutionHistoryStore>();
+        var id = await engine.StartAsync("history-retry", new RetryData());
+
+        await RunWorkflowAsync(queue, engine, "retry-history-test");
+        await RunWorkflowAsync(queue, engine, "retry-history-test");
+
+        var timeline = await history.ReadAsync(id);
+        var started = timeline.Where(x => x.Event.EventType == "StepAttemptStarted").ToArray();
+        Assert.Equal(2, started.Length);
+        Assert.NotEqual(started[0].Event.StepAttemptId, started[1].Event.StepAttemptId);
+        Assert.Contains(timeline, x => x.Event.EventType == "StepBodyThrew"
+            && x.Event.StepAttemptId == started[0].Event.StepAttemptId);
+        Assert.Contains(timeline, x => x.Event.EventType == "StepCompleted"
+            && x.Event.StepAttemptId == started[1].Event.StepAttemptId);
+        Assert.Contains(timeline, x => x.Event.EventType == "WorkflowCompleted");
+    }
+
+    [Fact]
     public async Task HostedWorkerPoolProcessesNewWorkflowWithoutManualDispatch()
     {
         await using (var db = new PostgresContext(Connection, "wfc"))
@@ -367,6 +399,31 @@ public sealed class DistributedRuntimeTests
                 .WaitFor("DistributedTestSignal", (data, context) => data.Key,
                     data => DateTime.UtcNow.AddDays(-1))
                 .Then(context => ExecutionResult.Next());
+        }
+    }
+
+    public sealed class RetryData
+    {
+        public int Attempts { get; set; }
+    }
+
+    public sealed class RetryWorkflow : IWorkflow<RetryData>
+    {
+        public string Id => "history-retry";
+        public int Version => 1;
+        public void Build(IWorkflowBuilder<RetryData> builder) =>
+            builder.StartWith<FailOnceStep>()
+                .OnError(WorkflowErrorHandling.Retry, TimeSpan.Zero);
+    }
+
+    public sealed class FailOnceStep : StepBody
+    {
+        public override ExecutionResult Run(IStepExecutionContext context)
+        {
+            var state = (RetryData)context.Workflow.Data;
+            if (state.Attempts++ == 0)
+                throw new InvalidOperationException("Intentional test-only failure");
+            return ExecutionResult.Next();
         }
     }
 
