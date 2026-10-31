@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { AlertTriangle, Check, ChevronRight, FlaskConical, LoaderCircle, Play, RotateCcw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, FlaskConical, GitBranch, LoaderCircle, Play, RotateCcw, ShieldCheck } from "lucide-react";
 import { Badge, Button, Card, CardHeader } from "./ui";
 
-type Scenario = "completed" | "retry" | "approval";
+type Scenario = "completed" | "retry" | "approval" | "parallel";
 interface DemoCreated {
   workflowId: string;
   tenantId: string;
@@ -17,13 +17,14 @@ interface ScenarioOption {
   title: string;
   description: string;
   icon: React.ReactNode;
-  accent: "green" | "amber" | "blue";
+  accent: "green" | "amber" | "blue" | "purple";
 }
 
 const scenarios: ScenarioOption[] = [
   { id: "completed", title: "Happy path", description: "Six provisioning steps to completion", icon: <Check size={16} />, accent: "green" },
   { id: "retry", title: "Transient retry", description: "Workspace step throws once, then retries", icon: <RotateCcw size={16} />, accent: "amber" },
-  { id: "approval", title: "Wait for approval", description: "Pause on a durable event, then resume", icon: <ShieldCheck size={16} />, accent: "blue" }
+  { id: "approval", title: "Wait for approval", description: "Pause on a durable event, then resume", icon: <ShieldCheck size={16} />, accent: "blue" },
+  { id: "parallel", title: "Parallel fork / join", description: "Infrastructure, identity and billing lanes reunite before activation", icon: <GitBranch size={16} />, accent: "purple" }
 ];
 
 async function postJson(path: string, body?: object): Promise<Record<string, unknown>> {
@@ -56,7 +57,8 @@ export function DemoOnboarding({ onCreated }: { onCreated: () => void }) {
       const result = await postJson("/demo/onboardings", {
         tenantId, organizationName: `Example ${scenario} organization`,
         requiresApproval: scenario === "approval",
-        simulateTransientFailure: scenario === "retry"
+        simulateTransientFailure: scenario === "retry",
+        parallel: scenario === "parallel"
       });
       setCreated({
         workflowId: String(result.workflowId), tenantId,
@@ -87,9 +89,9 @@ export function DemoOnboarding({ onCreated }: { onCreated: () => void }) {
 
   return <Card className="overflow-hidden">
     <CardHeader title="Onboarding workflow playground"
-      description="Start real sample executions to explore the waterfall, retries, and signal handling."
+      description="Create runs to inspect real step attempts, retries, fork/join hierarchy, and signal handling."
       action={<Badge tone="purple"><FlaskConical size={12} /> Development only</Badge>} />
-    <div className="grid gap-3 p-4 sm:grid-cols-3">
+    <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
       {scenarios.map(scenario => <div key={scenario.id} className="flex flex-col rounded-lg border border-border bg-muted/20 p-4">
         <div className="flex items-center gap-2 text-sm font-semibold">{scenario.icon}{scenario.title}</div>
         <p className="mt-2 min-h-10 text-xs leading-5 text-muted-foreground">{scenario.description}</p>
