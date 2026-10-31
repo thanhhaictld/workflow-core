@@ -123,6 +123,14 @@ public sealed class DistributedWorkflowEngine
     public async Task ExecuteWorkflowAsync(LeasedWork work, WorkflowFence fence,
         string owner, CancellationToken ct)
     {
+        // Coalescing wakeups is safe only if stale generations are discarded.
+        // The durable work key denotes the expected state revision to execute.
+        if (work.ItemKey != $"wf:{work.ItemId}:{fence.Revision}")
+        {
+            await AckEventAsync(work, owner, ct);
+            return;
+        }
+
         WorkflowInstance instance;
         await using (var read = Context())
         {
@@ -167,19 +175,23 @@ public sealed class DistributedWorkflowEngine
                 await InsertWorkAsync(db, "workflow", work.ItemId,
                     $"wf:{work.ItemId}:{fence.Revision + 1}", due, ct);
             }
-            // Match previously arrived events when a new WaitFor subscription is created.
+            // Backfill ALL pending signals, even those arriving before WaitFor
+            // was registered. Their effective time remains a lower bound.
             foreach (var sub in result.Subscriptions)
             {
-                var eventIds = await db.Database.SqlQuery<Guid>($"""
-                    SELECT id AS "Value" FROM wfc_scale.signal_event
-                    WHERE processed = false AND event_name = {sub.EventName}
-                      AND event_key = {sub.EventKey}
-                      AND effective_at >= {sub.SubscribeAsOf.ToUniversalTime()}
-                    ORDER BY effective_at, id LIMIT 1000
-                    """).ToListAsync(ct);
-                foreach (var eventId in eventIds)
-                    await InsertWorkAsync(db, "event", eventId,
-                        $"event:{eventId}:subscription:{sub.Id}", DateTime.UtcNow, ct);
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO wfc_scale.work_item
+                        (id, queue_name, item_key, item_id, due_at)
+                    SELECT gen_random_uuid(), 'event',
+                           'event:' || e.id || ':subscription:' || {sub.Id},
+                           e.id, greatest(e.effective_at, now())
+                    FROM wfc_scale.signal_event e
+                    WHERE e.processed = false
+                      AND e.event_name = {sub.EventName}
+                      AND e.event_key = {sub.EventKey}
+                      AND e.effective_at >= {sub.SubscribeAsOf.ToUniversalTime()}
+                    ON CONFLICT (queue_name, item_key) DO NOTHING
+                    """, ct);
             }
         }
         await db.SaveChangesAsync(ct);
@@ -217,13 +229,39 @@ public sealed class DistributedWorkflowEngine
                 .OrderBy(s => s.WorkflowId).ThenBy(s => s.SubscriptionId)
                 .ToListAsync(ct);
 
+        // Event ordering: an earlier pending signal eligible for any active
+        // subscription must be consumed first, even across worker replicas.
+        if (subscriptions.Count > 0)
+        {
+            await using var orderDb = Context();
+            var older = await orderDb.Database.SqlQuery<Guid>($"""
+                SELECT e.id AS "Value" FROM wfc_scale.signal_event e
+                WHERE e.processed = false
+                  AND e.event_name = {name} AND e.event_key = {key}
+                  AND (e.effective_at < {effective}
+                    OR (e.effective_at = {effective} AND e.id < {work.ItemId}))
+                  AND EXISTS (
+                     SELECT 1 FROM wfc."Subscription" s
+                     WHERE s."EventName" = e.event_name AND s."EventKey" = e.event_key
+                       AND s."SubscribeAsOf" <= e.effective_at
+                  )
+                ORDER BY e.effective_at, e.id LIMIT 1
+                """).FirstOrDefaultAsync(ct);
+            if (older != Guid.Empty)
+            {
+                await InsertWorkAsync(orderDb, "event", older,
+                    $"event:{older}:precedes:{work.ItemId}", DateTime.UtcNow, ct);
+                throw new DeferredWorkException("Earlier matching signal must be processed first");
+            }
+        }
+
         foreach (var sub in subscriptions)
         {
             ct.ThrowIfCancellationRequested();
             var id = Guid.Parse(sub.WorkflowId);
             var subOwner = $"signal:{work.Id:N}:{sub.SubscriptionId:N}";
             var fence = await _queue.AcquireWorkflowAsync(id, subOwner, TimeSpan.FromSeconds(30), ct);
-            if (fence is null) throw new InvalidOperationException("Workflow busy during event delivery");
+            if (fence is null) throw new DeferredWorkException("Workflow busy during event delivery");
             try
             {
                 await using var db = Context();

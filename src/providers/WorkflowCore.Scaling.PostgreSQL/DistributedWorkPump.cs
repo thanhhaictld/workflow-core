@@ -113,6 +113,12 @@ public sealed class DistributedWorkPump : BackgroundService
         {
             // Leave the work leased; another replica reclaims it when expired.
         }
+        catch (DeferredWorkException)
+        {
+            // Contention and event ordering must not burn the failure budget.
+            await _queue.DeferAsync(work, owner,
+                TimeSpan.FromMilliseconds(200 + Random.Shared.Next(300)), shutdown);
+        }
         catch (Exception error)
         {
             _logger.LogError(error, "Work {Id} attempt {Attempt} failed", work.Id, work.Attempts);
