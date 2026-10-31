@@ -116,6 +116,72 @@ public sealed class DistributedRuntimeTests
     }
 
     [Fact]
+    public async Task ExecutionHistoryTracksDurableStepAttemptsAndCommittedTransitions()
+    {
+        await using (var db = new PostgresContext(Connection, "wfc"))
+            await db.Database.MigrateAsync();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDistributedWorkflowCore(Connection);
+        services.AddTransient<NoopStep>();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowHost>().RegisterWorkflow<ExampleWorkflow>();
+
+        var engine = provider.GetRequiredService<DistributedWorkflowEngine>();
+        var queue = provider.GetRequiredService<FencedWorkQueue>();
+        var history = provider.GetRequiredService<ExecutionHistoryStore>();
+        var id = await engine.StartAsync("distributed-smoke");
+        Assert.Equal(new[] { "WorkflowStarted" },
+            (await history.ReadAsync(id)).Select(x => x.Event.EventType));
+
+        var work = Assert.Single(await queue.ClaimAsync("workflow", "journal-test", 1,
+            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var fence = await queue.AcquireWorkflowAsync(id, "journal-test",
+            TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(fence);
+        try
+        {
+            await engine.ExecuteWorkflowAsync(work, fence!, "journal-test", CancellationToken.None);
+        }
+        finally { await queue.ReleaseGateAsync(fence!, CancellationToken.None); }
+
+        var entries = await history.ReadAsync(id);
+        Assert.Contains(entries, e => e.Event.EventType == "WorkAttemptStarted");
+        Assert.Contains(entries, e => e.Event.EventType == "StepAttemptStarted");
+        Assert.Contains(entries, e => e.Event.EventType == "StepBodyReturned");
+        Assert.Contains(entries, e => e.Event.EventType == "StepCompleted");
+        Assert.Contains(entries, e => e.Event.EventType == "WorkflowCompleted");
+        Assert.Contains(entries, e => e.Event.EventType == "WorkAttemptCommitted");
+        Assert.All(entries.Where(e => e.Event.EventType == "StepAttemptStarted"),
+            e => Assert.NotNull(e.Event.StepAttemptId));
+        Assert.True(entries.Zip(entries.Skip(1)).All(pair =>
+            pair.First.HistoryId < pair.Second.HistoryId));
+
+        // Keyset pagination reads the same entries without modification.
+        var first = await history.ReadAsync(id, take: 2);
+        var second = await history.ReadAsync(id, afterHistoryId: first[^1].HistoryId);
+        Assert.Equal(entries.Select(e => e.HistoryId),
+            first.Concat(second).Select(e => e.HistoryId));
+    }
+
+    [Fact]
+    public async Task ExecutionHistoryRollsBackWithItsContainingTransaction()
+    {
+        var id = Guid.NewGuid();
+        await using (var db = new PostgresContext(Connection, "wfc"))
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await ExecutionHistoryStore.AppendInTransactionAsync(db,
+                new ExecutionHistoryEvent(id, "RolledBack"), CancellationToken.None);
+            await tx.RollbackAsync();
+        }
+
+        var history = new ExecutionHistoryStore(Connection);
+        Assert.Empty(await history.ReadAsync(id));
+    }
+
+    [Fact]
     public async Task HostedWorkerPoolProcessesNewWorkflowWithoutManualDispatch()
     {
         await using (var db = new PostgresContext(Connection, "wfc"))
