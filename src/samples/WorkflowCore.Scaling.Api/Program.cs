@@ -11,6 +11,15 @@ var connectionString = builder.Configuration.GetConnectionString("Workflow")
     ?? Environment.GetEnvironmentVariable("WFC_PG")
     ?? throw new InvalidOperationException("Set ConnectionStrings:Workflow or WFC_PG");
 
+// Makefile bootstrap runs EF migrations without starting the hosted work pump.
+// This path has no HTTP listeners and performs no workflow execution.
+if (Environment.GetEnvironmentVariable("WFC_MIGRATE_ONLY") == "1")
+{
+    await using var migrationDb = new PostgresContext(connectionString, "wfc");
+    await migrationDb.Database.MigrateAsync();
+    return;
+}
+
 builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 {
     options.Concurrency = int.TryParse(Environment.GetEnvironmentVariable("WORKERS"), out var workers)
