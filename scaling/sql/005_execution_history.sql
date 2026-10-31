@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS wfc_scale.execution_history (
     CONSTRAINT ck_history_event_type CHECK (length(event_type) BETWEEN 1 AND 80),
     CONSTRAINT ck_history_details_size CHECK (octet_length(details::text) <= 8192)
 );
+-- Older copies of this feature branch had a uniqueness constraint that
+-- incorrectly ruled out retries at the same workflow state revision.
+ALTER TABLE wfc_scale.execution_history
+    DROP CONSTRAINT IF EXISTS execution_history_workflow_id_revision_event_index_key;
+ALTER TABLE wfc_scale.execution_history
+    ADD COLUMN IF NOT EXISTS event_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_history_event_key
+    ON wfc_scale.execution_history(event_key);
 CREATE INDEX IF NOT EXISTS ix_execution_history_workflow
     ON wfc_scale.execution_history(workflow_id,id);
 CREATE INDEX IF NOT EXISTS ix_execution_history_type
