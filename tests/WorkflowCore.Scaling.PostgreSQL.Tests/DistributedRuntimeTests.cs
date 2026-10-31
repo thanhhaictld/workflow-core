@@ -115,6 +115,27 @@ public sealed class DistributedRuntimeTests
     }
 
     [Fact]
+    public async Task DeadLetterIsVisibleAndRequiresExplicitOperatorReplay()
+    {
+        await using var queue = new FencedWorkQueue(Connection);
+        var name = "deadletter:" + Guid.NewGuid().ToString("N");
+        var id = await EnqueueAsync(name, name, Guid.NewGuid());
+        var claimed = Assert.Single(await queue.ClaimAsync(name, "failure", 1,
+            TimeSpan.FromSeconds(10), 1, CancellationToken.None));
+        Assert.True(await queue.RetryAsync(claimed, "failure", TimeSpan.Zero,
+            1, "permanent failure", CancellationToken.None));
+        var stats = await queue.GetStatsAsync(name);
+        Assert.Equal(1, stats.Dead);
+        Assert.Empty(await queue.ClaimAsync(name, "another-worker", 1,
+            TimeSpan.FromSeconds(10), 1, CancellationToken.None));
+        Assert.True(await queue.RequeueDeadAsync(id));
+        var replay = Assert.Single(await queue.ClaimAsync(name, "operator", 1,
+            TimeSpan.FromSeconds(10), 2, CancellationToken.None));
+        Assert.Equal(id, replay.Id);
+        Assert.True(replay.Epoch > claimed.Epoch);
+    }
+
+    [Fact]
     public async Task IdempotencyKeysPreventDuplicateWorkflowStartsAndSignals()
     {
         await using (var db = new PostgresContext(Connection, "wfc"))

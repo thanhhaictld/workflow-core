@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +20,15 @@ public sealed class DistributedRuntimeOptions
 /// </summary>
 public sealed class DistributedWorkPump : BackgroundService
 {
+    private static readonly Meter Meter = new("WorkflowCore.Distributed", "1.0.0");
+    private static readonly ActivitySource Tracing = new("WorkflowCore.Distributed", "1.0.0");
+    private static readonly Counter<long> Claimed = Meter.CreateCounter<long>("workflowcore.work.claimed");
+    private static readonly Counter<long> Succeeded = Meter.CreateCounter<long>("workflowcore.work.succeeded");
+    private static readonly Counter<long> Failed = Meter.CreateCounter<long>("workflowcore.work.failed");
+    private static readonly Counter<long> Deferred = Meter.CreateCounter<long>("workflowcore.work.deferred");
+    private static readonly Histogram<double> ExecutionDuration = Meter.CreateHistogram<double>(
+        "workflowcore.work.duration", unit: "s");
+
     private readonly DistributedWorkflowEngine _engine;
     private readonly FencedWorkQueue _queue;
     private readonly DistributedRuntimeOptions _options;
@@ -66,6 +77,7 @@ public sealed class DistributedWorkPump : BackgroundService
                     continue;
                 }
 
+                Claimed.Add(1, new KeyValuePair<string, object?>("queue", items[0].Queue));
                 await ProcessAsync(items[0], owner, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -82,6 +94,11 @@ public sealed class DistributedWorkPump : BackgroundService
 
     private async Task ProcessAsync(LeasedWork work, string owner, CancellationToken shutdown)
     {
+        using var activity = Tracing.StartActivity("distributed-work.execute");
+        activity?.SetTag("work.id", work.Id.ToString());
+        activity?.SetTag("workflow.id", work.ItemId.ToString());
+        activity?.SetTag("queue", work.Queue);
+        var stopwatch = Stopwatch.StartNew();
         WorkflowFence? fence = null;
         // A queue claim is NOT a workflow ownership claim. They are independent:
         // multiple pending event/step dispatches may target the same workflow.
@@ -108,6 +125,7 @@ public sealed class DistributedWorkPump : BackgroundService
                 await _engine.ExecuteEventAsync(work, owner, execution.Token);
             else
                 throw new InvalidOperationException($"Unknown work type: {work.Queue}");
+            Succeeded.Add(1, new KeyValuePair<string, object?>("queue", work.Queue));
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
         {
@@ -115,12 +133,15 @@ public sealed class DistributedWorkPump : BackgroundService
         }
         catch (DeferredWorkException)
         {
+            Deferred.Add(1, new KeyValuePair<string, object?>("queue", work.Queue));
             // Contention and event ordering must not burn the failure budget.
             await _queue.DeferAsync(work, owner,
                 TimeSpan.FromMilliseconds(200 + Random.Shared.Next(300)), shutdown);
         }
         catch (Exception error)
         {
+            Failed.Add(1, new KeyValuePair<string, object?>("queue", work.Queue));
+            activity?.SetStatus(ActivityStatusCode.Error, error.Message);
             _logger.LogError(error, "Work {Id} attempt {Attempt} failed", work.Id, work.Attempts);
             // Retry is intentionally conditional on the original lease, so a
             // stale worker cannot reschedule work owned by a newer generation.
@@ -139,6 +160,9 @@ public sealed class DistributedWorkPump : BackgroundService
         }
         finally
         {
+            stopwatch.Stop();
+            ExecutionDuration.Record(stopwatch.Elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("queue", work.Queue));
             await heartbeatStop.CancelAsync();
             try { await heartbeat; }
             catch (OperationCanceledException) { }

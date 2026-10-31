@@ -82,3 +82,11 @@ A dedicated PostgreSQL schema is recommended for each performance benchmark.
   cross-runtime migration of live workflow instances is NOT implemented.
 * Serializer uses Workflow Core's Newtonsoft type metadata; restrict
   deserialization types and never ingest untrusted payloads without validation.
+
+## Operations
+
+Use `FencedWorkQueue.GetStatsAsync("workflow")` and
+`GetStatsAsync("event")` to inspect backlog, in-flight leases, dead letters,
+and oldest ready-work age. Dead letters are terminal until an authorized
+operator calls `RequeueDeadAsync(workId)`. Replayed steps may perform external
+actions again; reconcile provisioning state before replay.
