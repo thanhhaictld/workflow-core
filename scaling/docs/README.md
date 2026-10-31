@@ -13,6 +13,7 @@
 | [Execution and event semantics](execution-semantics.md) | Runtime developers | Sequence diagrams, transaction boundaries, retries, `WaitFor` |
 | [Execution history](execution-history.md) | Runtime developers and SREs | Durable step attempts, append-only events, audit guarantees, query API |
 | [Workflow monitoring UI](../../monitor/README.md) | Operators / UI developers | Free AdminCN-inspired monitoring dashboard and Temporal-style step trace |
+| [Onboarding demo](onboarding-sample.md) | Testers and developers | Independent worker, synthetic tenant onboarding, retries, approval signals and trace review |
 | [PostgreSQL data model](persistence.md) | Database engineers | Schema, indexes, queries, retention, reconciliation |
 | [Public API and configuration](api-and-configuration.md) | Application developers | DI setup, APIs, runtime knobs, endpoint contract |
 | [Design decisions](design-decisions.md) | Reviewers | Accepted choices, alternatives, consequences |
@@ -43,7 +44,9 @@ crash consistency under all failure points.
 - [Database migrations](../sql/)
 - [Runtime integration tests](../../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
 - [CI job](../../.github/workflows/distributed-runtime.yml)
-- [Benchmark sample](../../src/samples/WorkflowCore.Scaling.Api/)
+- [Control-plane sample](../../src/samples/WorkflowCore.Scaling.Api/)
+- [Standalone worker](../../src/samples/WorkflowCore.Scaling.Worker/)
+- [Sample workflows](../../src/samples/WorkflowCore.Scaling.Samples/)
 - [k6 script](../benchmarks/k6-start-workflows.js)
 
 All guaranteed/implemented statements in this documentation refer to the
