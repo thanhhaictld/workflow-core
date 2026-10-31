@@ -16,6 +16,7 @@ public sealed record ExecutionHistoryEvent(
     long? Revision = null,
     string? Details = null)
 {
+    public DateTime OccurredAt { get; init; } = DateTime.UtcNow;
     public static string Json(object value) => JsonSerializer.Serialize(value);
 }
 
@@ -51,11 +52,11 @@ public sealed class ExecutionHistoryStore
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO wfc_scale.execution_history
                 (workflow_id, event_type, work_item_id, execution_pointer_id,
-                 step_id, step_attempt_id, revision, details)
+                 step_id, step_attempt_id, revision, details, occurred_at)
             VALUES ({entry.WorkflowId}, {entry.EventType}, {entry.WorkItemId},
                     {entry.ExecutionPointerId}, {entry.StepId},
                     {entry.StepAttemptId}, {entry.Revision},
-                    CAST({entry.Details} AS jsonb))
+                    CAST({entry.Details} AS jsonb), {entry.OccurredAt})
             """, ct);
     }
 
@@ -76,7 +77,7 @@ public sealed class ExecutionHistoryStore
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand("""
-            SELECT history_id, recorded_at, event_type, work_item_id,
+            SELECT history_id, recorded_at, occurred_at, event_type, work_item_id,
                    execution_pointer_id, step_id, step_attempt_id, revision,
                    details::text
             FROM wfc_scale.execution_history
@@ -95,13 +96,14 @@ public sealed class ExecutionHistoryStore
                 reader.GetDateTime(1),
                 new ExecutionHistoryEvent(
                     workflowId,
-                    reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetGuid(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                    reader.IsDBNull(6) ? null : reader.GetGuid(6),
-                    reader.IsDBNull(7) ? null : reader.GetInt64(7),
-                    reader.IsDBNull(8) ? null : reader.GetString(8))));
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetGuid(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                    reader.IsDBNull(7) ? null : reader.GetGuid(7),
+                    reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9))
+                { OccurredAt = reader.GetDateTime(2) }));
         }
         return records;
     }
