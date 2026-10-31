@@ -50,7 +50,7 @@ namespace WorkflowCore.Services.BackgroundTasks
 
             _cancellationTokenSource = new CancellationTokenSource();
 
-            DispatchTask = Task.Factory.StartNew(Execute, TaskCreationOptions.LongRunning);
+            DispatchTask = Task.Run(Execute);
         }
 
         public virtual void Stop()

@@ -19,7 +19,8 @@ namespace WorkflowCore.Services.BackgroundTasks
         private readonly IGreyList _greylist;
         private readonly WorkflowOptions _options;
         private readonly IDateTimeProvider _dateTimeProvider;
-        private Timer _pollTimer;
+        private CancellationTokenSource _pollCancellation;
+        private Task _pollLoop;
 
         public RunnablePoller(IPersistenceProvider persistenceStore, IQueueProvider queueProvider, ILoggerFactory loggerFactory, IServiceProvider serviceProvider, IWorkflowRegistry registry, IDistributedLockProvider lockProvider, IGreyList greylist, IDateTimeProvider dateTimeProvider, WorkflowOptions options)
         {
@@ -34,15 +35,24 @@ namespace WorkflowCore.Services.BackgroundTasks
 
         public void Start()
         {
-            _pollTimer = new Timer(new TimerCallback(PollRunnables), null, TimeSpan.FromSeconds(0), _options.PollInterval);
+            if (_pollLoop != null)
+                throw new InvalidOperationException("Poller already running");
+            _pollCancellation = new CancellationTokenSource();
+            _pollLoop = Task.Run(() => PollLoopAsync(_pollCancellation.Token));
         }
 
         public void Stop()
         {
-            if (_pollTimer != null)
+            if (_pollLoop == null)
+                return;
+            _pollCancellation.Cancel();
+            try { _pollLoop.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+            finally
             {
-                _pollTimer.Dispose();
-                _pollTimer = null;
+                _pollCancellation.Dispose();
+                _pollCancellation = null;
+                _pollLoop = null;
             }
         }
 
@@ -50,11 +60,23 @@ namespace WorkflowCore.Services.BackgroundTasks
         /// Poll the persistence store for workflows ready to run.
         /// Poll the persistence store for stashed unpublished events
         /// </summary>        
-        private async void PollRunnables(object target)
+        private async Task PollLoopAsync(CancellationToken cancellationToken)
         {
-            await PollWorkflows();
-            await PollEvents();
-            await PollCommands();
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await PollWorkflows();
+                    await PollEvents();
+                    await PollCommands();
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogError(ex, "Background polling failed");
+                }
+
+                await Task.Delay(_options.PollInterval, cancellationToken);
+            }
         }
 
         private async Task PollWorkflows()

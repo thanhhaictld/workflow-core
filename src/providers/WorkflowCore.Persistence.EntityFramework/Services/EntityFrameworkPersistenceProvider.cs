@@ -69,7 +69,10 @@ namespace WorkflowCore.Persistence.EntityFramework.Services
             {
                 var now = asAt.ToUniversalTime().Ticks;
                 var raw = await db.Set<PersistedWorkflow>()
-                    .Where(x => x.NextExecution.HasValue && (x.NextExecution <= now) && (x.Status == WorkflowStatus.Runnable))
+                    .AsNoTracking()
+                    .Where(x => x.NextExecution.HasValue && x.NextExecution <= now && x.Status == WorkflowStatus.Runnable)
+                    .OrderBy(x => x.NextExecution).ThenBy(x => x.InstanceId)
+                    .Take(1024)
                     .Select(x => x.InstanceId)
                     .ToListAsync(cancellationToken);
 
@@ -436,6 +439,7 @@ namespace WorkflowCore.Persistence.EntityFramework.Services
             {
                 var cursor = db.Set<PersistedScheduledCommand>()
                     .Where(x => x.ExecuteTime < asOf.UtcDateTime.Ticks)
+                    .OrderBy(x => x.ExecuteTime).Take(1024)
                     .AsAsyncEnumerable();
 
                 await foreach (var command in cursor)
