@@ -4,6 +4,7 @@ using WorkflowCore.Models;
 using WorkflowCore.Persistence.EntityFramework.Models;
 using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
+using WorkflowCore.Scaling.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Workflow")
@@ -16,6 +17,7 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
         ? Math.Max(1, workers) : 16;
 });
 builder.Services.AddTransient<NoopProvisionStep>();
+builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
 var app = builder.Build();
 
 // The old workflow host is used for definition registration ONLY.
@@ -76,6 +78,36 @@ app.MapGet("/api/workflows/{id:guid}/history", async (
         items = entries,
         nextAfter = entries.Count == 0 ? after ?? 0 : entries[^1].HistoryId
     });
+});
+
+// Read-only operational views. The sample API is intentionally not authenticated.
+// Never expose these endpoints outside a trusted development network before adding
+// an authorization policy that scopes *every* list/detail/history query by tenant.
+app.MapGet("/api/monitor/overview", async (
+    WorkflowMonitorReader monitor, CancellationToken ct) =>
+    Results.Ok(await monitor.OverviewAsync(ct)));
+
+app.MapGet("/api/monitor/workflows", async (
+    string? search, string? status, int? page, int? take,
+    WorkflowMonitorReader monitor, CancellationToken ct) =>
+{
+    var currentPage = page ?? 1;
+    var pageSize = take ?? 25;
+    if (currentPage < 1 || currentPage > 100000 || pageSize is < 1 or > 100 ||
+        search?.Length > 200 ||
+        (!string.IsNullOrWhiteSpace(status) && status != "All" &&
+         !Enum.TryParse<WorkflowStatus>(status, true, out _)))
+        return Results.BadRequest(new { error = "Invalid search, status or pagination parameters" });
+    return Results.Ok(await monitor.ListAsync(search, status, currentPage, pageSize, ct));
+});
+
+app.MapGet("/api/monitor/workflows/{id:guid}", async (
+    Guid id, WorkflowMonitorReader monitor, CancellationToken ct) =>
+{
+    // Messages may contain tokens or PII; the opt-in is for isolated diagnostics.
+    var reveal = Environment.GetEnvironmentVariable("WFC_MONITOR_EXPOSE_ERROR_MESSAGES") == "true";
+    var detail = await monitor.GetAsync(id, reveal, ct);
+    return detail is null ? Results.NotFound() : Results.Ok(detail);
 });
 
 app.MapGet("/health/ready", async (FencedWorkQueue queue, CancellationToken ct) =>
