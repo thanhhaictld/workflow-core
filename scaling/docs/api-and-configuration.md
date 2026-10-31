@@ -42,6 +42,7 @@ the database. Apply old EF migrations and new SQL in deployment.
 | `ChangeStatusAsync(workflowId,target,ct)` | Acquire workflow gate, change status, optionally enqueue resume work |
 | `ExecuteWorkflowAsync(work,fence,owner,ct)` | Worker-only fenced workflow execution |
 | `ExecuteEventAsync(work,owner,ct)` | Worker-only matching event delivery |
+| `ExecutionHistoryStore.ReadAsync(workflowId,afterHistoryId?,take?,ct?)` | Read a bounded append-only history page (1–1000 items) |
 
 Callers should use `DistributedWorkflowEngine` for commands. Calling original
 `IWorkflowHost.StartWorkflow()` or `IWorkflowHost.PublishEvent()` bypasses
@@ -80,6 +81,7 @@ File: `src/samples/WorkflowCore.Scaling.Api/Program.cs`.
 | `POST /api/workflows` | Body `{"tenantId":"tenant-1"}`; returns 202 with workflowId |
 | `POST /api/events` | Body `{"name":"X","key":"K","value":"payload"}`; returns 202 with eventId |
 | `GET /api/workflows/{id}` | Returns ID, definition ID, status and next execution |
+| `GET /api/workflows/{id}/history?after=0&take=100` | Read dev-only paginated execution journal |
 | `GET /health/ready` | `SELECT 1` PostgreSQL connectivity check |
 
 Both POST handlers accept an optional `Idempotency-Key` header. Sample
