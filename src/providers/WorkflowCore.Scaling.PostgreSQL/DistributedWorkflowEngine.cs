@@ -1,0 +1,318 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Newtonsoft.Json;
+using WorkflowCore.Interface;
+using WorkflowCore.Models;
+using WorkflowCore.Persistence.EntityFramework;
+using WorkflowCore.Persistence.EntityFramework.Models;
+using WorkflowCore.Persistence.PostgreSQL;
+
+namespace WorkflowCore.Scaling.PostgreSQL;
+
+/// <summary>
+/// PostgreSQL-authoritative workflow runtime. Do NOT start the legacy polling,
+/// event, or workflow consumers alongside this engine: they bypass fencing.
+/// </summary>
+public sealed class DistributedWorkflowEngine
+{
+    private readonly string _connectionString;
+    private readonly FencedWorkQueue _queue;
+    private readonly IWorkflowRegistry _registry;
+    private readonly IExecutionPointerFactory _pointers;
+    private readonly IServiceScopeFactory _scopes;
+    private readonly JsonSerializerSettings _serializer;
+    private readonly string _schema;
+
+    public DistributedWorkflowEngine(string connectionString, FencedWorkQueue queue,
+        IWorkflowRegistry registry, IExecutionPointerFactory pointers,
+        IServiceScopeFactory scopes, string schema = "wfc")
+    {
+        _connectionString = connectionString;
+        _queue = queue;
+        _registry = registry;
+        _pointers = pointers;
+        _scopes = scopes;
+        _schema = schema;
+        _serializer = ExtensionMethods.CreateSerializerSettings();
+    }
+
+    private PostgresContext Context() => new(_connectionString, _schema);
+
+    /// <summary>
+    /// Creates workflow state and the first execution intent in one transaction.
+    /// This is the only supported way to create workflows using this runtime.
+    /// </summary>
+    public async Task<Guid> StartAsync(string definitionId, object? data = null,
+        int? definitionVersion = null, string? reference = null,
+        CancellationToken ct = default)
+    {
+        var definition = _registry.GetDefinition(definitionId, definitionVersion)
+            ?? throw new InvalidOperationException($"Workflow definition not registered: {definitionId}");
+        var id = Guid.NewGuid();
+        var instance = new WorkflowInstance
+        {
+            Id = id.ToString(), WorkflowDefinitionId = definition.Id,
+            Version = definition.Version, Data = data ??
+                (definition.DataType is null ? new object() : Activator.CreateInstance(definition.DataType)),
+            Description = definition.Description, Reference = reference,
+            NextExecution = 0, Status = WorkflowStatus.Runnable,
+            CreateTime = DateTime.UtcNow
+        };
+        instance.ExecutionPointers.Add(_pointers.BuildGenesisPointer(definition));
+        await using var db = Context();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        db.Set<PersistedWorkflow>().Add(instance.ToPersistable(_serializer));
+        await db.SaveChangesAsync(ct);
+        await InsertWorkAsync(db, "workflow", id, $"wf:{id}:0", DateTime.UtcNow, ct);
+        await tx.CommitAsync(ct);
+        return id;
+    }
+
+    /// <summary>Record an event and its durable dispatch intent atomically.</summary>
+    public async Task<Guid> PublishEventAsync(string name, string key, object? data,
+        DateTime? effectiveAt = null, CancellationToken ct = default)
+    {
+        var id = Guid.NewGuid();
+        var due = effectiveAt?.ToUniversalTime() ?? DateTime.UtcNow;
+        var payload = JsonConvert.SerializeObject(data, _serializer);
+        await using var db = Context();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO wfc_scale.signal_event(id,event_name,event_key,payload,effective_at)
+            VALUES ({id},{name},{key},{payload},{due})
+            """, ct);
+        await InsertWorkAsync(db, "event", id, $"event:{id}:initial", due, ct);
+        await tx.CommitAsync(ct);
+        return id;
+    }
+
+    public async Task<bool> ChangeStatusAsync(Guid workflowId, WorkflowStatus target,
+        CancellationToken ct = default)
+    {
+        var owner = $"control:{Guid.NewGuid():N}";
+        var fence = await _queue.AcquireWorkflowAsync(workflowId, owner, TimeSpan.FromSeconds(30), ct);
+        if (fence is null) return false;
+        try
+        {
+            await using var db = Context();
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            if (!await AdvanceFenceAsync(db, fence, ct))
+                return false;
+            var stored = await LoadTrackedAsync(db, workflowId, ct);
+            if (stored is null) return false;
+            stored.Status = target;
+            if (target == WorkflowStatus.Runnable)
+            {
+                stored.NextExecution = 0;
+                await InsertWorkAsync(db, "workflow", workflowId,
+                    $"wf:{workflowId}:{fence.Revision + 1}", DateTime.UtcNow, ct);
+            }
+            if (target is WorkflowStatus.Complete or WorkflowStatus.Terminated)
+                stored.CompleteTime = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return true;
+        }
+        finally { await _queue.ReleaseGateAsync(fence, CancellationToken.None); }
+    }
+
+    /// <summary>
+    /// Called only by a worker that owns BOTH the work-item lease and the workflow gate.
+    /// External effects remain at-least-once and require application idempotency keys.
+    /// </summary>
+    public async Task ExecuteWorkflowAsync(LeasedWork work, WorkflowFence fence,
+        string owner, CancellationToken ct)
+    {
+        WorkflowInstance instance;
+        await using (var read = Context())
+        {
+            var stored = await LoadTrackedAsync(read, work.ItemId, ct);
+            if (stored is null) throw new InvalidOperationException($"Workflow {work.ItemId} not found");
+            instance = stored.ToWorkflowInstance(_serializer);
+        }
+        WorkflowExecutorResult? result = null;
+        if (instance.Status == WorkflowStatus.Runnable)
+        {
+            using var scope = _scopes.CreateScope();
+            var executor = scope.ServiceProvider.GetRequiredService<IWorkflowExecutor>();
+            result = await executor.Execute(instance, ct);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        await using var db = Context();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        if (!await AdvanceFenceAsync(db, fence, ct))
+            throw new InvalidOperationException("Workflow owner lost fencing generation");
+        if (!await AckAsync(db, work, owner, ct))
+            throw new InvalidOperationException("Queue lease expired during execution");
+
+        if (result is not null)
+        {
+            var existing = await LoadTrackedAsync(db, work.ItemId, ct);
+            if (existing is null) throw new InvalidOperationException("Workflow disappeared");
+            instance.ToPersistable(_serializer, existing);
+            foreach (var sub in result.Subscriptions)
+            {
+                sub.Id = Guid.NewGuid().ToString();
+                db.Set<PersistedSubscription>().Add(sub.ToPersistable(_serializer));
+            }
+            foreach (var error in result.Errors)
+                db.Set<PersistedExecutionError>().Add(error.ToPersistable());
+
+            if (instance.Status == WorkflowStatus.Runnable && instance.NextExecution.HasValue)
+            {
+                var ticks = instance.NextExecution.Value;
+                var due = ticks <= DateTime.UtcNow.Ticks
+                    ? DateTime.UtcNow : new DateTime(ticks, DateTimeKind.Utc);
+                await InsertWorkAsync(db, "workflow", work.ItemId,
+                    $"wf:{work.ItemId}:{fence.Revision + 1}", due, ct);
+            }
+            // Match previously arrived events when a new WaitFor subscription is created.
+            foreach (var sub in result.Subscriptions)
+            {
+                var eventIds = await db.Database.SqlQuery<Guid>($"""
+                    SELECT id AS "Value" FROM wfc_scale.signal_event
+                    WHERE processed = false AND event_name = {sub.EventName}
+                      AND event_key = {sub.EventKey}
+                      AND effective_at >= {sub.SubscribeAsOf.ToUniversalTime()}
+                    ORDER BY effective_at, id LIMIT 1000
+                    """).ToListAsync(ct);
+                foreach (var eventId in eventIds)
+                    await InsertWorkAsync(db, "event", eventId,
+                        $"event:{eventId}:subscription:{sub.Id}", DateTime.UtcNow, ct);
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task ExecuteEventAsync(LeasedWork work, string owner, CancellationToken ct)
+    {
+        string name, key, payload;
+        DateTime effective;
+        await using (var db = Context())
+        {
+            // Event claimed by a single queue work item; delivery markers protect
+            // against redelivery and partially completed fanout.
+            await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = "SELECT event_name,event_key,payload,effective_at FROM wfc_scale.signal_event WHERE id = @id AND NOT processed";
+            var param = cmd.CreateParameter(); param.ParameterName = "id"; param.Value = work.ItemId;
+            cmd.Parameters.Add(param);
+            await db.Database.OpenConnectionAsync(ct);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                await AckEventAsync(work, owner, ct);
+                return;
+            }
+            name = reader.GetString(0); key = reader.GetString(1);
+            payload = reader.GetString(2); effective = reader.GetDateTime(3);
+        }
+
+        // Find all matching subscriptions, including multiple workflows.
+        List<PersistedSubscription> subscriptions;
+        await using (var db = Context())
+            subscriptions = await db.Set<PersistedSubscription>().AsNoTracking()
+                .Where(s => s.EventName == name && s.EventKey == key && s.SubscribeAsOf <= effective)
+                .OrderBy(s => s.WorkflowId).ThenBy(s => s.SubscriptionId)
+                .ToListAsync(ct);
+
+        foreach (var sub in subscriptions)
+        {
+            ct.ThrowIfCancellationRequested();
+            var id = Guid.Parse(sub.WorkflowId);
+            var subOwner = $"signal:{work.Id:N}:{sub.SubscriptionId:N}";
+            var fence = await _queue.AcquireWorkflowAsync(id, subOwner, TimeSpan.FromSeconds(30), ct);
+            if (fence is null) throw new InvalidOperationException("Workflow busy during event delivery");
+            try
+            {
+                await using var db = Context();
+                await using var tx = await db.Database.BeginTransactionAsync(ct);
+                var already = await db.Database.SqlQuery<int>($"""
+                    SELECT 1 AS "Value" FROM wfc_scale.signal_delivery
+                    WHERE event_id = {work.ItemId} AND subscription_id = {sub.SubscriptionId}
+                    """).AnyAsync(ct);
+                if (already) continue;
+                if (!await AdvanceFenceAsync(db, fence, ct))
+                    throw new InvalidOperationException("Event delivery lost workflow fence");
+                var stored = await LoadTrackedAsync(db, id, ct);
+                if (stored is null) throw new InvalidOperationException("Workflow missing on event delivery");
+                var workflow = stored.ToWorkflowInstance(_serializer);
+                var data = JsonConvert.DeserializeObject(payload, _serializer);
+                foreach (var pointer in workflow.ExecutionPointers.Where(p =>
+                    (p.Id == sub.ExecutionPointerId || (p.EventName == name && p.EventKey == key))
+                    && !p.EventPublished && p.EndTime == null))
+                {
+                    pointer.EventData = data;
+                    pointer.EventPublished = true;
+                    pointer.Active = true;
+                }
+                workflow.NextExecution = 0;
+                workflow.ToPersistable(_serializer, stored);
+                var subscription = await db.Set<PersistedSubscription>().AsTracking()
+                    .SingleOrDefaultAsync(s => s.SubscriptionId == sub.SubscriptionId, ct);
+                if (subscription is not null)
+                    db.Set<PersistedSubscription>().Remove(subscription);
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO wfc_scale.signal_delivery(event_id,subscription_id)
+                    VALUES ({work.ItemId},{sub.SubscriptionId})
+                    ON CONFLICT DO NOTHING
+                    """, ct);
+                await InsertWorkAsync(db, "workflow", id,
+                    $"wf:{id}:{fence.Revision + 1}", DateTime.UtcNow, ct);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            finally { await _queue.ReleaseGateAsync(fence, CancellationToken.None); }
+        }
+        await using (var db = Context())
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            if (subscriptions.Count > 0)
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE wfc_scale.signal_event SET processed = true WHERE id = {work.ItemId}
+                    """, ct);
+            if (!await AckAsync(db, work, owner, ct))
+                throw new InvalidOperationException("Event queue lease expired");
+            await tx.CommitAsync(ct);
+        }
+    }
+
+    private async Task AckEventAsync(LeasedWork work, string owner, CancellationToken ct)
+    {
+        await using var db = Context();
+        if (!await AckAsync(db, work, owner, ct))
+            throw new InvalidOperationException("Event acknowledgement lost ownership");
+    }
+
+    internal static Task<int> InsertWorkAsync(PostgresContext db, string queue,
+        Guid itemId, string key, DateTime due, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO wfc_scale.work_item(id,queue_name,item_key,item_id,due_at)
+            VALUES ({Guid.NewGuid()},{queue},{key},{itemId},{due})
+            ON CONFLICT (queue_name,item_key) DO NOTHING
+            """, ct);
+
+    private static async Task<bool> AdvanceFenceAsync(PostgresContext db,
+        WorkflowFence fence, CancellationToken ct) =>
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE wfc_scale.workflow_gate SET revision = revision + 1
+            WHERE workflow_id = {fence.WorkflowId} AND owner = {fence.Owner}
+              AND epoch = {fence.Epoch} AND revision = {fence.Revision}
+              AND lease_until > now()
+            """, ct) == 1;
+
+    private static async Task<bool> AckAsync(PostgresContext db, LeasedWork work,
+        string owner, CancellationToken ct) =>
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE wfc_scale.work_item SET state = 2, owner = NULL,
+                lease_until = NULL, updated_at = now()
+            WHERE id = {work.Id} AND state = 1 AND owner = {owner}
+              AND epoch = {work.Epoch} AND lease_until > now()
+            """, ct) == 1;
+
+    private static Task<PersistedWorkflow?> LoadTrackedAsync(PostgresContext db,
+        Guid id, CancellationToken ct) => db.Set<PersistedWorkflow>().AsTracking()
+        .Include(w => w.ExecutionPointers).ThenInclude(ep => ep.ExtensionAttributes)
+        .SingleOrDefaultAsync(w => w.InstanceId == id, ct);
+}

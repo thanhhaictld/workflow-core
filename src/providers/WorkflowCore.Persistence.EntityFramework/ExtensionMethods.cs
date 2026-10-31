@@ -7,9 +7,9 @@ using WorkflowCore.Persistence.EntityFramework.Models;
 
 namespace WorkflowCore.Persistence.EntityFramework
 {
-    internal static class ExtensionMethods
+    public static class ExtensionMethods
     {
-        internal static JsonSerializerSettings CreateSerializerSettings(Action<JsonSerializerSettings> configure = null)
+        public static JsonSerializerSettings CreateSerializerSettings(Action<JsonSerializerSettings> configure = null)
         {
             var settings = new JsonSerializerSettings
             {
@@ -20,7 +20,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return settings;
         }
 
-        internal static PersistedWorkflow ToPersistable(this WorkflowInstance instance, JsonSerializerSettings serializerSettings, PersistedWorkflow persistable = null)
+        public static PersistedWorkflow ToPersistable(this WorkflowInstance instance, JsonSerializerSettings serializerSettings, PersistedWorkflow persistable = null)
         {
             if (persistable == null)
                 persistable = new PersistedWorkflow();
@@ -90,7 +90,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return persistable;
         }
 
-        internal static PersistedExecutionError ToPersistable(this ExecutionError instance)
+        public static PersistedExecutionError ToPersistable(this ExecutionError instance)
         {
             var result = new PersistedExecutionError();
             result.ErrorTime = instance.ErrorTime;
@@ -101,7 +101,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return result;
         }
 
-        internal static PersistedSubscription ToPersistable(this EventSubscription instance, JsonSerializerSettings serializerSettings)
+        public static PersistedSubscription ToPersistable(this EventSubscription instance, JsonSerializerSettings serializerSettings)
         {
             PersistedSubscription result = new PersistedSubscription();
             result.SubscriptionId = new Guid(instance.Id);
@@ -119,7 +119,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return result;
         }
 
-        internal static PersistedEvent ToPersistable(this Event instance, JsonSerializerSettings serializerSettings)
+        public static PersistedEvent ToPersistable(this Event instance, JsonSerializerSettings serializerSettings)
         {
             PersistedEvent result = new PersistedEvent();
             result.EventId = new Guid(instance.Id);
@@ -132,7 +132,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return result;
         }
 
-        internal static PersistedScheduledCommand ToPersistable(this ScheduledCommand instance)
+        public static PersistedScheduledCommand ToPersistable(this ScheduledCommand instance)
         {
             var result = new PersistedScheduledCommand();
             result.CommandName = instance.CommandName;
@@ -151,7 +151,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
         }
 
-        internal static WorkflowInstance ToWorkflowInstance(this PersistedWorkflow instance, JsonSerializerSettings serializerSettings)
+        public static WorkflowInstance ToWorkflowInstance(this PersistedWorkflow instance, JsonSerializerSettings serializerSettings)
         {
             WorkflowInstance result = new WorkflowInstance();
             result.Data = JsonConvert.DeserializeObject(instance.Data, serializerSettings);
@@ -217,7 +217,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return result;
         }
 
-        internal static EventSubscription ToEventSubscription(this PersistedSubscription instance, JsonSerializerSettings serializerSettings)
+        public static EventSubscription ToEventSubscription(this PersistedSubscription instance, JsonSerializerSettings serializerSettings)
         {
             EventSubscription result = new EventSubscription();
             result.Id = instance.SubscriptionId.ToString();
@@ -236,7 +236,7 @@ namespace WorkflowCore.Persistence.EntityFramework
             return result;
         }
 
-        internal static Event ToEvent(this PersistedEvent instance, JsonSerializerSettings serializerSettings)
+        public static Event ToEvent(this PersistedEvent instance, JsonSerializerSettings serializerSettings)
         {
             Event result = new Event();
             result.Id = instance.EventId.ToString();
