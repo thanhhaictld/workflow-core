@@ -5,6 +5,7 @@ using WorkflowCore.Persistence.EntityFramework.Models;
 using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Api;
+using WorkflowCore.Scaling.Samples;
 
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Workflow")
@@ -24,8 +25,12 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 {
     options.Concurrency = int.TryParse(Environment.GetEnvironmentVariable("WORKERS"), out var workers)
         ? Math.Max(1, workers) : 16;
+    // Run 'Worker' separately in the PowerShell sample harness; existing
+    // stand-alone API behavior retains its embedded worker by default.
+    options.StartWorker = Environment.GetEnvironmentVariable("WFC_EMBEDDED_WORKER") != "false";
 });
 builder.Services.AddTransient<NoopProvisionStep>();
+builder.Services.AddTenantOnboardingDemo();
 builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
 var app = builder.Build();
 
@@ -33,6 +38,59 @@ var app = builder.Build();
 // Do not call host.Start(): the v2 runtime owns every scheduler and consumer.
 app.Services.GetRequiredService<IWorkflowHost>()
     .RegisterWorkflow<BenchmarkProvisionWorkflow, BenchmarkProvisionState>();
+app.Services.GetRequiredService<IWorkflowHost>().RegisterTenantOnboardingDemo();
+
+// Demo-only control-plane endpoints for exercising real journal/workflow UI.
+// They require authorization, tenancy checks and rate limiting if ever hosted
+// beyond a private workstation. No actual external provisioning occurs.
+app.MapPost("/api/demo/onboardings", async (
+    DemoOnboardingRequest request, HttpContext http,
+    DistributedWorkflowEngine engine, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.TenantId) || request.TenantId.Length > 100 ||
+        string.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Length > 120)
+        return Results.BadRequest(new { error = "tenantId and organizationName are required (max 100/120)" });
+
+    var state = new TenantOnboardingState
+    {
+        TenantId = request.TenantId.Trim(),
+        OrganizationName = request.OrganizationName.Trim(),
+        RequiresApproval = request.RequiresApproval,
+        SimulateTransientFailure = request.SimulateTransientFailure
+    };
+    var definitionId = request.RequiresApproval
+        ? "tenant-onboarding-approval" : "tenant-onboarding-auto";
+    var id = await engine.StartAsync(definitionId, state, reference: state.TenantId,
+        idempotencyKey: http.Request.Headers["Idempotency-Key"].FirstOrDefault(), ct: ct);
+    return Results.Accepted($"/api/workflows/{id}", new
+    {
+        workflowId = id, state.TenantId, state.OrganizationName,
+        definitionId, state.RequiresApproval, state.SimulateTransientFailure
+    });
+});
+
+app.MapPost("/api/demo/onboardings/{id:guid}/approve", async (
+    Guid id, DistributedWorkflowEngine engine, CancellationToken ct) =>
+{
+    await using var db = new PostgresContext(connectionString, "wfc");
+    var stored = await db.Set<PersistedWorkflow>().AsNoTracking()
+        .Where(w => w.InstanceId == id)
+        .Select(w => new { w.WorkflowDefinitionId, w.Reference, w.Status })
+        .FirstOrDefaultAsync(ct);
+    if (stored is null) return Results.NotFound();
+    if (stored.WorkflowDefinitionId != "tenant-onboarding-approval")
+        return Results.BadRequest(new { error = "Workflow does not require approval" });
+    if (stored.Status != WorkflowStatus.Runnable)
+        return Results.Conflict(new { error = "Workflow is not runnable" });
+    if (string.IsNullOrWhiteSpace(stored.Reference))
+        return Results.BadRequest(new { error = "Workflow has no approval key" });
+    // The demo uses unique tenantIds as event correlation keys. This avoids
+    // exposing persisted state; don't reuse a tenantId across demo instances.
+    var eventId = await engine.PublishEventAsync("OnboardingApproved",
+        stored.Reference, new { approved = true },
+        idempotencyKey: $"onboarding-approve:{id}", ct: ct);
+    return Results.Accepted($"/api/workflows/{id}", new { workflowId = id, eventId });
+});
 
 app.MapPost("/api/workflows", async (
     StartRequest request, HttpContext http, DistributedWorkflowEngine engine,
@@ -132,6 +190,9 @@ app.MapGet("/health/ready", async (FencedWorkQueue queue, CancellationToken ct) 
 
 app.Run();
 
+public sealed record DemoOnboardingRequest(
+    string TenantId, string OrganizationName, bool RequiresApproval = false,
+    bool SimulateTransientFailure = false);
 public sealed record StartRequest(string TenantId);
 public sealed record PublishRequest(string Name, string Key, string? Value);
 public sealed class BenchmarkProvisionState
