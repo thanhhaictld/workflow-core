@@ -13,6 +13,20 @@ https://github.com/danielgerlag/conductor
 
 ## Documentation
 
+### Experimental distributed PostgreSQL runtime (this fork branch)
+
+The `feat/distributed-postgres-runtime` branch includes a separate .NET 10
+distributed runtime with PostgreSQL leased work, fenced workflow commits and
+a hosted worker pool. It intentionally does **not** preserve the original
+scheduler/queue API and is **not yet production-certified**.
+
+Start with the **[distributed runtime documentation index](scaling/docs/README.md)**,
+then read the [architecture](scaling/docs/architecture.md),
+[execution semantics](scaling/docs/execution-semantics.md),
+[deployment guide](scaling/docs/deployment.md), and
+[production-readiness gaps](scaling/docs/production-readiness.md).
+The original Workflow Core documentation below describes the legacy engine.
+
 See [Tutorial here.](https://workflow-core.readthedocs.io)
 
 ## Fluent API
