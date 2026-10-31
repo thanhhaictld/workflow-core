@@ -22,6 +22,7 @@ public sealed class DistributedWorkflowEngine
     private readonly IWorkflowRegistry _registry;
     private readonly IExecutionPointerFactory _pointers;
     private readonly IServiceScopeFactory _scopes;
+    private readonly ExecutionHistoryStore _history;
     private readonly JsonSerializerSettings _serializer;
     private readonly string _schema;
 
@@ -34,6 +35,7 @@ public sealed class DistributedWorkflowEngine
         _registry = registry;
         _pointers = pointers;
         _scopes = scopes;
+        _history = new ExecutionHistoryStore(connectionString, schema);
         _schema = schema;
         _serializer = ExtensionMethods.CreateSerializerSettings();
     }
@@ -73,6 +75,9 @@ public sealed class DistributedWorkflowEngine
         db.Set<PersistedWorkflow>().Add(instance.ToPersistable(_serializer));
         await db.SaveChangesAsync(ct);
         await InsertWorkAsync(db, "workflow", id, $"wf:{id}:0", DateTime.UtcNow, ct);
+        await ExecutionHistoryStore.AppendInTransactionAsync(db,
+            new ExecutionHistoryEvent(id, "WorkflowStarted", Revision: 0,
+                Details: ExecutionHistoryEvent.Json(new { definitionId, version = definition.Version })), ct);
         await tx.CommitAsync(ct);
         return id;
     }
@@ -126,6 +131,10 @@ public sealed class DistributedWorkflowEngine
             if (target is WorkflowStatus.Complete or WorkflowStatus.Terminated)
                 stored.CompleteTime = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+            await ExecutionHistoryStore.AppendInTransactionAsync(db,
+                new ExecutionHistoryEvent(workflowId, "WorkflowStatusChanged",
+                    Revision: fence.Revision + 1,
+                    Details: ExecutionHistoryEvent.Json(new { status = target.ToString() })), ct);
             await tx.CommitAsync(ct);
             return true;
         }
@@ -154,12 +163,25 @@ public sealed class DistributedWorkflowEngine
             if (stored is null) throw new InvalidOperationException($"Workflow {work.ItemId} not found");
             instance = stored.ToWorkflowInstance(_serializer);
         }
+        // A durable work-attempt record precedes any external step effects.
+        await _history.AppendAsync(new ExecutionHistoryEvent(
+            work.ItemId, "WorkAttemptStarted", work.Id, Revision: fence.Revision,
+            Details: ExecutionHistoryEvent.Json(new
+            {
+                workAttempt = work.Attempts, workEpoch = work.Epoch, gateEpoch = fence.Epoch
+            })), ct);
+
+        var initialStatus = instance.Status;
+        var pointerStatuses = instance.ExecutionPointers.ToDictionary(p => p.Id, p => p.Status);
         WorkflowExecutorResult? result = null;
+        var stepEvents = new List<ExecutionHistoryEvent>();
         if (instance.Status == WorkflowStatus.Runnable)
         {
+            using var capture = ExecutionHistoryScope.Begin(work.Id, fence.Revision + 1);
             using var scope = _scopes.CreateScope();
             var executor = scope.ServiceProvider.GetRequiredService<IWorkflowExecutor>();
             result = await executor.Execute(instance, ct);
+            stepEvents.AddRange(capture.Pending);
         }
 
         ct.ThrowIfCancellationRequested();
@@ -181,7 +203,44 @@ public sealed class DistributedWorkflowEngine
                 db.Set<PersistedSubscription>().Add(sub.ToPersistable(_serializer));
             }
             foreach (var error in result.Errors)
+            {
                 db.Set<PersistedExecutionError>().Add(error.ToPersistable());
+                stepEvents.Add(new ExecutionHistoryEvent(work.ItemId, "StepErrorRecorded",
+                    work.Id, error.ExecutionPointerId, Revision: fence.Revision + 1));
+            }
+
+            foreach (var pointer in instance.ExecutionPointers)
+            {
+                if (!pointerStatuses.TryGetValue(pointer.Id, out var previous))
+                {
+                    stepEvents.Add(new ExecutionHistoryEvent(work.ItemId, "StepScheduled",
+                        work.Id, pointer.Id, pointer.StepId, Revision: fence.Revision + 1,
+                        Details: ExecutionHistoryEvent.Json(new { status = pointer.Status.ToString() })));
+                }
+                else if (previous != pointer.Status)
+                {
+                    var eventType = pointer.Status switch
+                    {
+                        PointerStatus.Complete => "StepCompleted",
+                        PointerStatus.Failed => "StepFailed",
+                        PointerStatus.WaitingForEvent => "StepWaitingForEvent",
+                        PointerStatus.Sleeping => "StepSleeping",
+                        _ => "StepStatusChanged"
+                    };
+                    stepEvents.Add(new ExecutionHistoryEvent(work.ItemId, eventType,
+                        work.Id, pointer.Id, pointer.StepId, Revision: fence.Revision + 1,
+                        Details: ExecutionHistoryEvent.Json(new
+                        {
+                            previous = previous.ToString(), current = pointer.Status.ToString(),
+                            retryCount = pointer.RetryCount
+                        })));
+                }
+            }
+            if (instance.Status != initialStatus)
+                stepEvents.Add(new ExecutionHistoryEvent(work.ItemId,
+                    instance.Status == WorkflowStatus.Complete ? "WorkflowCompleted" : "WorkflowStatusChanged",
+                    work.Id, Revision: fence.Revision + 1,
+                    Details: ExecutionHistoryEvent.Json(new { status = instance.Status.ToString() })));
 
             if (instance.Status == WorkflowStatus.Runnable && instance.NextExecution.HasValue)
             {
@@ -210,6 +269,11 @@ public sealed class DistributedWorkflowEngine
                     """, ct);
             }
         }
+        foreach (var entry in stepEvents)
+            await ExecutionHistoryStore.AppendInTransactionAsync(db, entry, ct);
+        await ExecutionHistoryStore.AppendInTransactionAsync(db,
+            new ExecutionHistoryEvent(work.ItemId, "WorkAttemptCommitted", work.Id,
+                Revision: fence.Revision + 1), ct);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
     }
@@ -314,6 +378,13 @@ public sealed class DistributedWorkflowEngine
                     """, ct);
                 await InsertWorkAsync(db, "workflow", id,
                     $"wf:{id}:{fence.Revision + 1}", DateTime.UtcNow, ct);
+                await ExecutionHistoryStore.AppendInTransactionAsync(db,
+                    new ExecutionHistoryEvent(id, "SignalDelivered", work.Id,
+                        sub.ExecutionPointerId, sub.StepId, Revision: fence.Revision + 1,
+                        Details: ExecutionHistoryEvent.Json(new
+                        {
+                            eventId = work.ItemId, subscriptionId = sub.SubscriptionId
+                        })), ct);
                 await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
             }
