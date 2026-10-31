@@ -25,7 +25,8 @@ flowchart TD
 1. Provide PostgreSQL 17 or newer. Apply EF migrations from the original
    `WorkflowCore.Persistence.PostgreSQL` provider and the new SQL files in order:
    `scaling/sql/002_distributed_runtime.sql`,
-   `scaling/sql/003_signal_delivery.sql`.
+   `scaling/sql/003_signal_delivery.sql`,
+   `scaling/sql/004_request_dedupe.sql`.
 2. Add project reference to `src/providers/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 
@@ -41,7 +42,8 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
    without calling `IWorkflowHost.Start()`. Start the .NET Generic Host
    to run the new hosted `DistributedWorkPump`.
 5. Start using `DistributedWorkflowEngine.StartAsync`,
-   `PublishEventAsync`, and `ChangeStatusAsync`.
+   `PublishEventAsync`, and `ChangeStatusAsync`. Supply an optional
+   idempotency key to StartAsync/PublishEventAsync to safely retry client calls.
 
 Do not call legacy `IWorkflowHost.StartWorkflow`, `PublishEvent`, or
 `Start` on this deployment: these paths bypass the transactional ledger.

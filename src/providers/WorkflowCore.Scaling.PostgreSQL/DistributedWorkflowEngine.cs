@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
@@ -44,7 +46,7 @@ public sealed class DistributedWorkflowEngine
     /// </summary>
     public async Task<Guid> StartAsync(string definitionId, object? data = null,
         int? definitionVersion = null, string? reference = null,
-        CancellationToken ct = default)
+        string? idempotencyKey = null, CancellationToken ct = default)
     {
         var definition = _registry.GetDefinition(definitionId, definitionVersion)
             ?? throw new InvalidOperationException($"Workflow definition not registered: {definitionId}");
@@ -61,6 +63,13 @@ public sealed class DistributedWorkflowEngine
         instance.ExecutionPointers.Add(_pointers.BuildGenesisPointer(definition));
         await using var db = Context();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        if (idempotencyKey is not null)
+        {
+            var fingerprint = Fingerprint(definitionId, definitionVersion?.ToString(),
+                reference, JsonConvert.SerializeObject(data, _serializer));
+            var duplicate = await ClaimRequestAsync(db, "workflow", idempotencyKey, id, fingerprint, ct);
+            if (duplicate.HasValue) return duplicate.Value;
+        }
         db.Set<PersistedWorkflow>().Add(instance.ToPersistable(_serializer));
         await db.SaveChangesAsync(ct);
         await InsertWorkAsync(db, "workflow", id, $"wf:{id}:0", DateTime.UtcNow, ct);
@@ -70,13 +79,20 @@ public sealed class DistributedWorkflowEngine
 
     /// <summary>Record an event and its durable dispatch intent atomically.</summary>
     public async Task<Guid> PublishEventAsync(string name, string key, object? data,
-        DateTime? effectiveAt = null, CancellationToken ct = default)
+        DateTime? effectiveAt = null, string? idempotencyKey = null,
+        CancellationToken ct = default)
     {
         var id = Guid.NewGuid();
         var due = effectiveAt?.ToUniversalTime() ?? DateTime.UtcNow;
         var payload = JsonConvert.SerializeObject(data, _serializer);
         await using var db = Context();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        if (idempotencyKey is not null)
+        {
+            var fingerprint = Fingerprint(name, key, payload, effectiveAt?.ToUniversalTime().Ticks.ToString());
+            var duplicate = await ClaimRequestAsync(db, "event", idempotencyKey, id, fingerprint, ct);
+            if (duplicate.HasValue) return duplicate.Value;
+        }
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO wfc_scale.signal_event(id,event_name,event_key,payload,effective_at)
             VALUES ({id},{name},{key},{payload},{due})
@@ -320,6 +336,34 @@ public sealed class DistributedWorkflowEngine
                 throw new InvalidOperationException("Event queue lease expired");
             await tx.CommitAsync(ct);
         }
+    }
+
+    private static string Fingerprint(params string?[] fields)
+    {
+        var canonical = JsonConvert.SerializeObject(fields);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    private static async Task<Guid?> ClaimRequestAsync(PostgresContext db, string kind,
+        string requestKey, Guid candidateId, string fingerprint, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(requestKey))
+            throw new ArgumentException("Idempotency key cannot be empty", nameof(requestKey));
+        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO wfc_scale.request_dedupe(kind,request_key,resource_id,payload_hash)
+            VALUES ({kind},{requestKey},{candidateId},decode({fingerprint}, 'hex'))
+            ON CONFLICT (kind,request_key) DO NOTHING
+            """, ct);
+        if (inserted == 1) return null;
+        var saved = await db.Database.SqlQuery<string>($"""
+            SELECT resource_id::text || ':' || encode(payload_hash,'hex') AS "Value"
+            FROM wfc_scale.request_dedupe
+            WHERE kind = {kind} AND request_key = {requestKey}
+            """).SingleAsync(ct);
+        var split = saved.LastIndexOf(':');
+        if (!string.Equals(saved[(split + 1)..], fingerprint, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Idempotency key reused with different request content");
+        return Guid.Parse(saved[..split]);
     }
 
     private async Task AckEventAsync(LeasedWork work, string owner, CancellationToken ct)

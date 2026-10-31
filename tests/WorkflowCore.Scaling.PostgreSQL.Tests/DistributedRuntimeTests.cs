@@ -115,6 +115,40 @@ public sealed class DistributedRuntimeTests
     }
 
     [Fact]
+    public async Task IdempotencyKeysPreventDuplicateWorkflowStartsAndSignals()
+    {
+        await using (var db = new PostgresContext(Connection, "wfc"))
+            await db.Database.MigrateAsync();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDistributedWorkflowCore(Connection);
+        services.AddTransient<NoopStep>();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowHost>().RegisterWorkflow<ExampleWorkflow>();
+        var engine = provider.GetRequiredService<DistributedWorkflowEngine>();
+        var requestKey = Guid.NewGuid().ToString("N");
+        var a = await engine.StartAsync("distributed-smoke", idempotencyKey: requestKey);
+        var b = await engine.StartAsync("distributed-smoke", idempotencyKey: requestKey);
+        Assert.Equal(a, b);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            engine.StartAsync("distributed-smoke", reference: "different", idempotencyKey: requestKey));
+
+        var eventKey = Guid.NewGuid().ToString("N");
+        var signalA = await engine.PublishEventAsync("idempotent-signal", eventKey, "ok",
+            idempotencyKey: eventKey);
+        var signalB = await engine.PublishEventAsync("idempotent-signal", eventKey, "ok",
+            idempotencyKey: eventKey);
+        Assert.Equal(signalA, signalB);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            engine.PublishEventAsync("idempotent-signal", eventKey, "different",
+                idempotencyKey: eventKey));
+
+        // Drain the one created workflow so tests leave no runnable backlog.
+        await RunWorkflowAsync(provider.GetRequiredService<FencedWorkQueue>(),
+            engine, "idempotency-worker");
+    }
+
+    [Fact]
     public async Task EventPublishedBeforeWaitForIsDurablyReplayed()
     {
         await using (var db = new PostgresContext(Connection, "wfc"))

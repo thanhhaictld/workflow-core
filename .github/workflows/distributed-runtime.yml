@@ -38,5 +38,6 @@ jobs:
         run: |
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
       - name: Restore and test
         run: dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
