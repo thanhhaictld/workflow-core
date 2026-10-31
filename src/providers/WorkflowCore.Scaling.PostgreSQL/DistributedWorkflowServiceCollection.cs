@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using WorkflowCore.Interface;
 using WorkflowCore.Models;
 
 namespace WorkflowCore.Scaling.PostgreSQL;
@@ -27,6 +28,8 @@ public static class DistributedWorkflowServiceCollection
         });
 
         services.AddSingleton(settings);
+        services.AddSingleton(new ExecutionHistoryStore(connectionString));
+        services.AddTransient<IWorkflowStepMiddleware, ExecutionHistoryMiddleware>();
         services.AddSingleton(new FencedWorkQueue(connectionString));
         services.AddSingleton(sp => new DistributedWorkflowEngine(
             connectionString,
