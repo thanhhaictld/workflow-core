@@ -121,6 +121,7 @@ public sealed class DistributedWorkflowEngine
                 return false;
             var stored = await LoadTrackedAsync(db, workflowId, ct);
             if (stored is null) return false;
+            var previousStatus = stored.Status;
             stored.Status = target;
             if (target == WorkflowStatus.Runnable)
             {
@@ -134,7 +135,8 @@ public sealed class DistributedWorkflowEngine
             await ExecutionHistoryStore.AppendInTransactionAsync(db,
                 new ExecutionHistoryEvent(workflowId, "WorkflowStatusChanged",
                     Revision: fence.Revision + 1,
-                    Details: ExecutionHistoryEvent.Json(new { status = target.ToString() })), ct);
+                    Details: ExecutionHistoryEvent.Json(new
+                    { previous = previousStatus.ToString(), current = target.ToString() })), ct);
             await tx.CommitAsync(ct);
             return true;
         }
