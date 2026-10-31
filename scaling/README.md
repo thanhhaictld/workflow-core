@@ -24,9 +24,10 @@ flowchart TD
 
 ## Setup
 
-For a complete local database + API + monitoring UI bootstrap, use
-`make bootstrap && make dev` from the repository root (or `make up`).
-See the [monitor setup guide](../monitor/README.md) and `make help`.
+For a complete cross-platform local database + API + monitoring UI bootstrap,
+run `pwsh -NoProfile -File ./scripts/dev.ps1 up` from the repository root.
+GNU Make remains an optional shortcut (`make up`). See the
+[monitor setup guide](../monitor/README.md) and `pwsh ./scripts/dev.ps1 help`.
 
 1. Provide PostgreSQL 17 or newer. Apply EF migrations from the original
    `WorkflowCore.Persistence.PostgreSQL` provider and the new SQL files in order:
