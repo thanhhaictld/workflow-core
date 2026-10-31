@@ -88,6 +88,15 @@ A dedicated PostgreSQL schema is recommended for each performance benchmark.
 * Serializer uses Workflow Core's Newtonsoft type metadata; restrict
   deserialization types and never ingest untrusted payloads without validation.
 
+## Monitoring dashboard
+
+A new read-only [Next.js workflow monitor](../monitor/README.md) adapts the
+MIT-licensed Shadcn Studio AdminCN Free theme and provides filtered workflow
+runs, KPI summaries, a Temporal-style step-attempt waterfall, append-only event
+history, current pointer state, persisted errors and work-queue diagnostics.
+The sample monitor API is **development-only** and requires authentication and
+tenant isolation before public or multi-tenant deployment.
+
 ## Operations
 
 Use `ExecutionHistoryStore.ReadAsync(workflowId, afterHistoryId, take)` to inspect
