@@ -139,13 +139,16 @@ public sealed class DistributedRuntimeTests
         await engine.ExecuteEventAsync(eventWork, "signal-test", CancellationToken.None);
 
         var workflowId = await engine.StartAsync("distributed-wait", new WaitData { Key = key });
-        await RunWorkflowAsync(queue, engine, "start-wait");
-        await using (var db = new PostgresContext(Connection, "wfc"))
+        var subscriptionCount = 0;
+        for (var iteration = 0; iteration < 12 && subscriptionCount == 0; iteration++)
         {
-            var count = await db.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedSubscription>()
+            // Workflow Core advances its execution pointer one step at a time.
+            await RunWorkflowAsync(queue, engine, "start-wait");
+            await using var db = new PostgresContext(Connection, "wfc");
+            subscriptionCount = await db.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedSubscription>()
                 .CountAsync(x => x.WorkflowId == workflowId.ToString());
-            Assert.True(count > 0, "WaitFor should persist a subscription");
         }
+        Assert.True(subscriptionCount > 0, "WaitFor should persist a subscription");
 
         // Persisting the subscription must enqueue a NEW event work item
         // for the previously received event, without a process restart.
@@ -153,12 +156,15 @@ public sealed class DistributedRuntimeTests
             TimeSpan.FromSeconds(30), 5, CancellationToken.None));
         Assert.Equal(eventId, replay.ItemId);
         await engine.ExecuteEventAsync(replay, "signal-replay", CancellationToken.None);
-        await RunWorkflowAsync(queue, engine, "resume-wait");
-
-        await using var verify = new PostgresContext(Connection, "wfc");
-        var stored = await verify.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedWorkflow>()
-            .AsNoTracking().SingleAsync(x => x.InstanceId == workflowId);
-        Assert.Equal(WorkflowStatus.Complete, stored.Status);
+        WorkflowStatus? finalStatus = null;
+        for (var iteration = 0; iteration < 12 && finalStatus != WorkflowStatus.Complete; iteration++)
+        {
+            await RunWorkflowAsync(queue, engine, "resume-wait");
+            await using var verify = new PostgresContext(Connection, "wfc");
+            finalStatus = await verify.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedWorkflow>()
+                .Where(x => x.InstanceId == workflowId).Select(x => x.Status).SingleAsync();
+        }
+        Assert.Equal(WorkflowStatus.Complete, finalStatus);
     }
 
     private static async Task RunWorkflowAsync(
