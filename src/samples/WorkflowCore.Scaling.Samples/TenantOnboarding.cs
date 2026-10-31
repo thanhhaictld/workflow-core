@@ -72,6 +72,12 @@ public static class TenantOnboardingRegistration
         services.AddTransient<ConfigureAccessStep>();
         services.AddTransient<ActivateTenantStep>();
         services.AddTransient<SendWelcomeStep>();
+        services.AddTransient<CreateResourceGroup>();
+        services.AddTransient<DeployDatabase>();
+        services.AddTransient<RegisterApplication>();
+        services.AddTransient<ConfigureRoles>();
+        services.AddTransient<CreateBillingAccount>();
+        services.AddTransient<ConfigureQuota>();
         return services;
     }
 
