@@ -164,9 +164,13 @@ public sealed class DistributedRuntimeTests
             engine.PublishEventAsync("idempotent-signal", eventKey, "different",
                 idempotencyKey: eventKey));
 
-        // Drain the one created workflow so tests leave no runnable backlog.
-        await RunWorkflowAsync(provider.GetRequiredService<FencedWorkQueue>(),
-            engine, "idempotency-worker");
+        // Drain both queues so later tests do not observe work from this test.
+        var queue = provider.GetRequiredService<FencedWorkQueue>();
+        await RunWorkflowAsync(queue, engine, "idempotency-worker");
+        var eventWork = Assert.Single(await queue.ClaimAsync("event", "idempotency-worker", 1,
+            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        Assert.Equal(signalA, eventWork.ItemId);
+        await engine.ExecuteEventAsync(eventWork, "idempotency-worker", CancellationToken.None);
     }
 
     [Fact]
