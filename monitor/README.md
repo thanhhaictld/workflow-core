@@ -89,6 +89,63 @@ Open **http://localhost:3000/workflows**. Set `WORKFLOW_API_URL` in
 `/backend/*` to the .NET API's `/api/*`. It does not require a CORS policy
 during local development.
 
+## Onboarding sample lab (real workflow history)
+
+Use **PowerShell 7** (Windows/macOS/Linux) from the repository root:
+
+```powershell
+pwsh ./scripts/dev.ps1 up      # PostgreSQL, control-plane API, separate worker, Next.js
+```
+
+The launcher starts **three distinct processes**: the .NET API
+(`WFC_EMBEDDED_WORKER=false`), the standalone worker executable, and the
+Next.js monitor. The API is responsible for workflow starts and approval events;
+the worker claims fenced PostgreSQL work and executes the steps. Both register
+the same workflow definitions from
+[`WorkflowCore.Scaling.Samples`](../src/samples/WorkflowCore.Scaling.Samples/TenantOnboarding.cs).
+
+Open [the monitoring dashboard](http://127.0.0.1:3000/workflows)
+and use **Onboarding workflow playground** to create three types of instances:
+
+| Scenario | Workflow definition | Expected trace |
+| --- | --- | --- |
+| Happy path | `tenant-onboarding-auto` | Validate → identity → workspace → access → activate → welcome → Complete |
+| Retry | `tenant-onboarding-auto` | Workspace throws once, retries with another attempt ID, then completes |
+| Manual approval | `tenant-onboarding-approval` | Steps → WaitFor `OnboardingApproved` → approval signal → resume → Complete |
+
+All steps are simulated in persisted workflow data. They intentionally **do
+not create cloud resources, identities, tenants, or send emails**. The
+artificial 120ms step latency makes the execution waterfall easier to review.
+Each new playground run uses a unique tenant ID as its approval correlation key.
+
+You can also create samples from a second terminal once the API is running:
+
+```powershell
+pwsh ./scripts/dev.ps1 seed
+# For an approval-gated workflow, copy its UUID from the seed output:
+pwsh ./scripts/dev.ps1 approve -WorkflowId <uuid>
+# Verify the end-to-end paths, including immutable history and signal delivery:
+pwsh ./scripts/test-onboarding.ps1
+```
+
+To develop independently, start `pwsh ./scripts/dev.ps1 api`,
+`pwsh ./scripts/dev.ps1 worker`, and `pwsh ./scripts/dev.ps1 ui` in
+three terminals. Multiple worker processes can use the same PostgreSQL queue
+to demonstrate distributed claims and gating.
+
+**Demo API endpoints** (private workstation only):
+
+- `POST /api/demo/onboardings`: request JSON `tenantId`,
+  `organizationName`, `requiresApproval`, `simulateTransientFailure`
+- `POST /api/demo/onboardings/{workflowId}/approve`: publish a durable
+  `OnboardingApproved` event keyed by the example's tenant ID
+
+The monitor itself remains read-only for non-demo workflows. Demo start and
+approve buttons are not a general-purpose administrative API. The sample API
+has no authentication; never expose it to the public internet. Use unique
+tenant IDs: approvals are keyed by tenant ID and would resume multiple waiting
+samples if that key is shared.
+
 ## API contract
 
 | GET route | Purpose |
