@@ -109,16 +109,25 @@ namespace WorkflowCore.Services.BackgroundTasks
 
                     await _persistenceStore.PersistErrors(result.Errors, cancellationToken);
 
-                    // Durable scheduling replaces unbounded fire-and-forget sleeping tasks.
-                    if (workflow.Status == WorkflowStatus.Runnable && workflow.NextExecution.HasValue &&
-                        _persistenceStore.SupportsScheduledCommands)
+                    if ((workflow.Status == WorkflowStatus.Runnable) && workflow.NextExecution.HasValue)
                     {
-                        await _persistenceStore.ScheduleCommand(new ScheduledCommand
+                        var readAheadTicks = _datetimeProvider.UtcNow.Add(Options.PollInterval).Ticks;
+                        if (workflow.NextExecution.Value < readAheadTicks)
                         {
-                            CommandName = ScheduledCommand.ProcessWorkflow,
-                            Data = workflow.Id,
-                            ExecuteTime = workflow.NextExecution.Value
-                        });
+                            _ = FutureQueue(workflow, cancellationToken);
+                        }
+                        else
+                        {
+                            if (_persistenceStore.SupportsScheduledCommands)
+                            {
+                                await _persistenceStore.ScheduleCommand(new ScheduledCommand()
+                                {
+                                    CommandName = ScheduledCommand.ProcessWorkflow,
+                                    Data = workflow.Id,
+                                    ExecuteTime = workflow.NextExecution.Value
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -195,5 +204,27 @@ namespace WorkflowCore.Services.BackgroundTasks
             }
         }
 
+        private async Task FutureQueue(WorkflowInstance workflow, CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (!workflow.NextExecution.HasValue)
+                {
+                    return;
+                }
+
+                var target = (workflow.NextExecution.Value - _datetimeProvider.UtcNow.Ticks);
+                if (target > 0)
+                {
+                    await Task.Delay(TimeSpan.FromTicks(target), cancellationToken);
+                }
+
+                await QueueProvider.QueueWork(workflow.Id, QueueType.Workflow);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, ex.Message);
+            }
+        }
     }
 }

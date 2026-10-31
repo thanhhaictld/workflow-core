@@ -19,8 +19,7 @@ namespace WorkflowCore.Services.BackgroundTasks
         private readonly IGreyList _greylist;
         private readonly WorkflowOptions _options;
         private readonly IDateTimeProvider _dateTimeProvider;
-        private CancellationTokenSource _pollCancellation;
-        private Task _pollLoop;
+        private Timer _pollTimer;
 
         public RunnablePoller(IPersistenceProvider persistenceStore, IQueueProvider queueProvider, ILoggerFactory loggerFactory, IServiceProvider serviceProvider, IWorkflowRegistry registry, IDistributedLockProvider lockProvider, IGreyList greylist, IDateTimeProvider dateTimeProvider, WorkflowOptions options)
         {
@@ -35,24 +34,15 @@ namespace WorkflowCore.Services.BackgroundTasks
 
         public void Start()
         {
-            if (_pollLoop != null)
-                throw new InvalidOperationException("Poller already running");
-            _pollCancellation = new CancellationTokenSource();
-            _pollLoop = Task.Run(() => PollLoopAsync(_pollCancellation.Token));
+            _pollTimer = new Timer(new TimerCallback(PollRunnables), null, TimeSpan.FromSeconds(0), _options.PollInterval);
         }
 
         public void Stop()
         {
-            if (_pollLoop == null)
-                return;
-            _pollCancellation.Cancel();
-            try { _pollLoop.GetAwaiter().GetResult(); }
-            catch (OperationCanceledException) { }
-            finally
+            if (_pollTimer != null)
             {
-                _pollCancellation.Dispose();
-                _pollCancellation = null;
-                _pollLoop = null;
+                _pollTimer.Dispose();
+                _pollTimer = null;
             }
         }
 
@@ -60,23 +50,11 @@ namespace WorkflowCore.Services.BackgroundTasks
         /// Poll the persistence store for workflows ready to run.
         /// Poll the persistence store for stashed unpublished events
         /// </summary>        
-        private async Task PollLoopAsync(CancellationToken cancellationToken)
+        private async void PollRunnables(object target)
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    await PollWorkflows();
-                    await PollEvents();
-                    await PollCommands();
-                }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogError(ex, "Background polling failed");
-                }
-
-                await Task.Delay(_options.PollInterval, cancellationToken);
-            }
+            await PollWorkflows();
+            await PollEvents();
+            await PollCommands();
         }
 
         private async Task PollWorkflows()
