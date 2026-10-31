@@ -14,8 +14,8 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'check-tools', 'bootstrap', 'setup', 'up', 'dev',
-        'api', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
-        'db-logs', 'db-reset', 'seed', 'test', 'build', 'check', 'clean')]
+        'api', 'worker', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
+        'db-logs', 'db-reset', 'seed', 'approve', 'test', 'build', 'check', 'clean')]
     [string] $Task = 'help',
     [ValidateRange(0, 65535)][int] $PgPort = 0,
     [ValidateRange(0, 65535)][int] $ApiPort = 0,
@@ -24,6 +24,7 @@ param(
     [string] $PgPassword,
     [string] $PgDatabase,
     [switch] $ConfirmReset,
+    [Guid] $WorkflowId = [Guid]::Empty,
     # CI runs on macOS/Windows where Docker is not always available.
     [switch] $SkipDocker
 )
@@ -35,6 +36,7 @@ $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $MonitorDir = Join-Path $RepoRoot 'monitor'
 $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
 $ApiProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj'
+$WorkerProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
 $TestProject = Join-Path $RepoRoot 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
 $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
 
@@ -147,8 +149,15 @@ function Invoke-Bootstrap {
 function Start-Api {
     Apply-DatabaseSchema
     $env:WFC_PG = $LocalConnection
+    $env:WFC_EMBEDDED_WORKER = 'false'
     Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
         $ApiProject, '--urls', "http://127.0.0.1:$ApiPort")
+}
+
+function Start-Worker {
+    Apply-DatabaseSchema
+    $env:WFC_PG = $LocalConnection
+    Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $WorkerProject)
 }
 
 function Start-Ui {
@@ -189,23 +198,28 @@ function Stop-ChildProcess([System.Diagnostics.Process] $Process) {
 function Start-Development {
     Invoke-Bootstrap
     $env:WFC_PG = $LocalConnection
+    $env:WFC_EMBEDDED_WORKER = 'false'
     $env:WORKFLOW_API_URL = "http://127.0.0.1:$ApiPort"
     Write-Host "API: http://127.0.0.1:$ApiPort | Dashboard: http://127.0.0.1:$UiPort/workflows"
     $api = $null
+    $worker = $null
     $ui = $null
     try {
         $api = Start-ChildProcess -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
             $ApiProject, '--urls', "http://127.0.0.1:$ApiPort") -Directory $RepoRoot
+        $worker = Start-ChildProcess -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
+            $WorkerProject) -Directory $RepoRoot
         $nextCli = Join-Path $MonitorDir 'node_modules/next/dist/bin/next'
         if (-not (Test-Path $nextCli)) { throw "Missing Next.js CLI: $nextCli" }
         $ui = Start-ChildProcess -Executable 'node' -Arguments @($nextCli, 'dev', '--hostname', '127.0.0.1',
             '--port', "$UiPort") -Directory $MonitorDir
-        while (-not $api.HasExited -and -not $ui.HasExited) {
+        while (-not $api.HasExited -and -not $worker.HasExited -and -not $ui.HasExited) {
             Start-Sleep -Milliseconds 500
         }
         throw 'A development process exited. Check its console output.'
     } finally {
         Stop-ChildProcess $ui
+        Stop-ChildProcess $worker
         Stop-ChildProcess $api
     }
 }
@@ -214,13 +228,15 @@ function Show-Help {
     Write-Host @'
 Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 bootstrap   PostgreSQL + EF/SQL migrations + npm
-  pwsh ./scripts/dev.ps1 up          Bootstrap and start API + UI
+  pwsh ./scripts/dev.ps1 up          Bootstrap and start API + worker + UI
   pwsh ./scripts/dev.ps1 dev         Alias for up
-  pwsh ./scripts/dev.ps1 api         Run .NET API only
+  pwsh ./scripts/dev.ps1 api         Run .NET API only (no embedded workers)
+  pwsh ./scripts/dev.ps1 worker      Run independent queue/step worker
   pwsh ./scripts/dev.ps1 ui          Run Next.js dashboard only
-  pwsh ./scripts/dev.ps1 seed        Create five example workflows
+  pwsh ./scripts/dev.ps1 seed        Create happy, retry and approval-waiting demo runs
+  pwsh ./scripts/dev.ps1 approve -WorkflowId UUID   Signal onboarding approval
   pwsh ./scripts/dev.ps1 test        PostgreSQL integration tests
-  pwsh ./scripts/dev.ps1 build       Build .NET and Next.js
+  pwsh ./scripts/dev.ps1 build       Build API, worker and Next.js
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
@@ -249,13 +265,34 @@ try {
         'up'          { Start-Development }
         'dev'         { Start-Development }
         'api'         { Start-Api }
+        'worker'      { Start-Worker }
         'ui'          { Start-Ui }
         'seed' {
-            for ($i = 1; $i -le 5; $i++) {
-                $body = @{ tenantId = "bootstrap-demo-$i" } | ConvertTo-Json -Compress
-                $response = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/api/workflows" -Method Post -ContentType 'application/json' -Body $body
-                Write-Host "Demo workflow $i created: $($response.workflowId)"
+            foreach ($scenario in @(
+                @{ Name = 'complete'; Approval = $false; Retry = $false },
+                @{ Name = 'retry'; Approval = $false; Retry = $true },
+                @{ Name = 'await-approval'; Approval = $true; Retry = $false }
+            )) {
+                $tenant = "demo-$($scenario.Name)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+                $payload = @{
+                    tenantId = $tenant
+                    organizationName = "Sample $($scenario.Name) organization"
+                    requiresApproval = $scenario.Approval
+                    simulateTransientFailure = $scenario.Retry
+                } | ConvertTo-Json -Compress
+                $created = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/api/demo/onboardings" -Method Post -ContentType 'application/json' -Body $payload
+                Write-Host "$($scenario.Name) | $tenant | Workflow: $($created.workflowId)"
+                if ($scenario.Approval) {
+                    Write-Host "Approve with: pwsh ./scripts/dev.ps1 approve -WorkflowId $($created.workflowId)"
+                }
             }
+        }
+        'approve' {
+            if ($WorkflowId -eq [Guid]::Empty) {
+                throw 'Provide -WorkflowId with the onboarding workflow UUID.'
+            }
+            $result = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/api/demo/onboardings/$WorkflowId/approve" -Method Post -ContentType 'application/json'
+            Write-Host "Approval submitted for $($result.workflowId) (event $($result.eventId))"
         }
         'test' {
             Apply-DatabaseSchema
@@ -269,6 +306,7 @@ try {
         'build' {
             Install-Monitor
             Invoke-External -Executable 'dotnet' -Arguments @('build', $ApiProject, '-c', 'Release')
+            Invoke-External -Executable 'dotnet' -Arguments @('build', $WorkerProject, '-c', 'Release')
             Invoke-External -Executable $NpmCommand -Arguments @('run', 'build') -Directory $MonitorDir
         }
         'db-logs' { Invoke-Compose -ComposeArgs @('logs', '-f', 'postgres') }
