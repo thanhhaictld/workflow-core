@@ -86,7 +86,7 @@ app.MapPost("/api/demo/onboardings/{id:guid}/approve", async (
     // The demo uses unique tenantIds as event correlation keys. This avoids
     // exposing persisted state; don't reuse a tenantId across demo instances.
     var eventId = await engine.PublishEventAsync("OnboardingApproved",
-        stored.Reference, new { approved = true },
+        stored.Reference, "approved",
         idempotencyKey: $"onboarding-approve:{id}", ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new { workflowId = id, eventId });
 });
