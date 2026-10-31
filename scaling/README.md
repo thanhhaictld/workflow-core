@@ -28,7 +28,8 @@ flowchart TD
    `WorkflowCore.Persistence.PostgreSQL` provider and the new SQL files in order:
    `scaling/sql/002_distributed_runtime.sql`,
    `scaling/sql/003_signal_delivery.sql`,
-   `scaling/sql/004_request_dedupe.sql`.
+   `scaling/sql/004_request_dedupe.sql`, and
+   `scaling/sql/005_execution_history.sql`.
 2. Add project reference to `src/providers/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 
@@ -61,6 +62,8 @@ Do not call legacy `IWorkflowHost.StartWorkflow`, `PublishEvent`, or
   state (3) for operator intervention.
 * Event delivery is deduplicated per event/subscription and replays previously
   received events when a new subscription is created.
+* Append-only [execution history](docs/execution-history.md): durable step-start
+  attempts plus outcome and pointer transitions in fenced state commits.
 
 This is **at-least-once**, not exactly-once external execution. Provisioning
 steps must use idempotency keys and reconcile uncertain external outcomes.
@@ -86,6 +89,10 @@ A dedicated PostgreSQL schema is recommended for each performance benchmark.
   deserialization types and never ingest untrusted payloads without validation.
 
 ## Operations
+
+Use `ExecutionHistoryStore.ReadAsync(workflowId, afterHistoryId, take)` to inspect
+per-workflow step attempts, committed outcomes, status changes and signal delivery.
+The benchmark API also exposes `GET /api/workflows/{id}/history` (dev-only).
 
 Use `FencedWorkQueue.GetStatsAsync("workflow")` and
 `GetStatsAsync("event")` to inspect backlog, in-flight leases, dead letters,
