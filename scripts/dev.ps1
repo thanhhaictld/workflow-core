@@ -92,13 +92,13 @@ function Test-Prerequisites([bool] $WithDocker = $true) {
     }
     if ($WithDocker) {
         Assert-Executable 'docker'
-        Invoke-External 'docker' @('compose', 'version')
+        Invoke-External -Executable 'docker' -Arguments @('compose', 'version')
     }
     Write-Host "Prerequisites OK: .NET 10, Node $nodeVersion, npm$(if ($WithDocker) { ', Docker Compose' })."
 }
 
 function Start-Database {
-    Invoke-Compose @('up', '-d', '--wait', 'postgres')
+    Invoke-Compose -ComposeArgs @('up', '-d', '--wait', 'postgres')
 }
 
 function Apply-EfMigrations {
@@ -107,7 +107,7 @@ function Apply-EfMigrations {
     $env:WFC_PG = $LocalConnection
     $env:WFC_MIGRATE_ONLY = '1'
     try {
-        Invoke-External 'dotnet' @('run', '--no-launch-profile', '--project', $ApiProject)
+        Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $ApiProject)
     } finally {
         Remove-Item Env:WFC_MIGRATE_ONLY -ErrorAction SilentlyContinue
     }
@@ -118,7 +118,7 @@ function Apply-DatabaseSchema {
     foreach ($migration in @('002_distributed_runtime.sql', '003_signal_delivery.sql',
         '004_request_dedupe.sql', '005_execution_history.sql')) {
         Write-Host "Applying $migration..."
-        Invoke-Compose @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
     }
 }
@@ -147,7 +147,7 @@ function Invoke-Bootstrap {
 function Start-Api {
     Apply-DatabaseSchema
     $env:WFC_PG = $LocalConnection
-    Invoke-External 'dotnet' @('run', '--no-launch-profile', '--project',
+    Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
         $ApiProject, '--urls', "http://127.0.0.1:$ApiPort")
 }
 
@@ -194,12 +194,12 @@ function Start-Development {
     $api = $null
     $ui = $null
     try {
-        $api = Start-ChildProcess 'dotnet' @('run', '--no-launch-profile', '--project',
-            $ApiProject, '--urls', "http://127.0.0.1:$ApiPort") $RepoRoot
+        $api = Start-ChildProcess -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
+            $ApiProject, '--urls', "http://127.0.0.1:$ApiPort") -Directory $RepoRoot
         $nextCli = Join-Path $MonitorDir 'node_modules/next/dist/bin/next'
         if (-not (Test-Path $nextCli)) { throw "Missing Next.js CLI: $nextCli" }
-        $ui = Start-ChildProcess 'node' @($nextCli, 'dev', '--hostname', '127.0.0.1',
-            '--port', "$UiPort") $MonitorDir
+        $ui = Start-ChildProcess -Executable 'node' -Arguments @($nextCli, 'dev', '--hostname', '127.0.0.1',
+            '--port', "$UiPort") -Directory $MonitorDir
         while (-not $api.HasExited -and -not $ui.HasExited) {
             Start-Sleep -Milliseconds 500
         }
@@ -260,7 +260,7 @@ try {
         'test' {
             Apply-DatabaseSchema
             $env:WFC_TEST_PG = $LocalConnection
-            Invoke-External 'dotnet' @('test', $TestProject, '-c', 'Release')
+            Invoke-External -Executable 'dotnet' -Arguments @('test', $TestProject, '-c', 'Release')
         }
         'check' {
             Install-Monitor
@@ -268,16 +268,16 @@ try {
         }
         'build' {
             Install-Monitor
-            Invoke-External 'dotnet' @('build', $ApiProject, '-c', 'Release')
+            Invoke-External -Executable 'dotnet' -Arguments @('build', $ApiProject, '-c', 'Release')
             Invoke-External -Executable $NpmCommand -Arguments @('run', 'build') -Directory $MonitorDir
         }
-        'db-logs' { Invoke-Compose @('logs', '-f', 'postgres') }
-        'db-down' { Invoke-Compose @('down') }
+        'db-logs' { Invoke-Compose -ComposeArgs @('logs', '-f', 'postgres') }
+        'db-down' { Invoke-Compose -ComposeArgs @('down') }
         'db-reset' {
             if (-not $ConfirmReset) {
                 throw 'Refusing to delete local PostgreSQL. Pass -ConfirmReset or use make db-reset CONFIRM=reset.'
             }
-            Invoke-Compose @('down', '-v')
+            Invoke-Compose -ComposeArgs @('down', '-v')
             Write-Host 'Local PostgreSQL data deleted.'
         }
         'clean' {
