@@ -1,10 +1,11 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal]
   pull_request:
     paths:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
+      - 'src/WorkflowCore/**'
       - 'scaling/**'
       - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
@@ -39,6 +40,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
       - name: Build benchmark API
         run: dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Restore and test
