@@ -29,6 +29,28 @@ project does not include its paid source code.
 
 ## Run locally
 
+**Recommended: bootstrap from the repository root** using GNU Make, Docker
+Compose v2, the .NET 10 SDK, Node.js 22+, and npm:
+
+```bash
+make bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + npm packages
+make dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
+# In another terminal, optionally create example executions:
+make seed
+```
+
+The root [Makefile](../Makefile) includes `make help`, `make up` (one-command
+bootstrap and run), `make test`, `make build`, `make api`, `make ui`,
+`make db-down`, and `make db-reset CONFIRM=reset` (deletes local data).
+PostgreSQL listens on **127.0.0.1:55432** by default to avoid conflicts with
+existing installations. The named Docker volume preserves data after shutdown.
+Override `PG_PORT`, `API_PORT`, or `UI_PORT` in the Make invocation, e.g.
+`make up PG_PORT=55433 API_PORT=5001 UI_PORT=3001`.
+Development credentials are **not suitable for production**. Docker is only
+needed when using Make targets that provision the local database.
+
+**Manual setup** (when not using Make):
+
 From the repository root, first run the sample .NET API:
 
 ```bash
