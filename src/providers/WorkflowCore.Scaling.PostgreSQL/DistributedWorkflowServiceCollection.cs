@@ -37,7 +37,8 @@ public static class DistributedWorkflowServiceCollection
             sp.GetRequiredService<WorkflowCore.Interface.IWorkflowRegistry>(),
             sp.GetRequiredService<WorkflowCore.Interface.IExecutionPointerFactory>(),
             sp.GetRequiredService<IServiceScopeFactory>()));
-        services.AddHostedService<DistributedWorkPump>();
+        if (settings.StartWorker)
+            services.AddHostedService<DistributedWorkPump>();
         return services;
     }
 }
