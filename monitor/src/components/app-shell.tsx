@@ -63,7 +63,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="m-3 rounded-xl border border-border bg-card p-3">
         <div className="flex items-center gap-2 text-xs font-semibold"><ListTree size={15} /> PostgreSQL journal</div>
         <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
-          Read-only monitoring with durable attempt and workflow state history.
+          Read-only workflow inspection; development-only sample onboarding controls.
         </p>
       </div>
       <div className="border-t border-sidebar-border px-5 py-4 text-xs text-muted-foreground">Distributed runtime · experimental</div>
@@ -83,7 +83,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1.5 text-xs text-muted-foreground sm:flex">
-            <span className="size-1.5 rounded-full bg-emerald-500" />Read-only
+            <span className="size-1.5 rounded-full bg-emerald-500" />Demo lab
           </span>
           <Button variant="ghost" size="sm" onClick={toggleTheme} aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}>
             {dark ? <Sun size={17} /> : <Moon size={17} />}
@@ -94,7 +94,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
       <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-7 sm:px-7 lg:py-9">{children}</main>
       <footer className="border-t border-border px-7 py-4 text-xs text-muted-foreground">
-        Workflow Core monitoring · data from PostgreSQL, not synthetic examples
+        Workflow Core monitoring · real PostgreSQL history · simulated demo steps
       </footer>
     </div>
   </div>;
