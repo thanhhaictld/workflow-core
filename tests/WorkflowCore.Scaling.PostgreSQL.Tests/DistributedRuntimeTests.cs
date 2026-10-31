@@ -334,6 +334,10 @@ public sealed class DistributedRuntimeTests
                 .Where(x => x.InstanceId == workflowId).Select(x => x.Status).SingleAsync();
         }
         Assert.Equal(WorkflowStatus.Complete, finalStatus);
+        var timeline = await provider.GetRequiredService<ExecutionHistoryStore>().ReadAsync(workflowId);
+        Assert.Contains(timeline, x => x.Event.EventType == "SignalDelivered");
+        Assert.Contains(timeline, x => x.Event.EventType == "StepWaitingForEvent");
+        Assert.Contains(timeline, x => x.Event.EventType == "WorkflowCompleted");
     }
 
     private static async Task RunWorkflowAsync(
