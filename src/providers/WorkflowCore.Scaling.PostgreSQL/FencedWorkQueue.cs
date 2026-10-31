@@ -127,6 +127,29 @@ public sealed class FencedWorkQueue : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    /// <summary>
+    /// Put a work item back without consuming a retry attempt when another
+    /// node already owns the workflow. This is scheduling contention, not a
+    /// failed workflow step.
+    /// </summary>
+    public async Task<bool> DeferAsync(LeasedWork work, string owner,
+        TimeSpan delay, CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("""
+            UPDATE wfc_scale.work_item
+            SET state = 0, owner = NULL, lease_until = NULL,
+                due_at = now() + @delay, attempts = greatest(0, attempts - 1),
+                updated_at = now()
+            WHERE id = @id AND state = 1 AND owner = @owner
+              AND epoch = @epoch AND lease_until > now()
+            """);
+        cmd.Parameters.AddWithValue("id", work.Id);
+        cmd.Parameters.AddWithValue("owner", owner);
+        cmd.Parameters.AddWithValue("epoch", work.Epoch);
+        cmd.Parameters.AddWithValue("delay", NpgsqlDbType.Interval, delay);
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
     public async Task ReleaseGateAsync(WorkflowFence fence, CancellationToken ct)
     {
         await using var cmd = _dataSource.CreateCommand("""
