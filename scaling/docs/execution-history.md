@@ -9,7 +9,8 @@ an immutable audit trail.
 
 Apply `scaling/sql/005_execution_history.sql` **after** migrations 002–004.
 Each journal row has a database-generated `history_id`, `workflow_id`,
-`recorded_at`, `event_type`, optional work-item/pointer/step/attempt IDs,
+`recorded_at` (database insertion time), `occurred_at` (event occurrence
+ time), `event_type`, optional work-item/pointer/step/attempt IDs,
 the fenced workflow revision when available, and optional JSONB metadata.
 Payloads and step input/output values are **not recorded by default**.
 
@@ -73,6 +74,9 @@ Status changes invoked by the control plane are independently fenced.
 
 ## Ordering, security and operations
 
+- `occurred_at` records when an event occurred in the application and supports
+  timeline display; worker clocks should be synchronized. It is not a global
+  commit-order token, nor is `recorded_at`.
 - `history_id` is an insertion sequence, **not** a strict commit order across
   concurrent PostgreSQL transactions. For an active workflow, a high-watermark
   cursor can miss an older row committed late. For audit exports, perform a
@@ -99,7 +103,7 @@ Status changes invoked by the control plane are independently fenced.
 ## Diagnostics
 
 ```sql
-SELECT history_id, recorded_at, event_type, work_item_id,
+SELECT history_id, occurred_at, recorded_at, event_type, work_item_id,
        execution_pointer_id, step_attempt_id, revision, details
 FROM wfc_scale.execution_history
 WHERE workflow_id = @workflow_id
