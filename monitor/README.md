@@ -147,6 +147,24 @@ has no authentication; never expose it to the public internet. Use unique
 tenant IDs: approvals are keyed by tenant ID and would resume multiple waiting
 samples if that key is shared.
 
+### Parallel trace indentation
+
+For definitions registered with Workflow Core's fluent `Parallel().Do(...).Join()`,
+the trace waterfall uses `GET /api/monitor/workflows/{id}/topology` to read
+**the exact registered definition version**. `Sequence.Children` identifies
+branch roots; `Sequence.Outcomes` identifies the continuation after all
+branches have finished. The UI shows collapsible fork groups, indented
+branches (including nested forks), actual step attempts/retries in those
+branches, and a synthetic **join marker** with its status taken from the
+persisted Sequence execution pointer. The marker has **no invented duration**.
+
+This is a **logical hierarchy**, not an OpenTelemetry parent/child span
+tree: branch steps currently execute through the Workflow Core executor
+under its PostgreSQL workflow gate. Separate worker replicas do not imply
+that each branch ran on a distinct machine. Durations come only from
+journaled attempt timestamps. History from unknown/unregistered definitions
+falls back to chronological attempts without guessed indentation.
+
 ## API contract
 
 | GET route | Purpose |
