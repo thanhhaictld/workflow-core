@@ -110,13 +110,31 @@ public sealed class FencedWorkQueue : IAsyncDisposable
     public async Task<bool> RetryAsync(LeasedWork work, string owner, TimeSpan delay,
         int maxAttempts, string? error, CancellationToken ct)
     {
+        // Queue transition and its audit event commit atomically. No exception
+        // message is copied to history: it may contain application secrets.
         await using var cmd = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.work_item
-              SET state = CASE WHEN attempts >= @max THEN 3 ELSE 0 END,
-                  due_at = now() + @delay, owner = NULL, lease_until = NULL,
-                  updated_at = now(), last_error = @error
-            WHERE id = @id AND owner = @owner AND state = 1
-              AND epoch = @epoch AND lease_until > now()
+            WITH changed AS (
+                UPDATE wfc_scale.work_item
+                SET state = CASE WHEN attempts >= @max THEN 3 ELSE 0 END,
+                    due_at = now() + @delay, owner = NULL, lease_until = NULL,
+                    updated_at = now(), last_error = @error
+                WHERE id = @id AND owner = @owner AND state = 1
+                  AND epoch = @epoch AND lease_until > now()
+                RETURNING id,queue_name,item_id,epoch,attempts,state
+            ), journal AS (
+                INSERT INTO wfc_scale.execution_history
+                    (workflow_id,revision,event_index,event_type,event_key,attempt,worker_id)
+                SELECT c.item_id,COALESCE(g.revision,0),0,
+                       CASE WHEN c.state = 3 THEN 'WorkDeadLettered' ELSE 'WorkRetryScheduled' END,
+                       'retry:' || c.id::text || ':' || c.epoch::text,
+                       c.attempts,@owner
+                FROM changed c
+                LEFT JOIN wfc_scale.workflow_gate g ON g.workflow_id = c.item_id
+                WHERE c.queue_name = 'workflow'
+                ON CONFLICT (event_key) DO NOTHING
+                RETURNING id
+            )
+            SELECT count(*) FROM changed
             """);
         cmd.Parameters.AddWithValue("id", work.Id);
         cmd.Parameters.AddWithValue("owner", owner);
@@ -124,7 +142,7 @@ public sealed class FencedWorkQueue : IAsyncDisposable
         cmd.Parameters.AddWithValue("max", maxAttempts);
         cmd.Parameters.AddWithValue("delay", NpgsqlDbType.Interval, delay);
         cmd.Parameters.AddWithValue("error", NpgsqlDbType.Text, (object?)error ?? DBNull.Value);
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct)) == 1;
     }
 
     /// <summary>
@@ -165,13 +183,27 @@ public sealed class FencedWorkQueue : IAsyncDisposable
     public async Task<int> DeadLetterExhaustedAsync(int maxAttempts, CancellationToken ct)
     {
         await using var cmd = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.work_item
-            SET state = 3, owner = NULL, lease_until = NULL, updated_at = now(),
-                last_error = coalesce(last_error, 'lease expired after maximum attempts')
-            WHERE state = 1 AND lease_until < now() AND attempts >= @max
+            WITH changed AS (
+                UPDATE wfc_scale.work_item
+                SET state = 3, owner = NULL, lease_until = NULL, updated_at = now(),
+                    last_error = coalesce(last_error, 'lease expired after maximum attempts')
+                WHERE state = 1 AND lease_until < now() AND attempts >= @max
+                RETURNING id,queue_name,item_id,epoch,attempts
+            ), journal AS (
+                INSERT INTO wfc_scale.execution_history
+                    (workflow_id,revision,event_index,event_type,event_key,attempt)
+                SELECT c.item_id,COALESCE(g.revision,0),0,'WorkDeadLettered',
+                       'expired:' || c.id::text || ':' || c.epoch::text,c.attempts
+                FROM changed c
+                LEFT JOIN wfc_scale.workflow_gate g ON g.workflow_id = c.item_id
+                WHERE c.queue_name = 'workflow'
+                ON CONFLICT (event_key) DO NOTHING
+                RETURNING id
+            )
+            SELECT count(*) FROM changed
             """);
         cmd.Parameters.AddWithValue("max", maxAttempts);
-        return await cmd.ExecuteNonQueryAsync(ct);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
     }
 
     public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
