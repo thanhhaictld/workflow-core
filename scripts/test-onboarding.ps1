@@ -14,13 +14,14 @@ $ErrorActionPreference = 'Stop'
 $RootUrl = $ApiUrl.TrimEnd('/')
 $Suffix = [Guid]::NewGuid().ToString('N').Substring(0, 8)
 
-function New-Onboarding([string] $Name, [bool] $Approval, [bool] $Retry) {
+function New-Onboarding([string] $Name, [bool] $Approval, [bool] $Retry, [bool] $Parallel = $false) {
     $tenantId = "accept-$Name-$Suffix"
     $json = @{
         tenantId = $tenantId
         organizationName = "Acceptance $Name"
         requiresApproval = $Approval
         simulateTransientFailure = $Retry
+        parallel = $Parallel
     } | ConvertTo-Json -Compress
     $created = Invoke-RestMethod -Uri "$RootUrl/api/demo/onboardings" -Method Post -ContentType 'application/json' -Body $json
     if (-not $created.workflowId) { throw "Missing workflowId for $Name" }
@@ -56,6 +57,7 @@ function Is-Complete([string] $Id) {
 $happy = New-Onboarding 'happy' $false $false
 $retry = New-Onboarding 'retry' $false $true
 $approval = New-Onboarding 'approval' $true $false
+$parallel = New-Onboarding 'parallel' $false $false $true
 
 Wait-For $happy { param($id) Is-Complete $id } 'happy-path completion'
 Assert-Event $happy 'WorkflowCompleted'
@@ -85,4 +87,26 @@ Wait-For $approval { param($id) Is-Complete $id } 'approval resumption'
 Assert-Event $approval 'SignalDelivered'
 Assert-Event $approval 'WorkflowCompleted'
 
-Write-Host "All onboarding workflows succeeded: happy=$happy retry=$retry approval=$approval"
+# Verify the exact registered definition exposes three distinct branch roots.
+$topology = Invoke-RestMethod -Uri "$RootUrl/api/monitor/workflows/$parallel/topology"
+$forks = @($topology.steps | Where-Object { $_.kind -eq 'parallel' })
+if ($forks.Count -ne 1 -or $forks[0].children.Count -ne 3) {
+    throw "Parallel onboarding topology must contain one fork with three branch roots."
+}
+Wait-For $parallel { param($id) Is-Complete $id } 'parallel join completion'
+Assert-Event $parallel 'WorkflowCompleted'
+$parallelHistory = Get-History $parallel
+$observedStepIds = @($parallelHistory.items | Where-Object { $_.event.eventType -eq 'StepAttemptStarted' } |
+    ForEach-Object { $_.event.stepId } | Sort-Object -Unique)
+foreach ($branchStart in $forks[0].children) {
+    if ($branchStart -notin $observedStepIds) {
+        throw "Parallel branch root $branchStart never executed."
+    }
+}
+$completedJoin = @($parallelHistory.items | Where-Object {
+    $_.event.eventType -eq 'StepCompleted' -and $_.event.stepId -eq $forks[0].id
+})
+if ($completedJoin.Count -lt 1) {
+    throw "Parallel Sequence did not complete its branch join."
+}
+Write-Host "All onboarding workflows succeeded: happy=$happy retry=$retry approval=$approval parallel=$parallel"
