@@ -85,6 +85,7 @@ public static class TenantOnboardingRegistration
     {
         host.RegisterWorkflow<AutomaticTenantOnboardingWorkflow, TenantOnboardingState>();
         host.RegisterWorkflow<ApprovalTenantOnboardingWorkflow, TenantOnboardingState>();
+        host.RegisterWorkflow<ParallelTenantOnboardingWorkflow, TenantOnboardingState>();
     }
 }
 
