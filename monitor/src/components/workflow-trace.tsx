@@ -8,6 +8,7 @@ import {
   ListTree, LoaderCircle, RefreshCw, Search, Timer, Workflow, XCircle
 } from "lucide-react";
 import { getJson } from "@/lib/api";
+import { buildTraceLayout, type WorkflowTopology, type TraceLayoutRow } from "@/lib/trace-layout";
 import { detailsObject, displayEvent, durationMs, formatDate, formatDuration, formatTime, shortId } from "@/lib/format";
 import type {
   ExecutionHistoryRecord, ExecutionPointer, HistoryPage, WorkflowDetail
@@ -84,45 +85,152 @@ function attemptTone(state: AttemptState) {
   }
 }
 
-function TraceWaterfall({ attempts, selectedId, onSelect }: {
-  attempts: TraceAttempt[]; selectedId: string | null; onSelect: (id: string) => void;
+function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: {
+  attempts: TraceAttempt[];
+  pointers: ExecutionPointer[];
+  topology: WorkflowTopology | null;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<number[]>([]);
   const startTimes = attempts.map(attempt => new Date(attempt.startedAt).getTime());
   const ends = attempts.map(attempt => new Date(attempt.endedAt ?? attempt.startedAt).getTime());
-  const min = Math.min(...startTimes);
-  const max = Math.max(...ends);
+  const min = startTimes.length ? Math.min(...startTimes) : 0;
+  const max = ends.length ? Math.max(...ends) : 0;
   const range = Math.max(1, max - min);
-  return <div className="compact-scrollbar overflow-x-auto">
-    <div className="min-w-[740px]">
-      <div className="grid grid-cols-[220px_96px_1fr] gap-4 border-b border-border bg-muted/40 px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <span>Step execution</span><span>Duration</span><span>Relative timeline · {formatDuration(range)}</span>
+  const layout = useMemo(() => topology ? buildTraceLayout(topology) : [], [topology]);
+  const attemptsByStep = new Map<number, TraceAttempt[]>();
+  for (const attempt of attempts) {
+    if (attempt.stepId === null) continue;
+    const group = attemptsByStep.get(attempt.stepId) ?? [];
+    group.push(attempt);
+    attemptsByStep.set(attempt.stepId, group);
+  }
+  const pointersByStep = new Map<number, ExecutionPointer[]>();
+  for (const pointer of pointers) {
+    pointersByStep.set(pointer.stepId, [...(pointersByStep.get(pointer.stepId) ?? []), pointer]);
+  }
+
+  // A parallel container can have one attempt at fork and a later attempt
+  // when its children finish. Join itself does NOT have a journal span.
+  function joinState(stepId: number): string {
+    const matches = pointersByStep.get(stepId) ?? [];
+    if (matches.some(p => p.status === "Complete")) return "Joined";
+    if (matches.some(p => p.status === "Failed")) return "Failed";
+    if (matches.length) return "Waiting for branches";
+    return "Not started";
+  }
+
+  function renderAttempt(attempt: TraceAttempt, depth: number, label?: string) {
+    const left = ((new Date(attempt.startedAt).getTime() - min) / range) * 100;
+    const duration = attempt.duration ?? 0;
+    const width = Math.max(1.5, duration / range * 100);
+    const color = {
+      Completed: "bg-emerald-500", Failed: "bg-rose-500",
+      Waiting: "bg-amber-500", Returned: "bg-blue-500", Uncertain: "bg-violet-500"
+    }[attempt.state];
+    return <button type="button" onClick={() => onSelect(attempt.id)} key={attempt.id}
+      aria-pressed={selectedId === attempt.id}
+      className={cn("grid w-full grid-cols-[270px_95px_1fr] items-center gap-3 border-b border-border/60 px-4 py-2.5 text-left transition-colors hover:bg-muted/60",
+        selectedId === attempt.id && "bg-blue-500/5")}>
+      <div className="min-w-0" style={{ paddingLeft: Math.min(depth, 7) * 17 }}>
+        <div className="flex items-center gap-1.5 truncate text-xs font-semibold">
+          {depth > 0 && <span className="shrink-0 text-muted-foreground/70" aria-hidden="true">└─</span>}
+          <span className="truncate">{label ?? attempt.stepName}</span>
+        </div>
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span>Attempt {attempt.retryCount + 1}</span><Badge tone={attemptTone(attempt.state)}>{attempt.state}</Badge>
+        </div>
       </div>
-      {attempts.map((attempt, index) => {
-        const left = ((new Date(attempt.startedAt).getTime() - min) / range) * 100;
-        const duration = attempt.duration ?? 0;
-        const width = Math.max(1.5, duration / range * 100);
-        const color = {
-          Completed: "bg-emerald-500", Failed: "bg-rose-500",
-          Waiting: "bg-amber-500", Returned: "bg-blue-500", Uncertain: "bg-violet-500"
-        }[attempt.state];
-        return <button type="button" onClick={() => onSelect(attempt.id)} key={attempt.id}
-          aria-pressed={selectedId === attempt.id}
-          className={cn("grid w-full grid-cols-[220px_96px_1fr] items-center gap-4 border-b border-border/60 px-5 py-3 text-left transition-colors hover:bg-muted/60",
-            selectedId === attempt.id && "bg-blue-500/5")}>
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold">{index + 1}. {attempt.stepName}</div>
-            <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span>Attempt {attempt.retryCount + 1}</span><Badge tone={attemptTone(attempt.state)}>{attempt.state}</Badge>
-            </div>
-          </div>
-          <div className="text-xs tabular-nums text-muted-foreground">{formatDuration(attempt.duration)}</div>
-          <div className="relative h-7 rounded-md bg-muted/60">
-            <span className={cn("absolute top-[7px] h-3.5 rounded-md", color,
-              selectedId === attempt.id && "ring-2 ring-offset-2 ring-offset-background ring-blue-500/30")}
-              style={{ left: `${Math.min(left, 98)}%`, width: `${Math.min(width, 100 - left)}%`, minWidth: "6px" }} />
-          </div>
-        </button>;
-      })}
+      <div className="text-xs tabular-nums text-muted-foreground">{formatDuration(attempt.duration)}</div>
+      <div className="relative h-7 rounded-md bg-muted/60">
+        <span className={cn("absolute top-[7px] h-3.5 rounded-md", color,
+          selectedId === attempt.id && "ring-2 ring-offset-2 ring-offset-background ring-blue-500/30")}
+          style={{ left: `${Math.min(left, 98)}%`, width: `${Math.min(width, 100 - left)}%`, minWidth: "6px" }} />
+      </div>
+    </button>;
+  }
+
+  function renderMissing(row: Extract<TraceLayoutRow, { kind: "step" | "fork" }>) {
+    const matches = pointersByStep.get(row.stepId) ?? [];
+    const status = matches.some(p => p.status === "Complete") ? "Completed" :
+      matches.length ? matches[0].status : "Not scheduled";
+    return <div key={`pending-${row.stepId}`}
+      className="grid grid-cols-[270px_95px_1fr] items-center gap-3 border-b border-border/50 px-4 py-2 text-[11px] text-muted-foreground">
+      <div className="truncate" style={{ paddingLeft: Math.min(row.depth, 7) * 17 }}>
+        {row.depth > 0 && "└─ "}{row.label}
+      </div>
+      <span>{status}</span><div className="h-1 rounded-full border-t border-dashed border-border" />
+    </div>;
+  }
+
+  function renderTopologyRow(row: TraceLayoutRow, index: number) {
+    if (row.kind === "branch") {
+      if (collapsed.includes(row.groupId)) return null;
+      return <div key={`branch-${row.groupId}-${row.branchIndex}`}
+        className="grid grid-cols-[270px_95px_1fr] items-center gap-3 border-b border-border/40 bg-muted/20 px-4 py-2 text-[11px] font-semibold text-muted-foreground">
+        <div className="truncate" style={{ paddingLeft: Math.min(row.depth, 7) * 17 }}>
+          <GitBranch size={12} className="mr-1.5 inline-block" />{row.label}
+        </div><span>Parallel lane</span><span className="text-[10px] font-normal">Definition lane {row.branchIndex + 1}</span>
+      </div>;
+    }
+    if (row.kind === "join") {
+      return <div key={`join-${row.groupId}`}
+        className="grid grid-cols-[270px_95px_1fr] items-center gap-3 border-b border-border bg-blue-500/5 px-4 py-2.5 text-xs">
+        <div className="font-semibold" style={{ paddingLeft: Math.min(row.depth, 7) * 17 }}>
+          <span className="mr-2 text-blue-600" aria-hidden="true">◆</span>{row.label}
+        </div>
+        <span className="text-[11px] text-muted-foreground">{joinState(row.stepId)}</span>
+        <span className="text-[11px] text-muted-foreground">Synchronization marker · no synthetic span</span>
+      </div>;
+    }
+
+    if (collapsed.some(group => group === row.groupId)) return null;
+    const spans = attemptsByStep.get(row.stepId) ?? [];
+    const isFork = row.kind === "fork";
+    return <div key={`node-${row.stepId}-${index}`}>
+      {isFork && <button type="button"
+        className="flex w-full items-center gap-2 border-b border-border bg-blue-500/5 px-4 py-2 text-left text-xs font-semibold hover:bg-blue-500/10"
+        aria-expanded={!collapsed.includes(row.stepId)}
+        onClick={() => setCollapsed(current => current.includes(row.stepId) ?
+          current.filter(x => x !== row.stepId) : [...current, row.stepId])}>
+        {collapsed.includes(row.stepId) ? <ChevronDown size={15} className="-rotate-90" /> : <ChevronDown size={15} />}
+        <GitBranch size={14} />{row.label}
+      </button>}
+      {spans.length
+        ? spans.map(attempt => renderAttempt(attempt, isFork ? row.depth + 1 : row.depth,
+            isFork ? "Parallel container" : row.label))
+        : renderMissing(row)}
+    </div>;
+  }
+
+  // Collapsed groups hide only their branch children; the actual join marker
+  // and subsequent parent-path steps remain visible.
+  const visibleRows = layout.map((row, index) => {
+    if (row.kind === "branch" || row.kind === "join" || row.kind === "fork") {
+      return renderTopologyRow(row, index);
+    }
+    const enclosing = layout.slice(0, index).reverse().find(candidate =>
+      candidate.kind === "branch" && candidate.depth < row.depth);
+    if (enclosing && enclosing.kind === "branch" && collapsed.includes(enclosing.groupId)) return null;
+    return renderTopologyRow(row, index);
+  });
+
+  // For dynamic paths without a registered definition, retain the accurate
+  // chronological attempt stream rather than inventing parent relationships.
+  const missingTopologyAttempts = layout.length
+    ? attempts.filter(attempt => attempt.stepId === null ||
+        !layout.some(row => (row.kind === "step" || row.kind === "fork") && row.stepId === attempt.stepId))
+    : attempts;
+  return <div className="compact-scrollbar overflow-x-auto">
+    <div className="min-w-[825px]">
+      <div className="grid grid-cols-[270px_95px_1fr] gap-3 border-b border-border bg-muted/40 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span>Workflow execution · hierarchy</span><span>Duration</span>
+        <span>Relative timeline · {formatDuration(range)}</span>
+      </div>
+      {layout.length ? visibleRows : null}
+      {missingTopologyAttempts.map(attempt => renderAttempt(attempt, 0))}
+      {!attempts.length && !layout.length && <div className="p-5 text-xs text-muted-foreground">No recorded attempts yet.</div>}
     </div>
   </div>;
 }
@@ -308,6 +416,7 @@ function StateView({ detail }: { detail: WorkflowDetail }) {
 
 export function WorkflowTrace({ workflowId }: { workflowId: string }) {
   const [detail, setDetail] = useState<WorkflowDetail | null>(null);
+  const [topology, setTopology] = useState<WorkflowTopology | null>(null);
   const [history, setHistory] = useState<ExecutionHistoryRecord[]>([]);
   const [tab, setTab] = useState<Tab>("trace");
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
@@ -347,7 +456,7 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
   // The first read is deliberately from the beginning. Subsequent reads overlap
   // previous pages on manual reload; duplicate IDs are deduplicated in state.
   useEffect(() => {
-    setHistory([]); setDetail(null); setHasMore(false); setSelectedAttemptId(null);
+    setHistory([]); setDetail(null); setTopology(null); setHasMore(false); setSelectedAttemptId(null);
   }, [workflowId]);
 
   useEffect(() => {
@@ -355,9 +464,11 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
     setLoading(true);
     Promise.all([
       getJson<WorkflowDetail>(`/monitor/workflows/${encodeURIComponent(workflowId)}`, controller.signal),
-      getJson<HistoryPage>(`/workflows/${encodeURIComponent(workflowId)}/history?after=0&take=${PAGE_SIZE}`, controller.signal)
-    ]).then(([workflow, firstPage]) => {
-      setDetail(workflow); setError(null);
+      getJson<HistoryPage>(`/workflows/${encodeURIComponent(workflowId)}/history?after=0&take=${PAGE_SIZE}`, controller.signal),
+      getJson<WorkflowTopology>(`/monitor/workflows/${encodeURIComponent(workflowId)}/topology`, controller.signal)
+        .catch(() => null)
+    ]).then(([workflow, firstPage, definition]) => {
+      setDetail(workflow); setTopology(definition); setError(null);
       setHistory(current => {
         const merged = new Map(current.map(event => [event.historyId, event]));
         firstPage.items.forEach(event => merged.set(event.historyId, event));
@@ -464,9 +575,10 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
       {tab === "trace" && <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="min-w-0 space-y-5">
           <Card className="overflow-hidden">
-            <CardHeader title="Execution waterfall" description="One bar per durable step attempt, including retries. Click a span to inspect its journal." action={<Badge tone="blue">{attempts.length} spans</Badge>} />
-            {attempts.length === 0 ? <EmptyState title="No step attempts yet" description="The workflow has not executed a step body, or the journal has not reached its first step attempt." /> :
-              <TraceWaterfall attempts={attempts} selectedId={selected?.id ?? null} onSelect={setSelectedAttemptId} />}
+            <CardHeader title="Execution waterfall" description="Definition-derived fork/branch/join hierarchy; durations and statuses come from persisted attempts. Logical parallel lanes are not necessarily separate workers." action={<Badge tone="blue">{attempts.length} spans</Badge>} />
+            {attempts.length === 0 && !topology ? <EmptyState title="No step attempts yet" description="The workflow has not executed a step body, or its definition topology is not available." /> :
+              <TraceWaterfall attempts={attempts} pointers={detail.pointers} topology={topology}
+                selectedId={selected?.id ?? null} onSelect={setSelectedAttemptId} />}
           </Card>
           {unresolved > 0 && <div className="flex gap-3 rounded-xl border border-violet-400/40 bg-violet-500/5 p-4 text-xs text-violet-700 dark:text-violet-300">
             <AlertTriangle className="mt-0.5 shrink-0" size={17} />
