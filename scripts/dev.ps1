@@ -42,7 +42,7 @@ $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
 
 if ($PgPort -eq 0) { $PgPort = if ($env:PG_PORT) { [int]$env:PG_PORT } else { 55432 } }
 if ($ApiPort -eq 0) { $ApiPort = if ($env:API_PORT) { [int]$env:API_PORT } else { 5000 } }
-if ($UiPort -eq 0) { $UiPort = if ($env:UI_PORT) { [int]$env:UI_PORT } else { 3000 } }
+if ($UiPort -eq 0) { $UiPort = if ($env:UI_PORT) { [int]$env:UI_PORT } else { 3002 } }
 if (-not $PgUser) { $PgUser = if ($env:PG_USER) { $env:PG_USER } else { 'workflow' } }
 if (-not $PgPassword) { $PgPassword = if ($env:PG_PASSWORD) { $env:PG_PASSWORD } else { 'workflow_dev_only' } }
 if (-not $PgDatabase) { $PgDatabase = if ($env:PG_DATABASE) { $env:PG_DATABASE } else { 'workflow' } }
