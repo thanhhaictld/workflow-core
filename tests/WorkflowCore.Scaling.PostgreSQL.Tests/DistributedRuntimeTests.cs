@@ -7,6 +7,8 @@ using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
 using Xunit;
 
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 
 public sealed class DistributedRuntimeTests
@@ -110,6 +112,83 @@ public sealed class DistributedRuntimeTests
             "SELECT state FROM wfc_scale.work_item WHERE id = @id", command);
         count.Parameters.AddWithValue("id", work.Id);
         Assert.Equal((short)2, Convert.ToInt16(await count.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task EventPublishedBeforeWaitForIsDurablyReplayed()
+    {
+        await using (var db = new PostgresContext(Connection, "wfc"))
+            await db.Database.MigrateAsync();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDistributedWorkflowCore(Connection);
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowHost>().RegisterWorkflow<WaitWorkflow, WaitData>();
+
+        var queue = provider.GetRequiredService<FencedWorkQueue>();
+        var engine = provider.GetRequiredService<DistributedWorkflowEngine>();
+        var key = Guid.NewGuid().ToString("N");
+        var eventId = await engine.PublishEventAsync("DistributedTestSignal", key, "hello");
+
+        // There is no subscription yet: the initial event message is ACKed
+        // but the durable event stays unprocessed for future WaitFor creation.
+        var eventWork = Assert.Single(await queue.ClaimAsync("event", "signal-test", 1,
+            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        Assert.Equal(eventId, eventWork.ItemId);
+        await engine.ExecuteEventAsync(eventWork, "signal-test", CancellationToken.None);
+
+        var workflowId = await engine.StartAsync("distributed-wait", new WaitData { Key = key });
+        await RunWorkflowAsync(queue, engine, "start-wait");
+        await using (var db = new PostgresContext(Connection, "wfc"))
+        {
+            var count = await db.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedSubscription>()
+                .CountAsync(x => x.WorkflowId == workflowId.ToString());
+            Assert.True(count > 0, "WaitFor should persist a subscription");
+        }
+
+        // Persisting the subscription must enqueue a NEW event work item
+        // for the previously received event, without a process restart.
+        var replay = Assert.Single(await queue.ClaimAsync("event", "signal-replay", 1,
+            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        Assert.Equal(eventId, replay.ItemId);
+        await engine.ExecuteEventAsync(replay, "signal-replay", CancellationToken.None);
+        await RunWorkflowAsync(queue, engine, "resume-wait");
+
+        await using var verify = new PostgresContext(Connection, "wfc");
+        var stored = await verify.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedWorkflow>()
+            .AsNoTracking().SingleAsync(x => x.InstanceId == workflowId);
+        Assert.Equal(WorkflowStatus.Complete, stored.Status);
+    }
+
+    private static async Task RunWorkflowAsync(
+        FencedWorkQueue queue, DistributedWorkflowEngine engine, string owner)
+    {
+        var item = Assert.Single(await queue.ClaimAsync("workflow", owner, 1,
+            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var gate = await queue.AcquireWorkflowAsync(item.ItemId, owner,
+            TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(gate);
+        try { await engine.ExecuteWorkflowAsync(item, gate!, owner, CancellationToken.None); }
+        finally { await queue.ReleaseGateAsync(gate!, CancellationToken.None); }
+    }
+
+    public sealed class WaitData
+    {
+        public string Key { get; set; } = string.Empty;
+    }
+
+    public sealed class WaitWorkflow : IWorkflow<WaitData>
+    {
+        public string Id => "distributed-wait";
+        public int Version => 1;
+        public void Build(IWorkflowBuilder<WaitData> builder)
+        {
+            builder.StartWith(context => ExecutionResult.Next())
+                .WaitFor("DistributedTestSignal", (data, context) => data.Key,
+                    data => DateTime.UtcNow.AddDays(-1))
+                .Then(context => ExecutionResult.Next());
+        }
     }
 
     public sealed class ExampleWorkflow : IWorkflow
