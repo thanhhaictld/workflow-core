@@ -42,16 +42,63 @@ flowchart TD
     M --> F["Complete"]
 ```
 
-Two workflow definitions implement the branch:
+Three workflow definitions implement the sample:
 
 - `tenant-onboarding-auto`: no manual approval
 - `tenant-onboarding-approval`: waits for a tenant-keyed signal
+- `tenant-onboarding-parallel`: three logical branches and one join
 
 The workflow state persists step flags and `ProvisionAttempts`. An optional
 first-time exception triggers `WorkflowErrorHandling.Retry`. The journal
 captures `StepBodyThrew` and a new attempt ID on retry. The approval
 workflow pauses after access configuration, allowing inspectors to see
 `StepWaitingForEvent`, and resumes after event delivery.
+
+## Parallel fork/join review
+
+The shared [ParallelOnboarding.cs](../../src/samples/WorkflowCore.Scaling.Samples/ParallelOnboarding.cs)
+implements the same fluent API pattern as
+`StartWith(...).Parallel().Do(...).Do(...).Do(...).Join().Then(...)`.
+Each branch has two simulated steps with different delays.
+
+```mermaid
+flowchart TD
+    V["Validate tenant"] --> F["Sequence / Fork"]
+    F --> RG["CreateResourceGroup"]
+    RG --> DB["DeployDatabase"]
+    F --> APP["RegisterApplication"]
+    APP --> ROLES["ConfigureRoles"]
+    F --> BILL["CreateBillingAccount"]
+    BILL --> QUOTA["ConfigureQuota"]
+    DB --> J["Sequence / Join"]
+    ROLES --> J
+    QUOTA --> J
+    J --> ACT["ActivateTenant"]
+    ACT --> WELCOME["SendWelcome"]
+```
+
+The **trace hierarchy** is derived from `/api/monitor/workflows/{id}/topology`
+for the exact version that started the run: the `Sequence` definition has
+three `Children` branch roots, while its `Outcomes` point to activation
+after the join. In the Next.js waterfall:
+
+- **Parallel · 3 branches** is a collapsible fork group.
+- Each branch header contains nested step-attempt rows and retry spans.
+- **Join · all branches** is a synchronization *marker*. There is no
+  separate `Join` step in the Workflow Core executor.
+- The join is labeled "Joined" only when the Sequence execution pointer
+  is actually complete. No fake join timestamps or durations are emitted.
+- The post-join continuation is outdented to the parent workflow level.
+
+This is **logical concurrency**: the current PostgreSQL workflow gate fences
+a workflow execution, and branch steps are processed by the Workflow Core
+executor. The lanes are not proof of physical concurrency across worker
+replicas or of OpenTelemetry parent/child spans. The attempt durations and
+ordering always come from the append-only journal.
+
+The PowerShell acceptance script asserts that all three branch roots have
+durable `StepAttemptStarted` events and the Sequence container's join has a
+committed `StepCompleted` record before the overall workflow completes.
 
 ## Run
 
