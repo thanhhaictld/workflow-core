@@ -10,6 +10,7 @@ on:
       - 'scaling/**'
       - 'monitor/**'
       - 'Makefile'
+      - 'scripts/**'
       - 'scaling/compose.monitor.yaml'
       - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
@@ -77,14 +78,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Validate Makefile targets and Compose syntax
+      - name: Validate PowerShell and Make wrappers
         run: |
+          pwsh -NoProfile -File scripts/dev.ps1 help
+          pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
           make help
           make -n bootstrap
           make -n dev
           docker compose -f scaling/compose.monitor.yaml config --quiet
       - name: Bootstrap complete local stack
-        run: make bootstrap
+        run: pwsh -NoProfile -File scripts/dev.ps1 bootstrap
       - name: Verify API starts against bootstrapped schema
         shell: bash
         run: |
@@ -105,3 +108,32 @@ jobs:
       - name: Stop local PostgreSQL
         if: always()
         run: make db-down
+
+  powershell-platform-check:
+    name: PowerShell 7 cross-platform (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate PowerShell script and prerequisites
+        shell: pwsh
+        run: |
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path (Get-Location) 'scripts/dev.ps1'), [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/dev.ps1 help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
