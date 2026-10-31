@@ -91,7 +91,10 @@ command around it before production. Review external side effects first.
 
 ## Maintenance cautions
 
-- The code has no built-in retention job or auto-vacuum tuning.
+- The code has no built-in retention job or auto-vacuum tuning. The new
+  append-only `wfc_scale.execution_history` table increases write/WAL volume;
+  monitor growth and archive/purge with a separately authorized role. See
+  [Execution history](execution-history.md).
 - Backup `wfc` and `wfc_scale` together at one consistent point in time.
 - Never replay a completed or expired item through SQL alone; conditional ACK
   checks protect ownership.
