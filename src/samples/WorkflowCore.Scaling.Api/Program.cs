@@ -29,15 +29,14 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
     // stand-alone API behavior retains its embedded worker by default.
     options.StartWorker = Environment.GetEnvironmentVariable("WFC_EMBEDDED_WORKER") != "false";
 });
-builder.Services.AddTransient<NoopProvisionStep>();
+builder.Services.AddBenchmarkProvisionDemo();
 builder.Services.AddTenantOnboardingDemo();
 builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
 var app = builder.Build();
 
 // The old workflow host is used for definition registration ONLY.
 // Do not call host.Start(): the v2 runtime owns every scheduler and consumer.
-app.Services.GetRequiredService<IWorkflowHost>()
-    .RegisterWorkflow<BenchmarkProvisionWorkflow, BenchmarkProvisionState>();
+app.Services.GetRequiredService<IWorkflowHost>().RegisterBenchmarkProvisionDemo();
 app.Services.GetRequiredService<IWorkflowHost>().RegisterTenantOnboardingDemo();
 
 // Demo-only control-plane endpoints for exercising real journal/workflow UI.
@@ -195,18 +194,3 @@ public sealed record DemoOnboardingRequest(
     bool SimulateTransientFailure = false);
 public sealed record StartRequest(string TenantId);
 public sealed record PublishRequest(string Name, string Key, string? Value);
-public sealed class BenchmarkProvisionState
-{
-    public string TenantId { get; set; } = "";
-}
-public sealed class BenchmarkProvisionWorkflow : IWorkflow<BenchmarkProvisionState>
-{
-    public string Id => "benchmark";
-    public int Version => 1;
-    public void Build(IWorkflowBuilder<BenchmarkProvisionState> builder) =>
-        builder.StartWith<NoopProvisionStep>();
-}
-public sealed class NoopProvisionStep : StepBody
-{
-    public override ExecutionResult Run(IStepExecutionContext context) => ExecutionResult.Next();
-}
