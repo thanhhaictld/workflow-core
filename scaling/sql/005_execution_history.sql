@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS wfc_scale.execution_history (
     revision bigint NOT NULL,
     event_index int NOT NULL DEFAULT 0,
     event_type text NOT NULL,
-    event_key text UNIQUE,
+    event_key text,
     pointer_id text,
     step_id int,
     attempt int,
@@ -23,6 +23,9 @@ ALTER TABLE wfc_scale.execution_history
     DROP CONSTRAINT IF EXISTS execution_history_workflow_id_revision_event_index_key;
 ALTER TABLE wfc_scale.execution_history
     ADD COLUMN IF NOT EXISTS event_key text;
+-- Handle a previously applied draft that used an inline UNIQUE declaration.
+ALTER TABLE wfc_scale.execution_history
+    DROP CONSTRAINT IF EXISTS execution_history_event_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_history_event_key
     ON wfc_scale.execution_history(event_key);
 CREATE INDEX IF NOT EXISTS ix_execution_history_workflow
