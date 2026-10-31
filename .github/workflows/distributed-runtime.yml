@@ -127,8 +127,10 @@ jobs:
       - name: Validate PowerShell script and prerequisites
         shell: pwsh
         run: |
+          $tokens = $null
+          $errors = $null
           $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            (Join-Path (Get-Location) 'scripts/dev.ps1'), [ref]$null, [ref]$errors)
+            (Join-Path (Get-Location) 'scripts/dev.ps1'), [ref]$tokens, [ref]$errors)
           if ($errors.Count -gt 0) {
             $errors | ForEach-Object { Write-Error $_ }
             exit 1
