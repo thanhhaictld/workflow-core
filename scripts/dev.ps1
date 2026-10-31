@@ -233,7 +233,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 api         Run .NET API only (no embedded workers)
   pwsh ./scripts/dev.ps1 worker      Run independent queue/step worker
   pwsh ./scripts/dev.ps1 ui          Run Next.js dashboard only
-  pwsh ./scripts/dev.ps1 seed        Create happy, retry and approval-waiting demo runs
+  pwsh ./scripts/dev.ps1 seed        Create happy, retry, approval and parallel runs
   pwsh ./scripts/dev.ps1 approve -WorkflowId UUID   Signal onboarding approval
   pwsh ./scripts/dev.ps1 test        PostgreSQL integration tests
   pwsh ./scripts/dev.ps1 build       Build API, worker and Next.js
@@ -269,9 +269,10 @@ try {
         'ui'          { Start-Ui }
         'seed' {
             foreach ($scenario in @(
-                @{ Name = 'complete'; Approval = $false; Retry = $false },
-                @{ Name = 'retry'; Approval = $false; Retry = $true },
-                @{ Name = 'await-approval'; Approval = $true; Retry = $false }
+                @{ Name = 'complete'; Approval = $false; Retry = $false; Parallel = $false },
+                @{ Name = 'retry'; Approval = $false; Retry = $true; Parallel = $false },
+                @{ Name = 'await-approval'; Approval = $true; Retry = $false; Parallel = $false },
+                @{ Name = 'parallel'; Approval = $false; Retry = $false; Parallel = $true }
             )) {
                 $tenant = "demo-$($scenario.Name)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $payload = @{
@@ -279,6 +280,7 @@ try {
                     organizationName = "Sample $($scenario.Name) organization"
                     requiresApproval = $scenario.Approval
                     simulateTransientFailure = $scenario.Retry
+                    parallel = $scenario.Parallel
                 } | ConvertTo-Json -Compress
                 $created = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/api/demo/onboardings" -Method Post -ContentType 'application/json' -Body $payload
                 Write-Host "$($scenario.Name) | $tenant | Workflow: $($created.workflowId)"
