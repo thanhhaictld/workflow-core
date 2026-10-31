@@ -175,7 +175,7 @@ public sealed class DistributedWorkflowEngine
         var pointerStatuses = instance.ExecutionPointers.ToDictionary(p => p.Id, p => p.Status);
         WorkflowExecutorResult? result = null;
         var stepEvents = new List<ExecutionHistoryEvent>();
-        var stepAttempts = new Dictionary<string, Guid>();
+        var stepAttempts = new Dictionary<string, Guid?>();
         if (instance.Status == WorkflowStatus.Runnable)
         {
             using var capture = ExecutionHistoryScope.Begin(work.Id, fence.Revision + 1);
