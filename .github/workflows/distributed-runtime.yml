@@ -1,13 +1,14 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard]
   pull_request:
     paths:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
       - 'src/WorkflowCore/**'
       - 'src/samples/WorkflowCore.Scaling.Api/**'
       - 'scaling/**'
+      - 'monitor/**'
       - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
   workflow_dispatch:
@@ -46,3 +47,20 @@ jobs:
         run: dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Restore and test
         run: dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
+
+  monitor-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: monitor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Check TypeScript
+        run: npm run check-types
+      - name: Build monitoring dashboard
+        run: npm run build
