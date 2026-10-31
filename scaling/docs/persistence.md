@@ -9,7 +9,7 @@ Two schemas are used by the default implementation:
   provider migrations.
 - `wfc_scale`: this branch's new distributed runtime tables, created by
   `scaling/sql/002_distributed_runtime.sql`, `003_signal_delivery.sql` and
-  `004_request_dedupe.sql` **in that order**.
+  `004_request_dedupe.sql` and `005_execution_history.sql` **in that order**.
 
 ```mermaid
 erDiagram
@@ -52,6 +52,19 @@ erDiagram
     uuid event_id PK
     uuid subscription_id PK
     timestamptz delivered_at
+  }
+  EXECUTION_HISTORY {
+    bigint id PK
+    uuid workflow_id
+    bigint revision
+    int event_index
+    text event_type
+    text event_key UK
+    text pointer_id
+    int step_id
+    int attempt
+    jsonb details
+    timestamptz occurred_at
   }
   REQUEST_DEDUPE {
     text kind PK
@@ -102,6 +115,17 @@ Unique `(kind,request_key)`. `payload_hash` is SHA-256 of a serialized
 argument tuple; a repeated key with changed arguments throws. This is
 idempotency of **intent creation**, not exactly-once effects.
 
+### `execution_history`
+
+Append-only audit journal. Rows contain stable event types and minimal
+non-sensitive metadata. `id` is the chronological cursor; `revision` is the
+state generation and is **not unique** because a crashed attempt may be retried
+without advancing state. Durable dispatch records are written before external
+step invocation; completed state transitions, signal delivery, and queue
+retry/dead-letter records share their respective database transactions.
+
+No history retention/archival job is implemented.
+
 ## Atomicity boundaries
 
 All of the following must commit together for a workflow step:
@@ -111,6 +135,7 @@ All of the following must commit together for a workflow step:
 4. Generated subscriptions and execution errors.
 5. Work-item intents for the next execution.
 6. Backfill of retained signals for newly generated subscriptions.
+7. Journal records for the committed pointer/step/status transitions.
 
 `ExecuteWorkflowAsync` uses `PostgresContext.Database.BeginTransactionAsync`
 for this path. External HTTP/provisioning calls cannot participate.
