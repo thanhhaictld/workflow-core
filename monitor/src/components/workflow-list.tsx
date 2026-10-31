@@ -7,6 +7,7 @@ import { getJson } from "@/lib/api";
 import { durationMs, formatDate, formatDuration, shortId } from "@/lib/format";
 import type { WorkflowItem, WorkflowOverview, WorkflowPage } from "@/lib/types";
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Select, StatusBadge, buttonClasses } from "./ui";
+import { DemoOnboarding } from "./demo-onboarding";
 
 const PAGE_SIZE = 20;
 const statusOptions = ["All", "Runnable", "Complete", "Suspended", "Terminated"];
@@ -138,6 +139,8 @@ export function WorkflowList() {
       <Metric icon={<CheckCircle2 size={19} />} label="Completed" value={overview?.completed} hint={`${overview?.completed24h ?? "—"} completed in the last 24 hours`} tone="green" />
       <Metric icon={<AlertTriangle size={19} />} label="With execution errors" value={overview?.withErrors} hint="Historical errors, including recovered runs" tone="red" />
     </div>
+
+    <DemoOnboarding onCreated={reload} />
 
     <Card className="overflow-hidden">
       <CardHeader title="Workflow runs" description="Latest executions ordered by start time · click a run for a Temporal-style trace"
