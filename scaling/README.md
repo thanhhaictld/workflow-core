@@ -28,7 +28,8 @@ flowchart TD
    `WorkflowCore.Persistence.PostgreSQL` provider and the new SQL files in order:
    `scaling/sql/002_distributed_runtime.sql`,
    `scaling/sql/003_signal_delivery.sql`,
-   `scaling/sql/004_request_dedupe.sql`.
+   `scaling/sql/004_request_dedupe.sql`,
+   `scaling/sql/005_execution_history.sql`.
 2. Add project reference to `src/providers/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 
@@ -49,6 +50,28 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 
 Do not call legacy `IWorkflowHost.StartWorkflow`, `PublishEvent`, or
 `Start` on this deployment: these paths bypass the transactional ledger.
+
+## Execution history
+
+The distributed runtime now journals workflow and step lifecycle events in
+`wfc_scale.execution_history`. Use the `ExecutionHistoryReader` registered in
+DI to query by workflow ID with an exclusive, monotonically increasing cursor:
+
+```csharp
+var reader = services.GetRequiredService<ExecutionHistoryReader>();
+var page = await reader.ReadAsync(workflowId, afterId: 0, limit: 100);
+var nextCursor = page.Count == 0 ? 0 : page[^1].Id;
+```
+
+A `StepAttemptDispatched` entry is written and committed **before** invoking
+the executor; a corresponding `StepAttemptCommitted` appears only when the
+workflow/pointer updates and queue ACK succeed. A dispatch without a commit
+means an **unknown** outcome, not definitely a failed step. External side
+effects are still at-least-once; the journal is not Temporal-style replay.
+Details intentionally omit workflow data, payloads and exception messages.
+
+See [execution history semantics](docs/execution-history.md) for caveats,
+query and retention guidance.
 
 ## Guarantees
 
