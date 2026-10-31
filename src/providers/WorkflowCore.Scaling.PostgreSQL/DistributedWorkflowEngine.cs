@@ -73,6 +73,14 @@ public sealed class DistributedWorkflowEngine
         db.Set<PersistedWorkflow>().Add(instance.ToPersistable(_serializer));
         await db.SaveChangesAsync(ct);
         await InsertWorkAsync(db, "workflow", id, $"wf:{id}:0", DateTime.UtcNow, ct);
+        await ExecutionHistory.AppendAsync(db, id, 0, 0, "WorkflowStarted", ct,
+            details: new Dictionary<string, string?>
+            {
+                ["definitionId"] = definition.Id, ["version"] = definition.Version.ToString()
+            });
+        var genesis = instance.ExecutionPointers.Single();
+        await ExecutionHistory.AppendAsync(db, id, 0, 1, "StepScheduled", ct,
+            genesis.Id, genesis.StepId);
         await tx.CommitAsync(ct);
         return id;
     }
@@ -116,6 +124,7 @@ public sealed class DistributedWorkflowEngine
                 return false;
             var stored = await LoadTrackedAsync(db, workflowId, ct);
             if (stored is null) return false;
+            var previousStatus = stored.Status;
             stored.Status = target;
             if (target == WorkflowStatus.Runnable)
             {
@@ -126,6 +135,13 @@ public sealed class DistributedWorkflowEngine
             if (target is WorkflowStatus.Complete or WorkflowStatus.Terminated)
                 stored.CompleteTime = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+            if (previousStatus != target)
+                await ExecutionHistory.AppendAsync(db, workflowId, fence.Revision + 1,
+                    0, "WorkflowStatusChanged", ct, worker: owner,
+                    details: new Dictionary<string, string?>
+                    {
+                        ["from"] = previousStatus.ToString(), ["to"] = target.ToString()
+                    });
             await tx.CommitAsync(ct);
             return true;
         }
@@ -148,12 +164,23 @@ public sealed class DistributedWorkflowEngine
         }
 
         WorkflowInstance instance;
+        WorkflowInstance before;
         await using (var read = Context())
         {
             var stored = await LoadTrackedAsync(read, work.ItemId, ct);
             if (stored is null) throw new InvalidOperationException($"Workflow {work.ItemId} not found");
+            // Independent snapshots: execution mutates instance in memory.
+            before = stored.ToWorkflowInstance(_serializer);
             instance = stored.ToWorkflowInstance(_serializer);
         }
+
+        // Durable dispatch evidence is committed before invoking step bodies.
+        // The outcome remains unknown if this worker crashes before state commit.
+        IReadOnlyList<ExecutionPointer> dispatched;
+        await using (var dispatch = Context())
+            dispatched = await ExecutionHistory.DispatchAsync(
+                dispatch, instance, work, fence, owner, ct);
+
         WorkflowExecutorResult? result = null;
         if (instance.Status == WorkflowStatus.Runnable)
         {
@@ -211,6 +238,8 @@ public sealed class DistributedWorkflowEngine
             }
         }
         await db.SaveChangesAsync(ct);
+        await ExecutionHistory.AppendOutcomesAsync(db, work.ItemId,
+            fence.Revision + 1, before, instance, result, dispatched, work, owner, ct);
         await tx.CommitAsync(ct);
     }
 
@@ -315,6 +344,15 @@ public sealed class DistributedWorkflowEngine
                 await InsertWorkAsync(db, "workflow", id,
                     $"wf:{id}:{fence.Revision + 1}", DateTime.UtcNow, ct);
                 await db.SaveChangesAsync(ct);
+                await ExecutionHistory.AppendAsync(db, id, fence.Revision + 1,
+                    0, "SignalDelivered", ct, sub.ExecutionPointerId, sub.StepId,
+                    worker: subOwner,
+                    eventKey: $"signal:{work.ItemId:N}:{sub.SubscriptionId:N}",
+                    details: new Dictionary<string, string?>
+                    {
+                        ["signalId"] = work.ItemId.ToString("N"),
+                        ["subscriptionId"] = sub.SubscriptionId.ToString("N")
+                    });
                 await tx.CommitAsync(ct);
             }
             finally { await _queue.ReleaseGateAsync(fence, CancellationToken.None); }
