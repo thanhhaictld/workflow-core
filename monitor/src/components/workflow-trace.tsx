@@ -206,15 +206,10 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
 
   // Collapsed groups hide only their branch children; the actual join marker
   // and subsequent parent-path steps remain visible.
-  const visibleRows = layout.map((row, index) => {
-    if (row.kind === "branch" || row.kind === "join" || row.kind === "fork") {
-      return renderTopologyRow(row, index);
-    }
-    const enclosing = layout.slice(0, index).reverse().find(candidate =>
-      candidate.kind === "branch" && candidate.depth < row.depth);
-    if (enclosing && enclosing.kind === "branch" && collapsed.includes(enclosing.groupId)) return null;
-    return renderTopologyRow(row, index);
-  });
+  const visibleRows = layout.map((row, index) =>
+    row.ancestors.some(groupId => collapsed.includes(groupId))
+      ? null : renderTopologyRow(row, index)
+  );
 
   // For dynamic paths without a registered definition, retain the accurate
   // chronological attempt stream rather than inventing parent relationships.
