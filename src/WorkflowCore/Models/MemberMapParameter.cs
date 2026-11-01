@@ -16,12 +16,12 @@ namespace WorkflowCore.Models
         public string TargetMemberName =>
             (_target.Body as MemberExpression)?.Member.Name ?? "unknown";
 
-        public string? SourceMemberName
+        public string SourceMemberName
         {
             get
             {
                 if (_source.Body is not MemberExpression member) return null;
-                Expression? root = member.Expression;
+                Expression root = member.Expression;
                 while (root is MemberExpression parent) root = parent.Expression;
                 return root is ParameterExpression ? member.Member.Name : null;
             }
