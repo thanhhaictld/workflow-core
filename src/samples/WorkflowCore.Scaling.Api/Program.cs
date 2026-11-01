@@ -33,12 +33,21 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 builder.Services.AddBenchmarkProvisionDemo();
 builder.Services.AddTenantOnboardingDemo();
 builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
+builder.Services.AddSingleton(sp => new DefinitionCatalog(connectionString,
+    sp.GetRequiredService<ILogger<DefinitionCatalog>>()));
 var app = builder.Build();
 
 // The old workflow host is used for definition registration ONLY.
 // Do not call host.Start(): the v2 runtime owns every scheduler and consumer.
 app.Services.GetRequiredService<IWorkflowHost>().RegisterBenchmarkProvisionDemo();
 app.Services.GetRequiredService<IWorkflowHost>().RegisterTenantOnboardingDemo();
+
+// Fail fast if a registered ID/version changes schema. Existing instances are
+// pinned to their old version; definitions are never updated in place.
+var catalog = app.Services.GetRequiredService<DefinitionCatalog>();
+await catalog.ReconcileAsync(app.Services.GetRequiredService<IWorkflowRegistry>()
+    .GetAllDefinitions(), CancellationToken.None);
+var managementWritesEnabled = Environment.GetEnvironmentVariable("WFC_ENABLE_MANAGEMENT_WRITES") == "true";
 
 // Demo-only control-plane endpoints for exercising real journal/workflow UI.
 // They require authorization, tenancy checks and rate limiting if ever hosted
@@ -62,7 +71,12 @@ app.MapPost("/api/demo/onboardings", async (
         return Results.BadRequest(new { error = "Parallel demo cannot combine with approval or transient-failure scenarios" });
     var definitionId = request.Parallel ? "tenant-onboarding-parallel"
         : request.RequiresApproval ? "tenant-onboarding-approval" : "tenant-onboarding-auto";
-    var id = await engine.StartAsync(definitionId, state, reference: state.TenantId,
+    // Starts through the sample control plane respect catalog lifecycle and
+    // the published default version (explicit versions must also be Published).
+    var version = await catalog.ResolveStartVersionAsync(definitionId, null, ct);
+    if (version is null) return Results.Conflict(new { error = "No published default version" });
+    var id = await engine.StartAsync(definitionId, state,
+        definitionVersion: version, reference: state.TenantId,
         idempotencyKey: http.Request.Headers["Idempotency-Key"].FirstOrDefault(), ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new
     {
@@ -95,16 +109,19 @@ app.MapPost("/api/demo/onboardings/{id:guid}/approve", async (
 });
 
 app.MapPost("/api/workflows", async (
-    StartRequest request, HttpContext http, DistributedWorkflowEngine engine,
+    StartRequest request, HttpContext http, DefinitionCatalog catalog, DistributedWorkflowEngine engine,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.TenantId))
         return Results.BadRequest("tenantId is required");
     var idempotencyKey = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
+    var version = await catalog.ResolveStartVersionAsync("benchmark", null, ct);
+    if (version is null) return Results.Conflict(new { error = "No published benchmark default" });
     var id = await engine.StartAsync("benchmark", new BenchmarkProvisionState
     {
         TenantId = request.TenantId
-    }, reference: request.TenantId, idempotencyKey: idempotencyKey, ct: ct);
+    }, definitionVersion: version, reference: request.TenantId,
+       idempotencyKey: idempotencyKey, ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new { workflowId = id });
 });
 
@@ -179,6 +196,90 @@ app.MapGet("/api/monitor/workflows/{id:guid}", async (
     return detail is null ? Results.NotFound() : Results.Ok(detail);
 });
 
+// Workflow definition management. Read operations are available in the
+// development monitor. Mutation endpoints require explicit opt-in and MUST be
+// protected by real authentication/authorization outside a private workstation.
+app.MapGet("/api/definitions", async (
+    DefinitionCatalog catalog, CancellationToken ct) =>
+    Results.Ok(new
+    {
+        writesEnabled = managementWritesEnabled,
+        versions = await catalog.ListAsync(null, ct)
+    }));
+
+app.MapGet("/api/definitions/{id}/versions", async (
+    string id, DefinitionCatalog catalog, CancellationToken ct) =>
+{
+    var versions = await catalog.ListAsync(id, ct);
+    return versions.Count == 0 ? Results.NotFound() : Results.Ok(versions);
+});
+
+app.MapGet("/api/definitions/{id}/versions/{version:int}", async (
+    string id, int version, DefinitionCatalog catalog, CancellationToken ct) =>
+{
+    if (version < 1) return Results.BadRequest();
+    var item = await catalog.GetAsync(id, version, ct);
+    return item is null ? Results.NotFound() : Results.Ok(item);
+});
+
+app.MapGet("/api/definitions/{id}/diff", async (
+    string id, int from, int to, DefinitionCatalog catalog, CancellationToken ct) =>
+{
+    if (from < 1 || to < 1 || from == to)
+        return Results.BadRequest(new { error = "Select two distinct positive versions" });
+    var diff = await catalog.CompareAsync(id, from, to, ct);
+    return diff is null ? Results.NotFound() : Results.Ok(diff);
+});
+
+app.MapPost("/api/definitions/{id}/versions/{version:int}/default", async (
+    string id, int version, DefinitionCatalog catalog, CancellationToken ct) =>
+{
+    if (!managementWritesEnabled)
+        return Results.Problem("Set WFC_ENABLE_MANAGEMENT_WRITES=true in the private demo lab",
+            statusCode: 403);
+    if (version < 1) return Results.BadRequest();
+    var applied = await catalog.SetDefaultAsync(id, version, ct);
+    return applied ? Results.Ok(new { id, version, isDefault = true })
+        : Results.Conflict(new { error = "Version is missing or not Published" });
+});
+
+app.MapPut("/api/definitions/{id}/versions/{version:int}/lifecycle", async (
+    string id, int version, LifecycleRequest request,
+    DefinitionCatalog catalog, CancellationToken ct) =>
+{
+    if (!managementWritesEnabled)
+        return Results.Problem("Management writes disabled", statusCode: 403);
+    if (version < 1 || request.Lifecycle is not ("Published" or "Deprecated" or "Disabled"))
+        return Results.BadRequest(new { error = "Allowed: Published, Deprecated, Disabled" });
+    var applied = await catalog.SetLifecycleAsync(id, version, request.Lifecycle, ct);
+    return applied ? Results.Ok(new { id, version, lifecycle = request.Lifecycle })
+        : Results.Conflict(new { error = "Version missing, or default must be reassigned before retirement" });
+});
+
+// Sample start supports the two code-defined versioned onboarding schemas.
+// Arbitrary user-supplied schema JSON is deliberately not executable.
+app.MapPost("/api/definitions/tenant-onboarding-versioned/start", async (
+    ManagedOnboardingStart request, HttpContext http,
+    DefinitionCatalog catalog, DistributedWorkflowEngine engine, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.TenantId) || request.TenantId.Length > 100 ||
+        string.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Length > 120)
+        return Results.BadRequest(new { error = "tenantId/organizationName are required (max 100/120)" });
+    if (request.Version is < 1) return Results.BadRequest(new { error = "Invalid version" });
+    var version = await catalog.ResolveStartVersionAsync("tenant-onboarding-versioned", request.Version, ct);
+    if (version is null)
+        return Results.Conflict(new { error = "Requested/default version must be Published" });
+    var data = new TenantOnboardingState
+    {
+        TenantId = request.TenantId.Trim(), OrganizationName = request.OrganizationName.Trim()
+    };
+    var workflowId = await engine.StartAsync("tenant-onboarding-versioned", data,
+        definitionVersion: version, reference: data.TenantId,
+        idempotencyKey: http.Request.Headers["Idempotency-Key"].FirstOrDefault(), ct: ct);
+    return Results.Accepted($"/api/workflows/{workflowId}",
+        new { workflowId, definitionId = "tenant-onboarding-versioned", version });
+});
+
 // Definition topology is the source of fork/branch/join indentation. The
 // branch graph is static, but span timestamps and status remain journal-backed.
 // Join() returns the Sequence container: it does not create a separate step.
@@ -227,3 +328,6 @@ public sealed record DemoOnboardingRequest(
     bool SimulateTransientFailure = false, bool Parallel = false);
 public sealed record StartRequest(string TenantId);
 public sealed record PublishRequest(string Name, string Key, string? Value);
+
+public sealed record LifecycleRequest(string Lifecycle);
+public sealed record ManagedOnboardingStart(string TenantId, string OrganizationName, int? Version = null);
