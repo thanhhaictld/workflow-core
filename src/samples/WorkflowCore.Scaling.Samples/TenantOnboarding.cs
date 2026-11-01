@@ -62,6 +62,37 @@ public sealed class ApprovalTenantOnboardingWorkflow : IWorkflow<TenantOnboardin
     }
 }
 
+/// <summary>Demonstration of immutable workflow schema versioning.
+ /// Version 2 adds a distinct access-configuration step before activation.
+ /// Historical v1 instances keep executing using the v1 definition.
+ /// </summary>
+public sealed class VersionedTenantOnboardingV1 : IWorkflow<TenantOnboardingState>
+{
+    public string Id => "tenant-onboarding-versioned";
+    public int Version => 1;
+    public void Build(IWorkflowBuilder<TenantOnboardingState> builder)
+    {
+        builder.StartWith<ValidateTenantStep>()
+            .Then<CreateIdentityStep>()
+            .Then<ActivateTenantStep>()
+            .Then<SendWelcomeStep>();
+    }
+}
+
+public sealed class VersionedTenantOnboardingV2 : IWorkflow<TenantOnboardingState>
+{
+    public string Id => "tenant-onboarding-versioned";
+    public int Version => 2;
+    public void Build(IWorkflowBuilder<TenantOnboardingState> builder)
+    {
+        builder.StartWith<ValidateTenantStep>()
+            .Then<CreateIdentityStep>()
+            .Then<ConfigureAccessStep>()
+            .Then<ActivateTenantStep>()
+            .Then<SendWelcomeStep>();
+    }
+}
+
 public static class TenantOnboardingRegistration
 {
     public static IServiceCollection AddTenantOnboardingDemo(this IServiceCollection services)
@@ -86,6 +117,8 @@ public static class TenantOnboardingRegistration
         host.RegisterWorkflow<AutomaticTenantOnboardingWorkflow, TenantOnboardingState>();
         host.RegisterWorkflow<ApprovalTenantOnboardingWorkflow, TenantOnboardingState>();
         host.RegisterWorkflow<ParallelTenantOnboardingWorkflow, TenantOnboardingState>();
+        host.RegisterWorkflow<VersionedTenantOnboardingV1, TenantOnboardingState>();
+        host.RegisterWorkflow<VersionedTenantOnboardingV2, TenantOnboardingState>();
     }
 }
 
