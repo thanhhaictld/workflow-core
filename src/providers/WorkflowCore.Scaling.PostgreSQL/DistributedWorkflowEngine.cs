@@ -108,7 +108,7 @@ public sealed class DistributedWorkflowEngine
     }
 
     public async Task<bool> ChangeStatusAsync(Guid workflowId, WorkflowStatus target,
-        CancellationToken ct = default)
+        CancellationToken ct = default, WorkflowStatus? expectedCurrentStatus = null)
     {
         var owner = $"control:{Guid.NewGuid():N}";
         var fence = await _queue.AcquireWorkflowAsync(workflowId, owner, TimeSpan.FromSeconds(30), ct);
@@ -121,6 +121,10 @@ public sealed class DistributedWorkflowEngine
                 return false;
             var stored = await LoadTrackedAsync(db, workflowId, ct);
             if (stored is null) return false;
+            // The state precondition is checked UNDER the workflow fence to
+            // prevent stale management commands reviving a completed workflow.
+            if (expectedCurrentStatus.HasValue && stored.Status != expectedCurrentStatus.Value)
+                return false;
             var previousStatus = stored.Status;
             stored.Status = target;
             if (target == WorkflowStatus.Runnable)
