@@ -1,8 +1,8 @@
 #Requires -Version 7.0
 <#
-  End-to-end immutable definition versioning, metadata diff and policy checks.
-  Requires API + dedicated worker + 006_definition_versions.sql.
-  Uses development-only mutation controls; never point at production.
+  End-to-end code-first workflow metadata review and instance management.
+  Version schema snapshots are descriptive: no lifecycle or default selection
+  should change how code-first workflow execution works.
 #>
 [CmdletBinding()]
 param(
@@ -40,68 +40,44 @@ function Wait-Status([string] $Id, [string] $Expected) {
     throw "Workflow $Id did not reach status $Expected"
 }
 function Start-Versioned([int] $Version) {
-    return Request "definitions/$Name/start" 'POST' @{
+    return Request 'demo/versioned-onboardings' 'POST' @{
         tenantId = "version-$Version-$Suffix"
-        organizationName = "Catalog acceptance $Version"
+        organizationName = "Metadata review $Version"
         version = $Version
     }
 }
-function Put-State([int] $Version, [string] $Lifecycle) {
-    return Request "definitions/$Name/versions/$Version/lifecycle" 'PUT' @{
-        lifecycle = $Lifecycle
-    }
-}
 $cap = Request 'manage/capabilities'
-if (-not $cap.writesEnabled) { throw 'CI must explicitly enable WFC_ENABLE_MANAGEMENT_WRITES=true' }
+if (-not $cap.writesEnabled) { throw 'CI must explicitly enable WFC_ENABLE_MANAGEMENT_WRITES=true for instance status tests' }
 $index = Request 'definitions'
 $versions = @($index.versions | Where-Object { $_.definitionId -eq $Name })
-if ($versions.Count -ne 2) { throw "Expected v1 and v2, got $($versions.Count)" }
-if (@($versions | Where-Object { $_.isDefault -and $_.version -eq 2 }).Count -ne 1) {
-    throw "Expected v2 initial default"
-}
+if ($versions.Count -ne 2) { throw "Expected archived metadata for v1/v2, got $($versions.Count)" }
 $originalHash = ($versions | Where-Object version -eq 1).schemaSha256
 $diff = Request "definitions/$Name/diff?from=1&to=2"
-if ($diff.changes.Count -lt 1) { throw 'v1 to v2 has no metadata changes' }
+if ($diff.changes.Count -lt 1) { throw 'Version metadata differs but structural diff is empty' }
 if (-not @($diff.changes | Where-Object {
     $_.path -match '^steps/' -and ($_.after -match 'ConfigureAccessStep')
 }).Count) {
-    throw 'v2 diff should reveal ConfigureAccessStep'
+    throw 'Diff must show ConfigureAccessStep added by the C# v2 workflow'
 }
 $schema = Request "definitions/$Name/versions/1"
-if ($schema.schemaSha256 -ne $originalHash) { throw 'Snapshot hash mismatch' }
+if ($schema.schemaSha256 -ne $originalHash) { throw 'Metadata fingerprint mismatch' }
+if ($null -ne $schema.PSObject.Properties['lifecycle'] -or
+    $null -ne $schema.PSObject.Properties['isDefault']) {
+    throw 'Metadata API must not expose version governance state'
+}
 $first = Start-Versioned 1
 $second = Start-Versioned 2
-if ($first.version -ne 1 -or $second.version -ne 2) { throw 'Incorrect instance version pinning' }
-try {
-    $null = Request "definitions/$Name/versions/1/default" 'POST'
-    $selected = Request "definitions/$Name/versions"
-    if (@($selected | Where-Object { $_.version -eq 1 -and $_.isDefault }).Count -ne 1) {
-        throw 'Promotion did not update default'
-    }
-    Expect-Http 409 "definitions/$Name/versions/1/lifecycle" 'PUT' @{ lifecycle = 'Deprecated' }
-    $null = Request "definitions/$Name/versions/2/default" 'POST'
-    $null = Put-State 1 'Deprecated'
-    Expect-Http 409 "definitions/$Name/start" 'POST' @{
-        tenantId = "retired-$Suffix"
-        organizationName = "Blocked version"
-        version = 1
-    }
-    $null = Put-State 1 'Published'
-    $third = Start-Versioned 1
-    if ($third.version -ne 1) { throw 'Republishing version should allow explicit start' }
-    Wait-Status $third.workflowId 'Complete'
-    Wait-Status $first.workflowId 'Complete'
-    Wait-Status $second.workflowId 'Complete'
-    $immutable = Request "definitions/$Name/versions/1"
-    if ($immutable.schemaSha256 -ne $originalHash) {
-        throw 'Lifecycle changes must not mutate definition metadata'
-    }
-} finally {
-    # Restore shared local test DB policy even when an assertion fails.
-    $null = Put-State 1 'Published'
-    $null = Request "definitions/$Name/versions/2/default" 'POST'
+if ($first.version -ne 1 -or $second.version -ne 2) {
+    throw 'Runtime failed to pin a version from the code-first registry'
 }
-Write-Host "Version diff, immutable schema, promotion, deprecation and pinned starts passed."
+Wait-Status $first.workflowId 'Complete'
+Wait-Status $second.workflowId 'Complete'
+$immutable = Request "definitions/$Name/versions/1"
+if ($immutable.schemaSha256 -ne $originalHash) { throw 'Archived metadata was mutated' }
+# The old management routes must not be able to publish or change code-first versions.
+Expect-Http 404 "definitions/$Name/versions/1/default" 'POST' @{}
+Expect-Http 404 "definitions/$Name/versions/1/lifecycle" 'PUT' @{ lifecycle = 'Deprecated' }
+Write-Host 'Code-first version starts, read-only snapshots and structural metadata diff passed.'
 
 # The approval definition is long-lived enough to validate instance lifecycle.
 $approvalId = "control-$Suffix"
