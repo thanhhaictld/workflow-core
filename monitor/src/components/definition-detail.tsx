@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, CircleHelp, Code2, Copy,
-  GitCompareArrows, GitFork, Layers3, LoaderCircle, Play, RefreshCw, ShieldCheck } from "lucide-react";
+  GitCompareArrows, GitFork, Layers3, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { getJson } from "@/lib/api";
-import type { CatalogIndex, CatalogVersion, DefinitionChange,
-  DefinitionComparison, DefinitionLifecycle, DefinitionStep } from "@/lib/definitions";
+import type { CatalogVersion, DefinitionChange,
+  DefinitionComparison, DefinitionStep } from "@/lib/definitions";
 import { Badge, Button, Card, CardHeader, EmptyState, Select, cn } from "./ui";
 
-const states: DefinitionLifecycle[] = ["Published", "Deprecated", "Disabled"];
 const changedColor = {
   Added: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   Removed: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
@@ -42,7 +41,6 @@ function SchemaStep({ step }: { step: DefinitionStep }) {
 
 export function DefinitionDetail({ id }: { id: string }) {
   const [versions, setVersions] = useState<CatalogVersion[]>([]);
-  const [writesEnabled, setWritesEnabled] = useState(false);
   const [from, setFrom] = useState<number | null>(null);
   const [to, setTo] = useState<number | null>(null);
   const [comparison, setComparison] = useState<DefinitionComparison | null>(null);
@@ -50,21 +48,16 @@ export function DefinitionDetail({ id }: { id: string }) {
   const [showSchema, setShowSchema] = useState<"from" | "to" | null>(null);
   const [loading, setLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
 
   const reload = useCallback(() => setRefresh(n => n + 1), []);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    Promise.all([
-      getJson<CatalogVersion[]>("/definitions/" + encodeURIComponent(id) + "/versions", controller.signal),
-      getJson<CatalogIndex>("/definitions", controller.signal)
-    ]).then(([list, catalog]) => {
+    getJson<CatalogVersion[]>("/definitions/" + encodeURIComponent(id) + "/versions", controller.signal)
+    .then(list => {
       setVersions(list.sort((a, b) => b.version - a.version));
-      setWritesEnabled(catalog.writesEnabled);
       setFrom(current => current !== null && list.some(v => v.version === current)
         ? current : list.length > 1 ? list[1].version : list[0]?.version ?? null);
       setTo(current => current !== null && list.some(v => v.version === current)
@@ -95,44 +88,6 @@ export function DefinitionDetail({ id }: { id: string }) {
     return () => controller.abort();
   }, [id, from, to, refresh]);
 
-  async function mutate(path: string, method: "POST" | "PUT", body?: object) {
-    setBusy(path); setError(null);
-    try {
-      const response = await fetch("/backend" + path, {
-        method,
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: body ? JSON.stringify(body) : undefined
-      });
-      const result: unknown = await response.json().catch(() => ({}));
-      if (!response.ok)
-        throw new Error(result && typeof result === "object" && "error" in result
-          ? String((result as { error: unknown }).error) : "Request failed: " + response.status);
-      reload();
-      return result;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Management operation failed");
-      return null;
-    } finally { setBusy(null); }
-  }
-
-  async function promote(version: number) {
-    if (!window.confirm("Use v" + version + " for new default starts? Running workflows keep their current version.")) return;
-    await mutate("/definitions/" + encodeURIComponent(id) + "/versions/" + version + "/default", "POST");
-  }
-  async function changeLifecycle(version: number, lifecycle: DefinitionLifecycle) {
-    if (!window.confirm("Set v" + version + " to " + lifecycle + "? This changes which new sample executions may start.")) return;
-    await mutate("/definitions/" + encodeURIComponent(id) + "/versions/" + version + "/lifecycle",
-      "PUT", { lifecycle });
-  }
-  async function startVersion() {
-    if (to === null || id !== "tenant-onboarding-versioned") return;
-    const tenantId = "version-" + crypto.randomUUID().slice(0, 10);
-    const result = await mutate("/definitions/tenant-onboarding-versioned/start",
-      "POST", { tenantId, organizationName: "Schema comparison test", version: to });
-    if (result && typeof result === "object" && "workflowId" in result)
-      setCreated(String(result.workflowId));
-  }
-
   const fromSchema = versions.find(v => v.version === from);
   const toSchema = versions.find(v => v.version === to);
   const changes = comparison?.changes ?? [];
@@ -150,7 +105,7 @@ export function DefinitionDetail({ id }: { id: string }) {
           <h1 className="break-all text-xl font-bold tracking-tight sm:text-2xl">{id}</h1>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Registered schema versions, publication policy and structural metadata diff.
+          Read-only review of versioned metadata generated from C# fluent workflow definitions.
         </p>
       </div>
       <Button disabled={loading} onClick={reload}>
@@ -168,43 +123,32 @@ export function DefinitionDetail({ id }: { id: string }) {
       title="Definition not found" description="The API has no registered metadata for this workflow ID." />}
 
     <Card className="overflow-hidden">
-      <CardHeader title="Version management"
-        description="Definitions are immutable. Change lifecycle or default selection without editing historical schemas."
-        action={<Badge tone={writesEnabled ? "amber" : "slate"}>
-          {writesEnabled ? "Lab writes enabled" : "Read-only"}
-        </Badge>} />
+      <CardHeader title="Code-first version snapshots"
+        description="Versions are defined in C# and archived as read-only metadata. No schema editing or publishing controls."
+        action={<Badge tone="slate"><ShieldCheck size={12} /> Review only</Badge>} />
       <div className="divide-y divide-border">
         {versions.map(item => <div key={item.version}
           className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div>
             <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
               Version {item.version}
-              {item.isDefault && <Badge tone="green"><CheckCircle2 size={12} /> Default</Badge>}
-              <Badge tone={item.lifecycle === "Published" ? "blue" : item.lifecycle === "Deprecated" ? "amber" : "red"}>
-                {item.lifecycle}
-              </Badge>
+              {item.driftDetected && <Badge tone="amber">Same-version schema drift</Badge>}
             </div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
               <span>{item.schema.steps.length} steps</span>
               <span>SHA <code title={item.schemaSha256}>{item.schemaSha256.slice(0, 12)}</code></span>
-              <span>Registered {new Date(item.registeredAt).toLocaleString()}</span>
+              <span>Captured {new Date(item.registeredAt).toLocaleString()}</span>
             </div>
+            {item.driftDetected && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              Registered C# metadata differs from this archived snapshot. Prefer incrementing the workflow version.
+            </p>}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => { setFrom(item.version); setTo(versions[0]?.version ?? item.version); }}>
-              <GitCompareArrows size={13} /> Compare
-            </Button>
-            {writesEnabled && <>
-              {!item.isDefault && item.lifecycle === "Published" && <Button size="sm"
-                disabled={busy !== null} onClick={() => promote(item.version)}>Set default</Button>}
-              <Select aria-label={"Lifecycle for version " + item.version} disabled={busy !== null}
-                value={item.lifecycle} onChange={e =>
-                  changeLifecycle(item.version, e.target.value as DefinitionLifecycle)}>
-                {states.map(state => <option key={state} value={state}
-                  disabled={item.isDefault && state !== "Published"}>{state}</option>)}
-              </Select>
-            </>}
-          </div>
+          <Button size="sm" variant="outline" onClick={() => {
+            setFrom(item.version);
+            setTo(versions.find(version => version.version !== item.version)?.version ?? item.version);
+          }}>
+            <GitCompareArrows size={13} /> Compare
+          </Button>
         </div>)}
       </div>
     </Card>
@@ -229,13 +173,6 @@ export function DefinitionDetail({ id }: { id: string }) {
             {versions.map(item => <option key={item.version} value={item.version}>v{item.version}</option>)}
           </Select>
         </label>
-        <div className="flex-1" />
-        {id === "tenant-onboarding-versioned" && toSchema?.lifecycle === "Published" &&
-          <Button size="sm" disabled={busy !== null} onClick={startVersion}>
-            <Play size={13} /> Run v{to}
-          </Button>}
-        {created && <Link href={"/workflows/" + created}
-          className="text-xs font-semibold text-blue-600 hover:underline">View new run</Link>}
       </div>
       {from !== null && to !== null && from === to
         ? <EmptyState title="Select two different versions"
@@ -314,8 +251,8 @@ export function DefinitionDetail({ id }: { id: string }) {
     </Card>}
     <div className="flex gap-2 text-xs leading-5 text-muted-foreground">
       <ShieldCheck size={16} className="shrink-0" />
-      Lifecycle changes govern new sample starts; they never replace executable code or migrate running workflow state.
-      Management writes require an explicit private-lab opt-in.
+      Metadata is for review only. Executable versions, registration and workflow start behavior
+      remain controlled entirely by C# code. Snapshot drift is reported without blocking execution.
     </div>
   </div>;
 }
