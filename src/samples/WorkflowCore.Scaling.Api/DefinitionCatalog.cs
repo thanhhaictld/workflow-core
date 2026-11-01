@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -27,8 +28,8 @@ public sealed record DefinitionStep(
 public sealed record DefinitionOutcome(int TargetStepId, string? Label, string OutcomeType);
 public sealed record DefinitionBinding(int Index, string Kind, string? TargetMember, string? SourceMember);
 public sealed record CatalogVersion(
-    string DefinitionId, int Version, string Lifecycle, bool IsDefault, string SchemaSha256,
-    DateTime RegisteredAt, DateTime PolicyUpdatedAt, DefinitionSchema Schema);
+    string DefinitionId, int Version, string SchemaSha256, DateTime RegisteredAt,
+    DefinitionSchema Schema, bool DriftDetected);
 public sealed record DefinitionChange(string Change, string Path, string? Before, string? After);
 public sealed record DefinitionComparison(
     string DefinitionId, int FromVersion, int ToVersion,
@@ -129,75 +130,58 @@ public static class DefinitionMetadata
 }
 
 /// <summary>
-/// PostgreSQL catalog: schema bytes are immutable, lifecycle policy can change.
-/// Only registered executable definitions are snapshotted; it cannot hot-load
-/// untrusted JSON as C# workflow code.
+/// Passive snapshot catalog for code-first workflow definitions. The runtime
+/// never consults this catalog to select versions or authorize starts.
+/// Snapshots are immutable; same-version drift is reported, not enforced.
 /// </summary>
 public sealed class DefinitionCatalog(string connectionString, ILogger<DefinitionCatalog> logger)
 {
+    private readonly ConcurrentDictionary<(string Id, int Version), byte> _drift = new();
+
     private NpgsqlConnection Connect() => new(connectionString);
 
     public async Task ReconcileAsync(IEnumerable<WorkflowDefinition> definitions, CancellationToken ct)
     {
-        foreach (var group in definitions.GroupBy(definition => definition.Id)
-                     .OrderBy(group => group.Key, StringComparer.Ordinal))
+        foreach (var definition in definitions.OrderBy(def => def.Id, StringComparer.Ordinal)
+                                              .ThenBy(def => def.Version))
         {
-            // Highest version becomes initial default. Later registrations
-            // never silently change an explicitly selected default.
-            foreach (var definition in group.OrderByDescending(definition => definition.Version))
+            var schema = DefinitionMetadata.Snapshot(definition);
+            var json = DefinitionMetadata.Serialize(schema);
+            var hash = DefinitionMetadata.Hash(json);
+            await using var db = Connect();
+            await db.OpenAsync(ct);
+            await using (var insert = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.definition_version
+                    (definition_id, version, schema_format, schema_json, schema_sha256)
+                VALUES (@id, @version, 1, @schema, @sha)
+                ON CONFLICT (definition_id, version) DO NOTHING
+                """, db))
             {
-                var schema = DefinitionMetadata.Snapshot(definition);
-                var json = DefinitionMetadata.Serialize(schema);
-                var hash = DefinitionMetadata.Hash(json);
-                await using var db = Connect();
-                await db.OpenAsync(ct);
-                await using var tx = await db.BeginTransactionAsync(ct);
-                await using (var advisory = new NpgsqlCommand(
-                    "SELECT pg_advisory_xact_lock(hashtext('definition:' || @id))", db, tx))
-                {
-                    advisory.Parameters.AddWithValue("id", definition.Id);
-                    await advisory.ExecuteNonQueryAsync(ct);
-                }
-                await using (var insert = new NpgsqlCommand("""
-                    INSERT INTO wfc_scale.definition_version
-                        (definition_id, version, schema_format, schema_json, schema_sha256)
-                    VALUES (@id, @version, 1, @schema, @sha)
-                    ON CONFLICT (definition_id, version) DO NOTHING
-                    """, db, tx))
-                {
-                    insert.Parameters.AddWithValue("id", definition.Id);
-                    insert.Parameters.AddWithValue("version", definition.Version);
-                    insert.Parameters.Add("schema", NpgsqlDbType.Jsonb).Value = json;
-                    insert.Parameters.AddWithValue("sha", hash);
-                    await insert.ExecuteNonQueryAsync(ct);
-                }
-                await using (var verify = new NpgsqlCommand("""
-                    SELECT schema_sha256 FROM wfc_scale.definition_version
-                    WHERE definition_id = @id AND version = @version
-                    """, db, tx))
-                {
-                    verify.Parameters.AddWithValue("id", definition.Id);
-                    verify.Parameters.AddWithValue("version", definition.Version);
-                    var storedHash = (string?)await verify.ExecuteScalarAsync(ct);
-                    if (storedHash != hash)
-                        throw new InvalidOperationException(
-                            $"Definition {definition.Id} v{definition.Version} changed without version increment. " +
-                            $"Stored SHA {storedHash}; registered SHA {hash}. Publish a new version.");
-                }
-                await using (var defaultVersion = new NpgsqlCommand("""
-                    UPDATE wfc_scale.definition_version
-                    SET is_default = true, policy_updated_at = now()
-                    WHERE definition_id = @id AND version = @version AND lifecycle = 'Published'
-                      AND NOT EXISTS (SELECT 1 FROM wfc_scale.definition_version
-                                      WHERE definition_id = @id AND is_default)
-                    """, db, tx))
-                {
-                    defaultVersion.Parameters.AddWithValue("id", definition.Id);
-                    defaultVersion.Parameters.AddWithValue("version", definition.Version);
-                    await defaultVersion.ExecuteNonQueryAsync(ct);
-                }
-                await tx.CommitAsync(ct);
-                logger.LogInformation("Reconciled definition {DefinitionId} v{Version} SHA {Hash}",
+                insert.Parameters.AddWithValue("id", definition.Id);
+                insert.Parameters.AddWithValue("version", definition.Version);
+                insert.Parameters.Add("schema", NpgsqlDbType.Jsonb).Value = json;
+                insert.Parameters.AddWithValue("sha", hash);
+                await insert.ExecuteNonQueryAsync(ct);
+            }
+            await using var verify = new NpgsqlCommand("""
+                SELECT schema_sha256 FROM wfc_scale.definition_version
+                WHERE definition_id = @id AND version = @version
+                """, db);
+            verify.Parameters.AddWithValue("id", definition.Id);
+            verify.Parameters.AddWithValue("version", definition.Version);
+            var storedHash = (string?)await verify.ExecuteScalarAsync(ct);
+            if (storedHash != hash)
+            {
+                _drift[(definition.Id, definition.Version)] = 1;
+                logger.LogWarning(
+                    "Code-first workflow {DefinitionId} v{Version} differs from its archived metadata snapshot. " +
+                    "Bump the workflow version to preserve reliable comparisons. Snapshot remains unchanged.",
+                    definition.Id, definition.Version);
+            }
+            else
+            {
+                _drift.TryRemove((definition.Id, definition.Version), out _);
+                logger.LogInformation("Captured definition metadata {DefinitionId} v{Version} SHA {Hash}",
                     definition.Id, definition.Version, hash);
             }
         }
@@ -209,8 +193,8 @@ public sealed class DefinitionCatalog(string connectionString, ILogger<Definitio
         await using var db = Connect();
         await db.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand("""
-            SELECT definition_id, version, lifecycle, is_default, schema_sha256,
-                   registered_at, policy_updated_at, schema_json::text
+            SELECT definition_id, version, schema_sha256,
+                   registered_at, schema_json::text
             FROM wfc_scale.definition_version
             WHERE (@id IS NULL OR definition_id = @id)
             ORDER BY definition_id, version DESC
@@ -219,105 +203,19 @@ public sealed class DefinitionCatalog(string connectionString, ILogger<Definitio
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var schema = JsonSerializer.Deserialize<DefinitionSchema>(reader.GetString(7),
-                DefinitionMetadata.JsonOptions) ?? throw new InvalidOperationException("Invalid definition schema");
-            records.Add(new CatalogVersion(reader.GetString(0), reader.GetInt32(1),
-                reader.GetString(2), reader.GetBoolean(3), reader.GetString(4),
-                reader.GetDateTime(5), reader.GetDateTime(6), schema));
+            var id = reader.GetString(0);
+            var version = reader.GetInt32(1);
+            var schema = JsonSerializer.Deserialize<DefinitionSchema>(reader.GetString(4),
+                DefinitionMetadata.JsonOptions) ??
+                throw new InvalidOperationException("Invalid definition metadata snapshot");
+            records.Add(new CatalogVersion(id, version, reader.GetString(2),
+                reader.GetDateTime(3), schema, _drift.ContainsKey((id, version))));
         }
         return records;
     }
 
     public async Task<CatalogVersion?> GetAsync(string id, int version, CancellationToken ct) =>
         (await ListAsync(id, ct)).FirstOrDefault(item => item.Version == version);
-
-    public async Task<int?> ResolveStartVersionAsync(string id, int? requestedVersion, CancellationToken ct)
-    {
-        await using var db = Connect();
-        await db.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand("""
-            SELECT version FROM wfc_scale.definition_version
-            WHERE definition_id = @id AND lifecycle = 'Published'
-              AND ((@version IS NULL AND is_default) OR version = @version)
-            """, db);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.Add("version", NpgsqlDbType.Integer).Value =
-            (object?)requestedVersion ?? DBNull.Value;
-        var found = await cmd.ExecuteScalarAsync(ct);
-        return found is null ? null : (int)found;
-    }
-
-    public async Task<bool> SetDefaultAsync(string id, int version, CancellationToken ct)
-    {
-        await using var db = Connect();
-        await db.OpenAsync(ct);
-        await using var tx = await db.BeginTransactionAsync(ct);
-        await LockAsync(db, tx, id, ct);
-        await using var cmd = new NpgsqlCommand("""
-            SELECT 1 FROM wfc_scale.definition_version
-            WHERE definition_id = @id AND version = @version AND lifecycle = 'Published'
-            """, db, tx);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.AddWithValue("version", version);
-        if (await cmd.ExecuteScalarAsync(ct) is null) return false;
-
-        // Clear the old partial-unique-index entry before setting the new
-        // default. A single multi-row UPDATE can violate immediate uniqueness.
-        await using (var clear = new NpgsqlCommand("""
-            UPDATE wfc_scale.definition_version
-            SET is_default = false, policy_updated_at = now()
-            WHERE definition_id = @id AND is_default
-            """, db, tx))
-        {
-            clear.Parameters.AddWithValue("id", id);
-            await clear.ExecuteNonQueryAsync(ct);
-        }
-        await using (var set = new NpgsqlCommand("""
-            UPDATE wfc_scale.definition_version
-            SET is_default = true, policy_updated_at = now()
-            WHERE definition_id = @id AND version = @version
-            """, db, tx))
-        {
-            set.Parameters.AddWithValue("id", id);
-            set.Parameters.AddWithValue("version", version);
-            await set.ExecuteNonQueryAsync(ct);
-        }
-        await tx.CommitAsync(ct);
-        return true;
-    }
-
-    public async Task<bool> SetLifecycleAsync(
-        string id, int version, string lifecycle, CancellationToken ct)
-    {
-        if (lifecycle is not ("Published" or "Deprecated" or "Disabled"))
-            throw new ArgumentOutOfRangeException(nameof(lifecycle));
-        await using var db = Connect();
-        await db.OpenAsync(ct);
-        await using var tx = await db.BeginTransactionAsync(ct);
-        await LockAsync(db, tx, id, ct);
-        await using var cmd = new NpgsqlCommand("""
-            UPDATE wfc_scale.definition_version
-            SET lifecycle = @state, policy_updated_at = now()
-            WHERE definition_id = @id AND version = @version
-              AND (@state = 'Published' OR is_default = false)
-            """, db, tx);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.AddWithValue("version", version);
-        cmd.Parameters.AddWithValue("state", lifecycle);
-        var rows = await cmd.ExecuteNonQueryAsync(ct);
-        if (rows == 0) return false;
-        await tx.CommitAsync(ct);
-        return true;
-    }
-
-    private static async Task LockAsync(
-        NpgsqlConnection db, NpgsqlTransaction tx, string id, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('definition:' || @id))", db, tx);
-        cmd.Parameters.AddWithValue("id", id);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
 
     public async Task<DefinitionComparison?> CompareAsync(
         string id, int fromVersion, int toVersion, CancellationToken ct)
