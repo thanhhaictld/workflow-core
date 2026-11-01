@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using WorkflowCore.Interface;
@@ -65,6 +67,24 @@ public sealed class DistributedWorkflowEngine
         instance.ExecutionPointers.Add(_pointers.BuildGenesisPointer(definition));
         await using var db = Context();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Lock the catalog row until the new workflow is durably committed.
+        // A concurrent deprecation/disable operation cannot race a new start.
+        // Untracked definitions retain the pre-catalog runtime behavior (e.g.
+        // application-owned workflows outside this sample catalog).
+        await using (var policy = new NpgsqlCommand("""
+            SELECT lifecycle FROM wfc_scale.definition_version
+            WHERE definition_id = @id AND version = @version
+            FOR SHARE
+            """, (NpgsqlConnection)db.Database.GetDbConnection(),
+            (NpgsqlTransaction)tx.GetDbTransaction()))
+        {
+            policy.Parameters.AddWithValue("id", definition.Id);
+            policy.Parameters.AddWithValue("version", definition.Version);
+            var lifecycle = (string?)await policy.ExecuteScalarAsync(ct);
+            if (lifecycle is not null && lifecycle != "Published")
+                throw new InvalidOperationException(
+                    $"Workflow definition {definition.Id} v{definition.Version} is {lifecycle} and cannot start.");
+        }
         if (idempotencyKey is not null)
         {
             var fingerprint = Fingerprint(definitionId, definitionVersion?.ToString(),
