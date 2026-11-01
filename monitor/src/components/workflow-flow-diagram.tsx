@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import { GitBranch, Maximize2, Minus, Plus } from "lucide-react";
-import { buildWorkflowFlow, type FlowNode, type FlowNodeKind } from "@/lib/flow-graph";
+import { buildWorkflowFlow, type FlowNode } from "@/lib/flow-graph";
 import type { WorkflowTopology } from "@/lib/trace-layout";
 import type { ExecutionPointer } from "@/lib/types";
 import { Button, cn } from "./ui";
