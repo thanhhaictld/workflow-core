@@ -327,19 +327,33 @@ app.MapGet("/api/monitor/workflows/{id:guid}/topology", async (
     if (instance is null) return Results.NotFound();
     if (string.IsNullOrWhiteSpace(instance.WorkflowDefinitionId))
         return Results.NotFound(new { error = "Definition missing from workflow instance" });
+    // Prefer the immutable persisted snapshot: old trace diagrams keep working
+    // even after the API no longer registers their executable code version.
+    var snapshot = await catalog.GetAsync(instance.WorkflowDefinitionId, instance.Version, ct);
+    if (snapshot is not null)
+    {
+        var metadataSteps = snapshot.Schema.Steps.Select(step => new
+        {
+            id = step.Id, name = step.Name, kind = step.Kind,
+            children = step.Children,
+            nextStepIds = step.Outcomes.Select(outcome => outcome.TargetStepId).Distinct().ToArray()
+        }).ToArray();
+        return Results.Ok(new
+        {
+            definitionId = snapshot.DefinitionId, version = snapshot.Version, steps = metadataSteps
+        });
+    }
+
     var definition = registry.GetDefinition(instance.WorkflowDefinitionId, instance.Version);
     if (definition is null)
-        return Results.NotFound(new { error = "Exact workflow definition version is not registered" });
-
+        return Results.NotFound(new { error = "Definition version is not registered or archived" });
     var steps = definition.Steps.Select(step => new
     {
-        id = step.Id,
-        name = step.Name ?? step.BodyType.Name,
+        id = step.Id, name = step.Name ?? step.BodyType.Name,
         kind = step.BodyType == typeof(Sequence) && step.Children.Count > 1 ? "parallel" : "step",
-        children = step.Children.Distinct().ToArray(),
+        children = (IReadOnlyList<int>)step.Children.ToArray(),
         nextStepIds = step.Outcomes.Select(outcome => outcome.NextStep).Distinct().ToArray()
     }).OrderBy(step => step.id).ToArray();
-
     return Results.Ok(new { definitionId = definition.Id, version = definition.Version, steps });
 });
 
