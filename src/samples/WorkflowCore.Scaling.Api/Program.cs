@@ -42,11 +42,18 @@ var app = builder.Build();
 app.Services.GetRequiredService<IWorkflowHost>().RegisterBenchmarkProvisionDemo();
 app.Services.GetRequiredService<IWorkflowHost>().RegisterTenantOnboardingDemo();
 
-// Fail fast if a registered ID/version changes schema. Existing instances are
-// pinned to their old version; definitions are never updated in place.
+// Archive descriptive metadata from code-first definitions. This is a
+// best-effort review projection, NOT the runtime registry or a deployment gate.
 var catalog = app.Services.GetRequiredService<DefinitionCatalog>();
-await catalog.ReconcileAsync(app.Services.GetRequiredService<IWorkflowRegistry>()
-    .GetAllDefinitions(), CancellationToken.None);
+try
+{
+    await catalog.ReconcileAsync(app.Services.GetRequiredService<IWorkflowRegistry>()
+        .GetAllDefinitions(), CancellationToken.None);
+}
+catch (Exception error)
+{
+    app.Logger.LogWarning(error, "Workflow metadata capture failed; execution remains code-first");
+}
 var managementWritesEnabled = Environment.GetEnvironmentVariable("WFC_ENABLE_MANAGEMENT_WRITES") == "true";
 
 // Demo-only control-plane endpoints for exercising real journal/workflow UI.
@@ -71,12 +78,9 @@ app.MapPost("/api/demo/onboardings", async (
         return Results.BadRequest(new { error = "Parallel demo cannot combine with approval or transient-failure scenarios" });
     var definitionId = request.Parallel ? "tenant-onboarding-parallel"
         : request.RequiresApproval ? "tenant-onboarding-approval" : "tenant-onboarding-auto";
-    // Starts through the sample control plane respect catalog lifecycle and
-    // the published default version (explicit versions must also be Published).
-    var version = await catalog.ResolveStartVersionAsync(definitionId, null, ct);
-    if (version is null) return Results.Conflict(new { error = "No published default version" });
-    var id = await engine.StartAsync(definitionId, state,
-        definitionVersion: version, reference: state.TenantId,
+    // Workflow Core's code registry selects the version; metadata cannot
+    // govern or change which implementation the runtime executes.
+    var id = await engine.StartAsync(definitionId, state, reference: state.TenantId,
         idempotencyKey: http.Request.Headers["Idempotency-Key"].FirstOrDefault(), ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new
     {
@@ -109,19 +113,16 @@ app.MapPost("/api/demo/onboardings/{id:guid}/approve", async (
 });
 
 app.MapPost("/api/workflows", async (
-    StartRequest request, HttpContext http, DefinitionCatalog catalog, DistributedWorkflowEngine engine,
+    StartRequest request, HttpContext http, DistributedWorkflowEngine engine,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.TenantId))
         return Results.BadRequest("tenantId is required");
     var idempotencyKey = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
-    var version = await catalog.ResolveStartVersionAsync("benchmark", null, ct);
-    if (version is null) return Results.Conflict(new { error = "No published benchmark default" });
     var id = await engine.StartAsync("benchmark", new BenchmarkProvisionState
     {
         TenantId = request.TenantId
-    }, definitionVersion: version, reference: request.TenantId,
-       idempotencyKey: idempotencyKey, ct: ct);
+    }, reference: request.TenantId, idempotencyKey: idempotencyKey, ct: ct);
     return Results.Accepted($"/api/workflows/{id}", new { workflowId = id });
 });
 
@@ -196,14 +197,12 @@ app.MapGet("/api/monitor/workflows/{id:guid}", async (
     return detail is null ? Results.NotFound() : Results.Ok(detail);
 });
 
-// Workflow definition management. Read operations are available in the
-// development monitor. Mutation endpoints require explicit opt-in and MUST be
-// protected by real authentication/authorization outside a private workstation.
+// Code-first workflow definitions have read-only metadata review endpoints.
+// No schema mutations, lifecycle flags or default-version overrides exist.
 app.MapGet("/api/definitions", async (
     DefinitionCatalog catalog, CancellationToken ct) =>
     Results.Ok(new
     {
-        writesEnabled = managementWritesEnabled,
         versions = await catalog.ListAsync(null, ct)
     }));
 
@@ -231,44 +230,21 @@ app.MapGet("/api/definitions/{id}/diff", async (
     return diff is null ? Results.NotFound() : Results.Ok(diff);
 });
 
-app.MapPost("/api/definitions/{id}/versions/{version:int}/default", async (
-    string id, int version, DefinitionCatalog catalog, CancellationToken ct) =>
-{
-    if (!managementWritesEnabled)
-        return Results.Problem("Set WFC_ENABLE_MANAGEMENT_WRITES=true in the private demo lab",
-            statusCode: 403);
-    if (version < 1) return Results.BadRequest();
-    var applied = await catalog.SetDefaultAsync(id, version, ct);
-    return applied ? Results.Ok(new { id, version, isDefault = true })
-        : Results.Conflict(new { error = "Version is missing or not Published" });
-});
-
-app.MapPut("/api/definitions/{id}/versions/{version:int}/lifecycle", async (
-    string id, int version, LifecycleRequest request,
-    DefinitionCatalog catalog, CancellationToken ct) =>
-{
-    if (!managementWritesEnabled)
-        return Results.Problem("Management writes disabled", statusCode: 403);
-    if (version < 1 || request.Lifecycle is not ("Published" or "Deprecated" or "Disabled"))
-        return Results.BadRequest(new { error = "Allowed: Published, Deprecated, Disabled" });
-    var applied = await catalog.SetLifecycleAsync(id, version, request.Lifecycle, ct);
-    return applied ? Results.Ok(new { id, version, lifecycle = request.Lifecycle })
-        : Results.Conflict(new { error = "Version missing, or default must be reassigned before retirement" });
-});
-
 // Sample start supports the two code-defined versioned onboarding schemas.
 // Arbitrary user-supplied schema JSON is deliberately not executable.
-app.MapPost("/api/definitions/tenant-onboarding-versioned/start", async (
+app.MapPost("/api/demo/versioned-onboardings", async (
     ManagedOnboardingStart request, HttpContext http,
-    DefinitionCatalog catalog, DistributedWorkflowEngine engine, CancellationToken ct) =>
+    IWorkflowRegistry registry, DistributedWorkflowEngine engine, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.TenantId) || request.TenantId.Length > 100 ||
         string.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Length > 120)
         return Results.BadRequest(new { error = "tenantId/organizationName are required (max 100/120)" });
     if (request.Version is < 1) return Results.BadRequest(new { error = "Invalid version" });
-    var version = await catalog.ResolveStartVersionAsync("tenant-onboarding-versioned", request.Version, ct);
-    if (version is null)
-        return Results.Conflict(new { error = "Requested/default version must be Published" });
+    // The actual executable C# definition is selected by Workflow Core.
+    var definition = registry.GetDefinition("tenant-onboarding-versioned", request.Version);
+    if (definition is null)
+        return Results.NotFound(new { error = "Executable workflow version is not registered" });
+    var version = definition.Version;
     var data = new TenantOnboardingState
     {
         TenantId = request.TenantId.Trim(), OrganizationName = request.OrganizationName.Trim()
@@ -376,6 +352,5 @@ public sealed record DemoOnboardingRequest(
 public sealed record StartRequest(string TenantId);
 public sealed record PublishRequest(string Name, string Key, string? Value);
 
-public sealed record LifecycleRequest(string Lifecycle);
 public sealed record ManagedOnboardingStart(string TenantId, string OrganizationName, int? Version = null);
 public sealed record ManagedStatusRequest(string Action);
