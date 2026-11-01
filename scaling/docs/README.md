@@ -51,3 +51,5 @@ crash consistency under all failure points.
 
 All guaranteed/implemented statements in this documentation refer to the
 **current branch tree**, not just the historical commit messages.
+
+- [Workflow definition version management](definition-version-management.md) — immutable metadata snapshots, version diff, lifecycle and admin controls.
