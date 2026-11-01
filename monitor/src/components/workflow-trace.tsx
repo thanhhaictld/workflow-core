@@ -8,6 +8,7 @@ import {
   ListTree, LoaderCircle, RefreshCw, Search, Timer, Workflow, XCircle
 } from "lucide-react";
 import { getJson } from "@/lib/api";
+import { WorkflowFlowDiagram } from "./workflow-flow-diagram";
 import { buildTraceLayout, visibleTraceRows, type WorkflowTopology, type TraceLayoutRow } from "@/lib/trace-layout";
 import { detailsObject, displayEvent, durationMs, formatDate, formatDuration, formatTime, shortId } from "@/lib/format";
 import type {
@@ -432,6 +433,7 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
   const [history, setHistory] = useState<ExecutionHistoryRecord[]>([]);
   const [tab, setTab] = useState<Tab>("trace");
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
+  const [flowExpanded, setFlowExpanded] = useState(true);
   const [refreshSeq, setRefreshSeq] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -512,6 +514,11 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
 
   const attempts = useMemo(() => buildAttempts(history, detail?.pointers ?? []), [history, detail]);
   const selected = attempts.find(item => item.id === selectedAttemptId) ?? attempts[0];
+  function selectFlowStep(stepId: number) {
+    const candidates = attempts.filter(attempt => attempt.stepId === stepId);
+    const mostRecent = candidates.at(-1);
+    if (mostRecent) setSelectedAttemptId(mostRecent.id);
+  }
   const unresolved = attempts.filter(item => item.state === "Uncertain").length;
   const retryAttempts = attempts.filter(item => item.retryCount > 0).length;
   const workflow = detail?.workflow;
@@ -584,7 +591,22 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
         <span className="pb-2 text-xs text-muted-foreground">{history.length} journal events loaded</span>
       </div>
 
-      {tab === "trace" && <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_350px]">
+      {tab === "trace" && <div className="space-y-5">
+        {topology && <Card className="overflow-hidden">
+          <CardHeader title="Workflow flow diagram"
+            description="Definition-based connections with live pointer status. Click an executed step to inspect its latest attempt. Join is a logical synchronization marker."
+            action={<Button size="sm" variant="outline"
+              aria-expanded={flowExpanded}
+              onClick={() => setFlowExpanded(open => !open)}>
+              <ChevronDown size={14} className={cn("transition-transform", !flowExpanded && "-rotate-90")} />
+              {flowExpanded ? "Hide diagram" : "Show diagram"}
+            </Button>} />
+          {flowExpanded && <WorkflowFlowDiagram
+            topology={topology} pointers={detail.pointers} attempts={attempts}
+            selectedStepId={selected?.stepId ?? null}
+            onSelectStep={selectFlowStep} />}
+        </Card>}
+        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="min-w-0 space-y-5">
           <Card className="overflow-hidden">
             <CardHeader title="Execution waterfall" description="Definition-derived fork/branch/join hierarchy; durations and statuses come from persisted attempts. Logical parallel lanes are not necessarily separate workers." action={<Badge tone="blue">{attempts.length} spans</Badge>} />
@@ -615,6 +637,7 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
           <CardHeader title="Span inspector" description="Attempt details and correlated journal records" />
           <Inspector selected={selected} workflowId={workflowId} />
         </Card>
+        </div>
       </div>}
 
       {tab === "history" && <HistoryView history={history} />}
