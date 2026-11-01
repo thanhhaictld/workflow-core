@@ -76,3 +76,17 @@ export function buildTraceLayout(topology: WorkflowTopology): TraceLayoutRow[] {
   }
   return rows;
 }
+
+
+/**
+ * A collapsed fork must never hide its own toggle row: its group ID is
+ * intentionally NOT among its own ancestors. Only rows beneath the fork
+ * contain that ID. The join marker and steps after it also stay visible.
+ * Keeping this logic shared with regression tests prevents a fork from
+ * disappearing and becoming impossible to reopen.
+ */
+export function visibleTraceRows(
+  rows: readonly TraceLayoutRow[], collapsedGroupIds: ReadonlySet<number>
+): TraceLayoutRow[] {
+  return rows.filter(row => !row.ancestors.some(id => collapsedGroupIds.has(id)));
+}
