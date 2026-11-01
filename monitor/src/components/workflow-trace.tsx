@@ -210,7 +210,7 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
   // Only descendants are hidden, never the fork control or parent join.
   // The same predicate is exercised by the layout regression tests.
   const visibleRows = visibleTraceRows(layout, new Set(collapsed)).map(renderTopologyRow);
-  const forkIds = layout.filter(row => row.kind === "fork").map(row => row.stepId);
+  const forkIds = layout.flatMap(row => row.kind === "fork" ? [row.stepId] : []);
 
   // For dynamic paths without a registered definition, retain the accurate
   // chronological attempt stream rather than inventing parent relationships.
