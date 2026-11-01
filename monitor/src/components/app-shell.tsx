@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, BookOpen, ChevronRight, CircleHelp, GitBranch, ListTree, Menu, Moon, Sun, X } from "lucide-react";
+import { Activity, BookOpen, ChevronRight, CircleHelp, GitBranch, Layers3, ListTree, Menu, Moon, Sun, X } from "lucide-react";
 import { Button, cn } from "./ui";
 
 const documentation = "https://github.com/thanhhaictld/workflow-core/blob/feat/workflow-monitor-dashboard/scaling/docs/execution-history.md";
@@ -11,6 +11,7 @@ const documentation = "https://github.com/thanhhaictld/workflow-core/blob/feat/w
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isDetail = /^\/workflows\/[^/]+/.test(pathname);
+  const isDefinitions = pathname.startsWith("/definitions");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dark, setDark] = useState(false);
 
@@ -54,6 +55,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             pathname.startsWith("/workflows") ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
           <Activity size={17} /><span>Workflow runs</span><ChevronRight size={15} className="ml-auto opacity-50" />
         </Link>
+        <Link href="/definitions" onClick={() => setSidebarOpen(false)}
+          className={cn("mt-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+            isDefinitions ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
+          <Layers3 size={17} /><span>Workflow definitions</span><ChevronRight size={15} className="ml-auto opacity-50" />
+        </Link>
         <div className="mt-8 px-3 pb-3 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Resources</div>
         <a href={documentation} target="_blank" rel="noreferrer"
           className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted">
@@ -63,7 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="m-3 rounded-xl border border-border bg-card p-3">
         <div className="flex items-center gap-2 text-xs font-semibold"><ListTree size={15} /> PostgreSQL journal</div>
         <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
-          Read-only workflow inspection; development-only sample onboarding controls.
+          Workflow versions, schema diffs and private-lab management; production requires RBAC.
         </p>
       </div>
       <div className="border-t border-sidebar-border px-5 py-4 text-xs text-muted-foreground">Distributed runtime · experimental</div>
@@ -78,7 +84,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex min-w-0 items-center gap-2 truncate text-sm">
             <span className="hidden text-muted-foreground sm:inline">Monitor</span>
             <ChevronRight size={14} className="hidden text-muted-foreground sm:inline" />
-            <span className="font-medium">{isDetail ? "Execution detail" : "Workflow runs"}</span>
+            <span className="font-medium">{isDefinitions ? "Definition management" : isDetail ? "Execution detail" : "Workflow runs"}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
