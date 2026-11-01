@@ -89,25 +89,27 @@ Open **http://localhost:3000/workflows**. Set `WORKFLOW_API_URL` in
 `/backend/*` to the .NET API's `/api/*`. It does not require a CORS policy
 during local development.
 
-## Definition and version management
+## Code-first definition metadata review
 
-The monitor also has **Workflow definitions** in the left navigation, at
-`/definitions`. Definitions are code-registered and snapshotted in
-PostgreSQL after applying `scaling/sql/006_definition_versions.sql`.
-Open a workflow definition to compare its versions using an
-**Added / Removed / Modified metadata diff**, inspect each normalized schema,
-and review its default version and lifecycle.
+The **Workflow definitions** page at `/definitions` displays snapshots
+derived from the registered C# fluent workflow definitions. Choose a definition
+to compare any two archived versions in an **Added / Removed / Modified**
+metadata diff, review individual step schemas, and copy normalized JSON.
 
-An included `tenant-onboarding-versioned` sample registers two versions:
-v2 adds an access-configuration step. A **Run v1/v2** action can create
-version-pinned demo instances for comparison.
+The catalog is **read-only for operators**. It never publishes, edits,
+deprecates, deploys or selects executable versions. Workflow Core's code-first
+registry remains the sole authority for execution. Same-version metadata drift
+is surfaced as a warning, without blocking workflow starts.
 
-Read-only by default. To try lifecycle management and suspend/resume/terminate
-in the private demo lab, start the API with
-`WFC_ENABLE_MANAGEMENT_WRITES=true`. This is **not authentication** and must
-never be used as a public control-plane authorization mechanism.
+The `tenant-onboarding-versioned` C# sample defines v1 and v2; the second
+adds `ConfigureAccessStep`. Use it to review a meaningful structural diff.
+A separate demo API can start either C# version for runtime tests.
 
-See the [definition version management design and runbook](
+Only the separate **instance-level** suspend/resume/terminate controls are
+gated by `WFC_ENABLE_MANAGEMENT_WRITES=true` in the private lab. This
+environment flag is not production authentication or authorization.
+
+See [code-first metadata review design](
 ../scaling/docs/definition-version-management.md).
 
 ## Onboarding sample lab (real workflow history)
