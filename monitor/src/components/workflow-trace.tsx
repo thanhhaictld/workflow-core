@@ -198,7 +198,7 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
         <span className="ml-auto text-[11px] font-normal text-muted-foreground">
           {collapsed.includes(row.stepId) ? "Expand branches" : "Collapse branches"}
         </span>
-      </button>
+      </button>}
       {spans.length
         ? spans.map(attempt => renderAttempt(attempt, isFork ? row.depth + 1 : row.depth,
             isFork ? "Parallel container" : row.label))
