@@ -35,19 +35,15 @@ export interface DefinitionSchema {
   defaultRetryInterval: string | null;
   steps: DefinitionStep[];
 }
-export type DefinitionLifecycle = "Published" | "Deprecated" | "Disabled";
 export interface CatalogVersion {
   definitionId: string;
   version: number;
-  lifecycle: DefinitionLifecycle;
-  isDefault: boolean;
   schemaSha256: string;
   registeredAt: string;
-  policyUpdatedAt: string;
   schema: DefinitionSchema;
+  driftDetected: boolean;
 }
 export interface CatalogIndex {
-  writesEnabled: boolean;
   versions: CatalogVersion[];
 }
 export interface DefinitionChange {
