@@ -8,7 +8,7 @@ import {
   ListTree, LoaderCircle, RefreshCw, Search, Timer, Workflow, XCircle
 } from "lucide-react";
 import { getJson } from "@/lib/api";
-import { buildTraceLayout, type WorkflowTopology, type TraceLayoutRow } from "@/lib/trace-layout";
+import { buildTraceLayout, visibleTraceRows, type WorkflowTopology, type TraceLayoutRow } from "@/lib/trace-layout";
 import { detailsObject, displayEvent, durationMs, formatDate, formatDuration, formatTime, shortId } from "@/lib/format";
 import type {
   ExecutionHistoryRecord, ExecutionPointer, HistoryPage, WorkflowDetail
@@ -164,9 +164,8 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
     </div>;
   }
 
-  function renderTopologyRow(row: TraceLayoutRow, index: number) {
+  function renderTopologyRow(row: TraceLayoutRow) {
     if (row.kind === "branch") {
-      if (collapsed.includes(row.groupId)) return null;
       return <div key={`branch-${row.groupId}-${row.branchIndex}`}
         className="grid grid-cols-[270px_95px_1fr] items-center gap-3 border-b border-border/40 bg-muted/20 px-4 py-2 text-[11px] font-semibold text-muted-foreground">
         <div className="truncate" style={{ paddingLeft: Math.min(row.depth, 7) * 17 }}>
@@ -185,18 +184,21 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
       </div>;
     }
 
-    if (collapsed.some(group => group === row.groupId)) return null;
     const spans = attemptsByStep.get(row.stepId) ?? [];
     const isFork = row.kind === "fork";
-    return <div key={`node-${row.stepId}-${index}`}>
+    return <div key={`node-${row.stepId}`}>
       {isFork && <button type="button"
-        className="flex w-full items-center gap-2 border-b border-border bg-blue-500/5 px-4 py-2 text-left text-xs font-semibold hover:bg-blue-500/10"
+        className="flex w-full items-center gap-2 border-b border-border bg-blue-500/5 px-4 py-2.5 text-left text-xs font-semibold hover:bg-blue-500/10 focus-visible:outline-2 focus-visible:outline-blue-500"
         aria-expanded={!collapsed.includes(row.stepId)}
+        aria-label={`${collapsed.includes(row.stepId) ? "Expand" : "Collapse"} ${row.label}`}
         onClick={() => setCollapsed(current => current.includes(row.stepId) ?
           current.filter(x => x !== row.stepId) : [...current, row.stepId])}>
-        {collapsed.includes(row.stepId) ? <ChevronDown size={15} className="-rotate-90" /> : <ChevronDown size={15} />}
-        <GitBranch size={14} />{row.label}
-      </button>}
+        <ChevronDown size={15} className={cn("shrink-0 transition-transform", collapsed.includes(row.stepId) && "-rotate-90")} aria-hidden="true" />
+        <GitBranch size={14} aria-hidden="true" />{row.label}
+        <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+          {collapsed.includes(row.stepId) ? "Expand branches" : "Collapse branches"}
+        </span>
+      </button>
       {spans.length
         ? spans.map(attempt => renderAttempt(attempt, isFork ? row.depth + 1 : row.depth,
             isFork ? "Parallel container" : row.label))
@@ -204,12 +206,10 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
     </div>;
   }
 
-  // Collapsed groups hide only their branch children; the actual join marker
-  // and subsequent parent-path steps remain visible.
-  const visibleRows = layout.map((row, index) =>
-    row.ancestors.some(groupId => collapsed.includes(groupId))
-      ? null : renderTopologyRow(row, index)
-  );
+  // Only descendants are hidden, never the fork control or parent join.
+  // The same predicate is exercised by the layout regression tests.
+  const visibleRows = visibleTraceRows(layout, new Set(collapsed)).map(renderTopologyRow);
+  const forkIds = layout.filter(row => row.kind === "fork").map(row => row.stepId);
 
   // For dynamic paths without a registered definition, retain the accurate
   // chronological attempt stream rather than inventing parent relationships.
@@ -219,6 +219,23 @@ function TraceWaterfall({ attempts, pointers, topology, selectedId, onSelect }: 
     : attempts;
   return <div className="compact-scrollbar overflow-x-auto">
     <div className="min-w-[825px]">
+      {forkIds.length > 0 && <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+        <span className="text-[11px] text-muted-foreground">
+          {forkIds.length} parallel group{forkIds.length === 1 ? "" : "s"}
+        </span>
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost"
+            disabled={forkIds.every(id => collapsed.includes(id))}
+            onClick={() => setCollapsed(forkIds)}>
+            Collapse all
+          </Button>
+          <Button size="sm" variant="ghost"
+            disabled={collapsed.length === 0}
+            onClick={() => setCollapsed([])}>
+            Expand all
+          </Button>
+        </div>
+      </div>}
       <div className="grid grid-cols-[270px_95px_1fr] gap-3 border-b border-border bg-muted/40 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span>Workflow execution · hierarchy</span><span>Duration</span>
         <span>Relative timeline · {formatDuration(range)}</span>
