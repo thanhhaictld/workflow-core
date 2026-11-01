@@ -280,6 +280,39 @@ app.MapPost("/api/definitions/tenant-onboarding-versioned/start", async (
         new { workflowId, definitionId = "tenant-onboarding-versioned", version });
 });
 
+// Dev-only instance management. The existing runtime's workflow fence owns
+// state changes, and expectedCurrentStatus prevents stale/crossed operations.
+app.MapGet("/api/manage/capabilities", () => Results.Ok(new { writesEnabled = managementWritesEnabled }));
+
+app.MapPost("/api/manage/workflows/{id:guid}/status", async (
+    Guid id, ManagedStatusRequest request, DistributedWorkflowEngine engine,
+    CancellationToken ct) =>
+{
+    if (!managementWritesEnabled)
+        return Results.Problem("Management writes disabled", statusCode: 403);
+
+    await using var db = new PostgresContext(connectionString, "wfc");
+    var current = await db.Set<PersistedWorkflow>().AsNoTracking()
+        .Where(w => w.InstanceId == id).Select(w => (WorkflowStatus?)w.Status)
+        .FirstOrDefaultAsync(ct);
+    if (!current.HasValue) return Results.NotFound();
+
+    var transition = (request.Action, current.Value) switch
+    {
+        ("Suspend", WorkflowStatus.Runnable) => WorkflowStatus.Suspended,
+        ("Resume", WorkflowStatus.Suspended) => WorkflowStatus.Runnable,
+        ("Terminate", WorkflowStatus.Runnable) => WorkflowStatus.Terminated,
+        ("Terminate", WorkflowStatus.Suspended) => WorkflowStatus.Terminated,
+        _ => (WorkflowStatus?)null
+    };
+    if (!transition.HasValue)
+        return Results.Conflict(new { error = $"Cannot {request.Action} a {current.Value} workflow" });
+    var applied = await engine.ChangeStatusAsync(id, transition.Value, ct,
+        expectedCurrentStatus: current.Value);
+    return applied ? Results.Ok(new { workflowId = id, status = transition.Value.ToString() })
+        : Results.Conflict(new { error = "Workflow state changed or is currently leased. Refresh and retry." });
+});
+
 // Definition topology is the source of fork/branch/join indentation. The
 // branch graph is static, but span timestamps and status remain journal-backed.
 // Join() returns the Sequence container: it does not create a separate step.
@@ -331,3 +364,4 @@ public sealed record PublishRequest(string Name, string Key, string? Value);
 
 public sealed record LifecycleRequest(string Lifecycle);
 public sealed record ManagedOnboardingStart(string TenantId, string OrganizationName, int? Version = null);
+public sealed record ManagedStatusRequest(string Action);
