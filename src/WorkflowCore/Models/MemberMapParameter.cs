@@ -20,7 +20,7 @@ namespace WorkflowCore.Models
         {
             get
             {
-                if (_source.Body is not MemberExpression member) return null;
+                if (!(_source.Body is MemberExpression member)) return null;
                 Expression root = member.Expression;
                 while (root is MemberExpression parent) root = parent.Expression;
                 return root is ParameterExpression ? member.Member.Name : null;
