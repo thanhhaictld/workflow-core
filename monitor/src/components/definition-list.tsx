@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock3, GitCompareArrows, GitBranch,
+import { AlertTriangle, GitCompareArrows, GitBranch,
   Layers3, LoaderCircle, RefreshCw, Search, ShieldCheck, Workflow } from "lucide-react";
 import { getJson } from "@/lib/api";
 import type { CatalogIndex, CatalogVersion } from "@/lib/definitions";
@@ -43,7 +43,7 @@ export function DefinitionList() {
   }, [catalog, search]);
 
   const versions = catalog?.versions ?? [];
-  const published = versions.filter(v => v.lifecycle === "Published").length;
+  const drifted = versions.filter(v => v.driftDetected).length;
 
   return <div className="space-y-6">
     <div className="flex flex-wrap items-end justify-between gap-4">
@@ -53,8 +53,8 @@ export function DefinitionList() {
         </div>
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Workflow definitions</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-          Inspect registered schemas, manage release versions and compare immutable workflow metadata.
-          Running instances remain pinned to their original definition versions.
+          Review metadata generated from code-first C# workflows. Compare versioned
+          steps, transitions, branches and retry policies without changing executable definitions.
         </p>
       </div>
       <Button disabled={loading} onClick={() => setRefresh(n => n + 1)}>
@@ -71,18 +71,17 @@ export function DefinitionList() {
         <div className="mt-2 text-2xl font-bold">{new Set(versions.map(v => v.definitionId)).size}</div></Card>
       <Card className="p-4"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Layers3 size={15} />Registered versions</div>
         <div className="mt-2 text-2xl font-bold">{versions.length}</div></Card>
-      <Card className="p-4"><div className="flex items-center gap-2 text-xs text-muted-foreground"><CheckCircle2 size={15} />Published versions</div>
-        <div className="mt-2 text-2xl font-bold">{published}</div></Card>
+      <Card className="p-4"><div className="flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle size={15} />Same-version drift warnings</div>
+        <div className="mt-2 text-2xl font-bold">{drifted}</div></Card>
     </div>
     <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs leading-5 text-muted-foreground">
       <ShieldCheck size={14} className="mr-2 inline-block" />
-      {catalog?.writesEnabled
-        ? "Demo management writes enabled. Protect the API with authentication and authorization before exposing this beyond a private workstation."
-        : "Management changes are read-only. Enable WFC_ENABLE_MANAGEMENT_WRITES=true only in your private demo lab."}
+      Read-only metadata from C# workflow registration. This catalog cannot create,
+      modify, publish, retire or select executable workflow versions.
     </div>
 
     <Card className="overflow-hidden">
-      <CardHeader title="Definition registry" description="Source-controlled code definitions · immutable per-version snapshots · release policy separate from schema" />
+      <CardHeader title="Definition registry" description="Source-controlled code definitions · archived metadata snapshots for review only" />
       <div className="border-b border-border px-5 py-4">
         <div className="relative max-w-md">
           <Search size={16} className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
@@ -93,24 +92,23 @@ export function DefinitionList() {
       <div className="divide-y divide-border">
         {groups.map(group => {
           const latest = group.versions[0];
-          const current = group.versions.find(v => v.isDefault);
           return <Link key={group.id} href={"/definitions/" + encodeURIComponent(group.id)}
             className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 hover:bg-muted/40">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <GitBranch size={16} className="text-blue-500" />
                 <span className="break-all text-sm font-semibold">{group.id}</span>
-                {current ? <Badge tone="green">Default v{current.version}</Badge> : <Badge tone="amber">No default</Badge>}
+                {group.versions.some(v => v.driftDetected) && <Badge tone="amber">Metadata drift</Badge>}
               </div>
               <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
                 <span>{group.versions.length} version{group.versions.length === 1 ? "" : "s"}</span>
                 <span>Latest: v{latest.version}</span>
                 <span>{latest.schema.steps.length} steps (latest)</span>
-                <span>{group.versions.filter(v => v.lifecycle === "Published").length} published</span>
+                <span>Code-first · read only</span>
               </div>
             </div>
             <span className="flex items-center gap-2 text-xs font-semibold text-blue-600">
-              <GitCompareArrows size={15} />Manage versions
+              <GitCompareArrows size={15} />Review changes
             </span>
           </Link>;
         })}
@@ -120,8 +118,8 @@ export function DefinitionList() {
           <LoaderCircle size={15} className="animate-spin" />Loading catalog…
         </div>}
       </div>
-      <div className="flex gap-2 border-t border-border px-5 py-3 text-[11px] text-muted-foreground">
-        <Clock3 size={13} />Lifecycle affects new controlled starts only; never mutates an existing execution.
+      <div className="border-t border-border px-5 py-3 text-[11px] text-muted-foreground">
+        Compare normalized snapshots without executing or editing workflow metadata.
       </div>
     </Card>
   </div>;
