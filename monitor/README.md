@@ -89,6 +89,27 @@ Open **http://localhost:3000/workflows**. Set `WORKFLOW_API_URL` in
 `/backend/*` to the .NET API's `/api/*`. It does not require a CORS policy
 during local development.
 
+## Definition and version management
+
+The monitor also has **Workflow definitions** in the left navigation, at
+`/definitions`. Definitions are code-registered and snapshotted in
+PostgreSQL after applying `scaling/sql/006_definition_versions.sql`.
+Open a workflow definition to compare its versions using an
+**Added / Removed / Modified metadata diff**, inspect each normalized schema,
+and review its default version and lifecycle.
+
+An included `tenant-onboarding-versioned` sample registers two versions:
+v2 adds an access-configuration step. A **Run v1/v2** action can create
+version-pinned demo instances for comparison.
+
+Read-only by default. To try lifecycle management and suspend/resume/terminate
+in the private demo lab, start the API with
+`WFC_ENABLE_MANAGEMENT_WRITES=true`. This is **not authentication** and must
+never be used as a public control-plane authorization mechanism.
+
+See the [definition version management design and runbook](
+../scaling/docs/definition-version-management.md).
+
 ## Onboarding sample lab (real workflow history)
 
 Use **PowerShell 7** (Windows/macOS/Linux) from the repository root:
