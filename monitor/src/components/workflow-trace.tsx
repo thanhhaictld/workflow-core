@@ -442,6 +442,8 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [approvalSent, setApprovalSent] = useState(false);
+  const [managementEnabled, setManagementEnabled] = useState(false);
+  const [managing, setManaging] = useState(false);
 
   async function approveOnboarding() {
     setApproving(true); setError(null);
@@ -459,6 +461,32 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
     } finally {
       setApproving(false);
     }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getJson<{ writesEnabled: boolean }>("/manage/capabilities", controller.signal)
+      .then(value => setManagementEnabled(value.writesEnabled))
+      .catch(() => setManagementEnabled(false));
+    return () => controller.abort();
+  }, []);
+
+  async function manage(action: "Suspend" | "Resume" | "Terminate") {
+    if (!window.confirm(action + " this workflow execution? This is a persisted operation.")) return;
+    setManaging(true); setError(null);
+    try {
+      const response = await fetch("/backend/manage/workflows/" + encodeURIComponent(workflowId) + "/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ action })
+      });
+      const result: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result && typeof result === "object" && "error" in result
+        ? String((result as { error: unknown }).error) : "Management request failed: HTTP " + response.status);
+      setRefreshSeq(n => n + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to update workflow status");
+    } finally { setManaging(false); }
   }
 
   useEffect(() => {
@@ -548,6 +576,22 @@ export function WorkflowTrace({ workflowId }: { workflowId: string }) {
             {approving ? <LoaderCircle size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
             {approvalSent ? "Approval sent" : "Approve sample onboarding"}
           </Button>}
+        {managementEnabled && workflow?.status === "Runnable" && <>
+          <Button size="sm" disabled={managing} onClick={() => manage("Suspend")}>
+            {managing && <LoaderCircle size={13} className="animate-spin" />} Suspend
+          </Button>
+          <Button size="sm" variant="ghost" disabled={managing} onClick={() => manage("Terminate")}>
+            Terminate
+          </Button>
+        </>}
+        {managementEnabled && workflow?.status === "Suspended" && <>
+          <Button size="sm" variant="primary" disabled={managing} onClick={() => manage("Resume")}>
+            {managing && <LoaderCircle size={13} className="animate-spin" />} Resume
+          </Button>
+          <Button size="sm" variant="ghost" disabled={managing} onClick={() => manage("Terminate")}>
+            Terminate
+          </Button>
+        </>}
         <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
           <input type="checkbox" className="accent-blue-600" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />Auto-refresh
         </label>
