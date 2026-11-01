@@ -261,14 +261,27 @@ public sealed class DefinitionCatalog(string connectionString, ILogger<Definitio
         cmd.Parameters.AddWithValue("version", version);
         if (await cmd.ExecuteScalarAsync(ct) is null) return false;
 
-        await using var update = new NpgsqlCommand("""
+        // Clear the old partial-unique-index entry before setting the new
+        // default. A single multi-row UPDATE can violate immediate uniqueness.
+        await using (var clear = new NpgsqlCommand("""
             UPDATE wfc_scale.definition_version
-            SET is_default = (version = @version), policy_updated_at = now()
-            WHERE definition_id = @id
-            """, db, tx);
-        update.Parameters.AddWithValue("id", id);
-        update.Parameters.AddWithValue("version", version);
-        await update.ExecuteNonQueryAsync(ct);
+            SET is_default = false, policy_updated_at = now()
+            WHERE definition_id = @id AND is_default
+            """, db, tx))
+        {
+            clear.Parameters.AddWithValue("id", id);
+            await clear.ExecuteNonQueryAsync(ct);
+        }
+        await using (var set = new NpgsqlCommand("""
+            UPDATE wfc_scale.definition_version
+            SET is_default = true, policy_updated_at = now()
+            WHERE definition_id = @id AND version = @version
+            """, db, tx))
+        {
+            set.Parameters.AddWithValue("id", id);
+            set.Parameters.AddWithValue("version", version);
+            await set.ExecuteNonQueryAsync(ct);
+        }
         await tx.CommitAsync(ct);
         return true;
     }
