@@ -1,135 +1,127 @@
-# Workflow definition version management
+# Code-first workflow version metadata review
 
-## Scope
+## Decision
 
-This branch adds code-first workflow definition management, immutable schema
-snapshots, version comparison, publication policy and fenced instance actions.
+**C# fluent definitions remain the only executable source of truth.** This
+feature adds an observational metadata snapshot and structural diff, not a
+workflow-schema editor, registration system, lifecycle manager or deployment
+controller. The API and worker register Workflow Core definitions as before,
+and the runtime selects the executable version through IWorkflowRegistry.
 
-The React monitor provides:
+The version-review UI is at `/definitions` and `/definitions/{id}`.
+It provides a searchable catalog of captured versions, normalized schema JSON,
+and side-by-side Added / Removed / Modified metadata changes.
 
-- **/definitions** — searchable catalog, versions, default and lifecycle
-- **/definitions/{id}** — compare v1 and v2 metadata, inspect schema,
-  select default version, publish/deprecate/disable (lab opt-in only)
-- **/workflows/{instance}** — suspend, resume and terminate using runtime gates
-
-The sample named tenant-onboarding-versioned contains a v1 definition and a
-v2 definition that inserts ConfigureAccessStep before ActivateTenantStep.
-
-## Architecture
+## Data flow
 
 ~~~mermaid
 flowchart TD
-  Code["Workflow Core fluent definitions"] --> Registry["IWorkflowRegistry"]
-  Registry --> Normalize["Safe schema normalization"]
-  Normalize --> SHA["Normalized JSON + SHA256"]
-  SHA --> DB[("Postgres definition_version: immutable schema and mutable lifecycle")]
-  DB --> API["Version catalog + diff REST API"]
-  API --> UI["React management pages: versions + side-by-side diff"]
-  DB --> Start["Governed new workflow starts"]
-  Start --> Worker["DistributedWorkflowEngine, pinned version"]
-  Worker --> Journal[("Postgres work queue and journal")]
+  CS["C# IWorkflow<TData>.Build()"] --> Registry["IWorkflowRegistry
+Executable definitions"]
+  Registry --> Runtime["DistributedWorkflowEngine
+Workflow version is pinned at start"]
+  Registry -. "Best-effort snapshot extraction" .-> Snapshot["Normalized metadata + SHA256"]
+  Snapshot --> Postgres[("PostgreSQL definition_version
+read-only archive")]
+  Postgres --> Diff["GET /api/definitions/{id}/diff"]
+  Diff --> UI["Metadata comparison UI"]
 ~~~
 
-The API registers all executable definitions, then reconciles their schemas
-before HTTP requests are served. A new (definition ID, version) pair creates
-an immutable snapshot. A same-version schema hash mismatch **fails API startup**.
-The worker continues to register real C# workflow definitions; it does not
-execute JSON, delegates or assemblies from the database.
+**No edge from the metadata store to the runtime.** If capturing metadata
+fails, the API logs the problem and continues to use the code-first registry.
+The metadata archive is neither read nor locked when creating a workflow.
 
-## Normalized schema format 1
+## Metadata format
 
-The metadata stores:
+`DefinitionSchema` contains the ID, version, description, data type, default
+error policy, and an ordered collection of step metadata. Steps include their
+numeric and optional external IDs, name, body type, kind, child roots,
+outcome targets/labels, input-output binding descriptions, retry and error
+settings, compensation ID, and cancellation flag.
 
-| Level | Captured fields |
-| --- | --- |
-| Definition | ID, version, description, data type, default error behavior and retry |
-| Step | numeric ID, external ID, name, body type, kind (including parallel), child roots |
-| Transitions | target ID, optional label, outcome implementation type |
-| Inputs / outputs | ordinal, binding kind and safe source/target member names |
-| Step policies | error behavior, retry interval, compensation ID, cancellation presence |
+Expression values, closures, executable delegates, tenant data and secrets
+are intentionally not serialized. Source and target member names are used
+only when they can be derived safely from simple property-member mappings.
 
-It **never serializes executable lambda expressions, captured constant values,
-tenant state or credentials**. Source member names are captured only for direct
-parameter member access. This metadata cannot guarantee that two C# method
-bodies are semantically equivalent.
+The resulting schema is **descriptive**, not executable. It cannot recreate
+the complete C# workflow, prove behavioral compatibility, or compare code
+inside step-body methods.
 
-Parallel container joins are modeled as their Sequence parent plus children
-and outcomes. The Join fluent method is not a separately executed runtime step.
+## Immutable snapshots and drift
 
-## Structural version diff
+The catalog inserts one snapshot per `(definition_id, version)`. Once archived,
+the snapshot and SHA256 are never overwritten. Re-registering a changed
+schema with the *same version* logs a warning and marks that snapshot
+`driftDetected` in the review API. The runtime is **not blocked**. Increment
+the C# workflow version to get a new comparison baseline.
 
-The diff endpoint compares two persisted immutable schemas, returning a list of
-Added, Removed and Modified field changes with paths and before/after JSON.
-Step identity uses external ID when available, otherwise numeric step ID.
-Insertion that shifts numeric IDs can therefore produce several related edits.
-Use stable external step IDs for clean long-term diffs.
+A previously archived schema remains accessible for review even if its old
+executable version is no longer registered in the API process. **Running
+instances still require their original executable definition**; an archived
+JSON snapshot cannot execute a workflow.
 
-The UI supports filtering by change type and inspection/copying of normalized
-metadata. Schema diff does not migrate running workflows or evaluate C# bodies.
+The archive is populated from the registered definitions by an API startup
+reconciliation. Only this snapshot capture writes to `definition_version`;
+the UI and its endpoints are read-only.
 
-## Lifecycle / safety
+## Comparison algorithm
 
-| Lifecycle | New governed starts | Existing instances | Default allowed |
-| --- | --- | --- | --- |
-| Published | Yes | unchanged | Yes |
-| Deprecated | No | unchanged | No |
-| Disabled | No | unchanged | No |
+Two archived versions are flattened into normalized metadata paths. Changes
+are classified as `Added`, `Removed`, or `Modified`, with before/after
+JSON values. Steps match by stable `ExternalId` if set, otherwise numeric
+step ID. Inserting steps can shift IDs and create multiple related diff rows.
+For long-lived workflows, use stable external step IDs where possible.
 
-One default per definition ID is enforced by a partial unique index. Promotion
-is transactional. A default version cannot be retired until another published
-version is made default.
+For `Parallel().Do(...).Join()`, a Sequence step contains branch roots and
+continuation edges. `Join()` has no separate executable step or span.
 
-The sample start API selects the published catalog default and passes the exact
-version to the runtime. The distributed engine also checks catalog policy with
-a PostgreSQL row lock inside new-start transactions, so retirement cannot race
-a start already being committed. Untracked definitions without catalog rows
-retain their original registration behavior; integrate registry reconciliation
-for every managed definition.
+## API and UI
 
-Instance status control supports Runnable to Suspended, Suspended to Runnable,
-and Runnable/Suspended to Terminated. The runtime checks the expected current
-status **under the workflow fence**. It does not undo already performed external
-effects. Long-running workflows remain pinned to their original C# version.
-
-All write endpoints are disabled unless the API process sets
-WFC_ENABLE_MANAGEMENT_WRITES=true. This is only a **development switch**:
-the sample API has no OIDC, RBAC, tenant authorization, or full administrative
-audit records. Never publicly expose these operations until those controls
-are implemented.
-
-## API
-
-| Method | Route | Description |
+| Method | Endpoint | Purpose |
 | --- | --- | --- |
-| GET | /api/definitions | All snapshots and writes-enabled capability |
-| GET | /api/definitions/{id}/versions | Version history |
-| GET | /api/definitions/{id}/versions/{v} | Immutable schema |
-| GET | /api/definitions/{id}/diff?from=1&to=2 | Structural schema diff |
-| POST | /api/definitions/{id}/versions/{v}/default | Change published default |
-| PUT | /api/definitions/{id}/versions/{v}/lifecycle | Change lifecycle |
-| POST | /api/definitions/tenant-onboarding-versioned/start | Start typed demo v1/v2 |
-| GET | /api/manage/capabilities | Management-write capability |
-| POST | /api/manage/workflows/{uuid}/status | Suspend, Resume, Terminate |
+| GET | `/api/definitions` | Archived definition metadata catalog |
+| GET | `/api/definitions/{id}/versions` | Archived versions |
+| GET | `/api/definitions/{id}/versions/{version}` | One metadata snapshot |
+| GET | `/api/definitions/{id}/diff?from=1&to=2` | Structural diff |
 
-## Runbook
+There are **no definition write endpoints**: no publish, default promotion,
+deprecate/disable or JSON schema editing operations.
 
-Bootstrap applies scaling/sql/006_definition_versions.sql after SQL 005.
+The sample-only endpoint `POST /api/demo/versioned-onboardings` starts a real
+code-defined v1 or v2 sample by passing the requested version to Workflow Core.
+This is an executable C# demo, **not** an action on the metadata catalog.
 
-    pwsh ./scripts/dev.ps1 bootstrap
-    $env:WFC_ENABLE_MANAGEMENT_WRITES = 'true' # private dev lab only
-    pwsh ./scripts/dev.ps1 up
+Instance-level suspend/resume/terminate commands remain available separately
+in the Trace UI only when `WFC_ENABLE_MANAGEMENT_WRITES=true`. That flag must
+never be regarded as RBAC; production requires authentication, authorization
+and an audited operations API.
 
-From a second terminal:
+## Example and acceptance tests
 
-    pwsh ./scripts/test-onboarding.ps1
-    pwsh ./scripts/test-definition-management.ps1
+The sample `tenant-onboarding-versioned` defines two C# workflows: v1
+performs Validate → Identity → Activate → Welcome; v2 inserts
+`ConfigureAccessStep` between Identity and Activate. Both are independently
+registered executable implementations. The UI compares their extracted schema.
 
-Open http://127.0.0.1:3002/definitions (or your configured UI port). CI
-runs against real PostgreSQL, a dedicated worker, and the sample API.
+From the repo root:
 
-## Future production work
+~~~powershell
+pwsh ./scripts/dev.ps1 bootstrap
+pwsh ./scripts/dev.ps1 up
+~~~
 
-Add OIDC and tenant-scoped RBAC, audited administrative change history,
-compatibility checks before promotion, long-running workflow data migrations,
-catalog reconciliation in all hosts, and versioned operational approvals.
-Do not treat the schema hash as proof of step implementation compatibility.
+Visit `http://127.0.0.1:3002/definitions` (or the chosen UI port), select
+the versioned onboarding definition, and choose v1 vs v2.
+
+For the combined integration test, enable private-lab instance controls:
+
+~~~powershell
+$env:WFC_ENABLE_MANAGEMENT_WRITES = 'true'
+pwsh ./scripts/dev.ps1 up
+# Run separately once API and worker have started:
+pwsh ./scripts/test-definition-management.ps1
+~~~
+
+The acceptance test validates immutable archived hashes, C# version-pinned
+starts, metadata-only API access, the v1→v2 diff, and independent instance
+status controls.
