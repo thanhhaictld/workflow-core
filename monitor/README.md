@@ -9,7 +9,7 @@ Read-only monitoring UI for the distributed PostgreSQL Workflow Core runtime.
   unrelated CRM/mail/calendar pages are **not** copied.
 - **Workflow runs:** status cards, search by instance GUID/definition/reference,
   status filter, server-side pagination, manual/15-second refresh.
-- **Execution detail:** current workflow status, elapsed time, correlation IDs,
+- **Execution detail:** definition-based interactive workflow flow diagram, current workflow status, elapsed time, correlation IDs,
   retries/errors, a per-attempt waterfall similar to Temporal's trace view,
   step-span inspector, complete paginated journal, execution pointers, and
   leased/dead-letter work items.
@@ -146,6 +146,30 @@ approve buttons are not a general-purpose administrative API. The sample API
 has no authentication; never expose it to the public internet. Use unique
 tenant IDs: approvals are keyed by tenant ID and would resume multiple waiting
 samples if that key is shared.
+
+### Interactive workflow flow diagram
+
+The Trace tab now renders a **top-down workflow flow diagram** above the
+existing execution waterfall whenever the exact-version definition topology
+is registered. The graph shows ordinary steps, a three-lane fork for
+`Parallel().Do(...)`, a logical `Join()` marker, and the post-join
+continuation. Nested parallel blocks are supported.
+
+- Edges come from `Sequence.Children` and each step's declared
+  `Outcomes`; they are **definition paths**, not observed transitions.
+- Node color/status comes from the persisted execution pointers, while
+  attempt counts come from recorded attempts. Clicking an executed step
+  selects its latest attempt in the existing span inspector.
+- **Show/Hide diagram**, keyboard-accessible step selection, and
+  **zoom in/out/reset** keep the view usable for large workflows.
+- A Join marker never creates a fabricated journal span or duration.
+  Unconnected/alternative definition paths are drawn separately without
+  made-up transitions. Complex conditionals and loops are not yet represented
+  as distinct decision/loop nodes; those need dedicated graph semantics.
+
+The graph does not imply branch-level physical parallelism or replace
+OpenTelemetry request traces. The time-axis waterfall below it remains the
+source of actual duration/ordering information.
 
 ### Parallel trace indentation
 
