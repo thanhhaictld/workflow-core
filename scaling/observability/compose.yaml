@@ -51,10 +51,11 @@ services:
       WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
       WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
       WFC_OTEL_LOGS_ENABLED: "true"
       OTEL_SERVICE_INSTANCE_ID: hub-1
     healthcheck:
-      test: ["CMD-SHELL", "echo > /dev/tcp/127.0.0.1/5100"]
+      test: ["CMD", "/bin/bash", "-c", "echo > /dev/tcp/127.0.0.1/5100"]
       interval: 5s
       timeout: 3s
       retries: 20
