@@ -35,7 +35,7 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/003_signal_delivery.sql`,
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
-2. Add project reference to `src/providers/WorkflowCore.Scaling.PostgreSQL`.
+2. Add project reference to `scaling/src/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 
 ```csharp
@@ -77,7 +77,7 @@ No multi-region active/active deployment is supported.
 ## Test
 
 ```bash
-dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj
+dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj
 ```
 
 The GitHub Actions workflow supplies PostgreSQL and applies SQL migrations.

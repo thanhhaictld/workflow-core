@@ -27,7 +27,7 @@ project does not include its paid source code.
 - PostgreSQL with the upstream Workflow Core EF schema and
   `scaling/sql/002_distributed_runtime.sql` through
   `scaling/sql/005_execution_history.sql` applied in order
-- .NET SDK 10 for `src/samples/WorkflowCore.Scaling.Api`
+- .NET SDK 10 for `scaling/sample/onboarding/WorkflowCore.Scaling.Api`
 - Node.js 22+ with npm
 - PowerShell 7+ (`pwsh`) on Windows, macOS or Linux
 - Docker Compose v2 (Docker Desktop on Windows/macOS) for local PostgreSQL
@@ -75,7 +75,7 @@ From the repository root, first run the sample .NET API:
 
 ```bash
 export WFC_PG='Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=...'
-dotnet run --project src/samples/WorkflowCore.Scaling.Api --urls http://localhost:5000
+dotnet run --project scaling/sample/onboarding/WorkflowCore.Scaling.Api --urls http://localhost:5000
 ```
 
 In a separate shell:
@@ -128,7 +128,7 @@ The launcher starts **three distinct processes**: the .NET API
 Next.js monitor. The API is responsible for workflow starts and approval events;
 the worker claims fenced PostgreSQL work and executes the steps. Both register
 the same workflow definitions from
-[`WorkflowCore.Scaling.Samples`](../src/samples/WorkflowCore.Scaling.Samples/TenantOnboarding.cs).
+[`WorkflowCore.Scaling.Samples`](../scaling/sample/onboarding/WorkflowCore.Scaling.Samples/TenantOnboarding.cs).
 
 Open [the monitoring dashboard](http://127.0.0.1:3000/workflows)
 and use **Onboarding workflow playground** to create three types of instances:

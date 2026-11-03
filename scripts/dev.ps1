@@ -36,10 +36,10 @@ $PSNativeCommandUseErrorActionPreference = $false
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $MonitorDir = Join-Path $RepoRoot 'monitor'
 $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
-$ApiProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj'
-$WorkerProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
-$HubProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
-$TestProject = Join-Path $RepoRoot 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
+$ApiProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj'
+$WorkerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
+$HubProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
+$TestProject = Join-Path $RepoRoot 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
 $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
 
 if ($PgPort -eq 0) { $PgPort = if ($env:PG_PORT) { [int]$env:PG_PORT } else { 55432 } }
