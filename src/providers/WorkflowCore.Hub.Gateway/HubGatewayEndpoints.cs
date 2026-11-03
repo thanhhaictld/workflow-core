@@ -70,6 +70,8 @@ public static class HubGatewayEndpoints
             Results.Ok(registry.Describe()));
         routes.MapGet("/definitions", (HubWorkflowRegistry registry) =>
             Results.Ok(registry.Describe()));
+        routes.MapGet("/diagnostics", async (HubTaskStore store, CancellationToken ct) =>
+            Results.Ok(await store.DiagnosticsAsync(ct)));
 
         routes.MapPost("/workflows", async (
             HubWorkflowStartRequest request, HubWorkflowStore workflows,
