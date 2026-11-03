@@ -1,12 +1,13 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability]
   pull_request:
     paths:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
       - 'src/providers/WorkflowCore.Hub/**'
       - 'src/providers/WorkflowCore.Hub.Gateway/**'
+      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
       - 'src/samples/WorkflowCore.Hub.Host/**'
       - 'src/WorkflowCore/**'
       - 'src/samples/WorkflowCore.Scaling.Api/**'
@@ -54,6 +55,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+      - name: Build OTEL library
+        run: dotnet build src/providers/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
       - name: Build standalone Hub gateway
         run: dotnet build src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
       - name: Build benchmark API
