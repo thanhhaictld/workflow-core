@@ -206,7 +206,7 @@ public static class HubGatewayEndpoints
         });
 
         routes.MapPost("/tasks", async (HubEnqueueRequest request,
-            HubPolicyRegistry registry, HubTaskStore store,
+            HubPolicyRegistry registry, HubDefinitionStore published, HubTaskStore store,
             HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (request.Payload.ValueKind != JsonValueKind.Object ||
@@ -214,9 +214,13 @@ public static class HubGatewayEndpoints
                 request.IdempotencyKey?.Length > 128)
                 return Results.BadRequest(new { error = "Invalid payload or idempotency key" });
             HubTaskRoute route;
-            try { route = registry.Resolve(request.HubId, request.TaskType,
-                request.Version, request.Payload); }
-            catch (KeyNotFoundException) { return Results.NotFound(new { error = "Unknown code-first task" }); }
+            try {
+                route=await published.ResolveAsync(request.HubId,request.TaskType,
+                    request.Version,request.Payload,ct)
+                    ?? registry.Resolve(request.HubId, request.TaskType,
+                        request.Version, request.Payload);
+            }
+            catch (KeyNotFoundException) { return Results.NotFound(new { error = "Unknown registered task" }); }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 
             try
