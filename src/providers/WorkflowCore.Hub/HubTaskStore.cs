@@ -143,7 +143,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             lease > TimeSpan.FromMinutes(5))
             throw new ArgumentException("Invalid worker claim parameters");
 
-        var supported = capabilities.Select(c => $"{c.TaskType}:{c.Version}").ToArray();
+        var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
         var results = new List<HubLeasedTask>(maxTasks);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         for (var batch = 0; batch < maxTasks; batch++)
