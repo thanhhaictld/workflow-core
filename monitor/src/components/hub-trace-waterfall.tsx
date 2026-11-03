@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, Clock3 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Clock3, ZoomIn, ZoomOut } from "lucide-react";
 import { durationMs, formatDuration, formatTime, shortId } from "@/lib/format";
 import { Badge, cn } from "./ui";
 
@@ -55,6 +55,8 @@ export function HubTraceWaterfall({
 }) {
   const [collapsed, setCollapsed] = useState<number[]>([]);
   const [showQueue, setShowQueue] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const gridStyle = { gridTemplateColumns: `290px 118px minmax(${640 * zoom}px,1fr)` };
   const [selectedAttempt, setSelectedAttempt] = useState<string | null>(null);
 
   const start = Date.parse(workflow.createdAt);
@@ -91,7 +93,7 @@ export function HubTraceWaterfall({
     </div>;
 
   return <div className="overflow-x-auto">
-    <div className="min-w-[900px]">
+    <div style={{ minWidth: `${440 + 640 * zoom}px` }}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
         <div>
           <p className="text-sm font-semibold">Distributed execution waterfall</p>
@@ -100,12 +102,27 @@ export function HubTraceWaterfall({
             Exact worker CPU/handler time is available in OpenTelemetry traces.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input type="checkbox" checked={showQueue} onChange={e => setShowQueue(e.target.checked)}
-            className="accent-blue-600"/> Show queue / scheduling wait
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" checked={showQueue} onChange={e => setShowQueue(e.target.checked)}
+              className="accent-blue-600"/> Show queue / scheduling wait
+          </label>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <button type="button" aria-label="Zoom out timeline"
+              disabled={zoom <= 1} onClick={() => setZoom(current => Math.max(1, current / 2))}
+              className="rounded-md border border-border p-1.5 disabled:opacity-40 hover:bg-muted">
+              <ZoomOut size={15}/>
+            </button>
+            <span className="min-w-8 text-center font-mono">{zoom}x</span>
+            <button type="button" aria-label="Zoom in timeline"
+              disabled={zoom >= 8} onClick={() => setZoom(current => Math.min(8, current * 2))}
+              className="rounded-md border border-border p-1.5 disabled:opacity-40 hover:bg-muted">
+              <ZoomIn size={15}/>
+            </button>
+          </div>
+        </div>
       </div>
-      <div className="grid grid-cols-[290px_118px_minmax(370px,1fr)] items-end gap-3 border-b border-border bg-muted/30 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div style={gridStyle} className="grid items-end gap-3 border-b border-border bg-muted/30 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span>Workflow / activity / attempt</span><span>Duration</span>
         <div className="flex justify-between font-mono font-normal normal-case tracking-normal">
           {[0, 25, 50, 75, 100].map(pct =>
@@ -113,7 +130,7 @@ export function HubTraceWaterfall({
         </div>
       </div>
 
-      <div className="grid grid-cols-[290px_118px_minmax(370px,1fr)] items-center gap-3 border-b border-border px-4 py-3">
+      <div style={gridStyle} className="grid items-center gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Clock3 size={15}/> {workflow.definitionId}
           <Badge tone={workflow.state === "Complete" ? "green" : "blue"}>{workflow.state}</Badge>
@@ -133,7 +150,7 @@ export function HubTraceWaterfall({
         const stateTone = step.state === "Completed" ? "green" as const
           : step.state === "Failed" ? "red" as const : "slate" as const;
         return <div key={step.taskId}>
-          <div className={cn("grid grid-cols-[290px_118px_minmax(370px,1fr)] items-center gap-3 border-b border-border/70 px-4 py-2.5",
+          <div style={gridStyle} className={cn("grid items-center gap-3 border-b border-border/70 px-4 py-2.5",
             selectedStep === step.stepIndex ? "bg-blue-500/5" : "hover:bg-muted/35")}>
             <button type="button"
               onClick={() => {
@@ -165,7 +182,7 @@ export function HubTraceWaterfall({
 
           {!folded && <>
             {showQueue && step.readyAt && firstClaim && queuedMs !== null && queuedMs > 0 &&
-              <div className="grid grid-cols-[290px_118px_minmax(370px,1fr)] items-center gap-3 border-b border-border/50 px-4 py-1.5">
+              <div style={gridStyle} className="grid items-center gap-3 border-b border-border/50 px-4 py-1.5">
                 <span className="pl-8 text-xs text-muted-foreground">↳ Queue / scheduling wait</span>
                 <span className="text-xs tabular-nums text-muted-foreground">{formatDuration(queuedMs)}</span>
                 {lane(bar(step.readyAt, firstClaim, "bg-slate-400/60",
@@ -185,7 +202,7 @@ export function HubTraceWaterfall({
                     setSelectedAttempt(active ? null : key);
                   }}
                   aria-pressed={active}
-                  className={cn("grid w-full grid-cols-[290px_118px_minmax(370px,1fr)] items-center gap-3 border-b border-border/50 px-4 py-1.5 text-left",
+                  style={gridStyle} className={cn("grid w-full items-center gap-3 border-b border-border/50 px-4 py-1.5 text-left",
                     active ? "bg-blue-500/10" : "hover:bg-muted/40")}>
                   <span className="flex min-w-0 items-center gap-2 pl-8 text-xs">
                     <span className="truncate">↳ Attempt {attempt.attemptNumber}</span>
