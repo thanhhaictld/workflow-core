@@ -16,10 +16,18 @@ public sealed record HubWorkflowRunSummary(string RunId, long Total, long Ready,
     DateTime? LastCompletedAt, double? P50CompletionMs,
     double? P95CompletionMs, double? P99CompletionMs,
     double? MaxCompletionMs);
+public sealed record HubWorkflowListItem(Guid Id, string HubId, string DefinitionId,
+    int Version, string? RunId, string State, int NextStep, int StepCount,
+    string? Error, DateTime CreatedAt, DateTime? CompletedAt);
+public sealed record HubWorkflowListPage(IReadOnlyList<HubWorkflowListItem> Items,
+    long Total, int Page, int Take);
+public sealed record HubWorkflowOverview(long Total, long Ready, long Running,
+    long Completed, long Failed, long Created24h, long Completed24h);
 public sealed record HubRecentRun(string RunId, long Total, long Ready, long Running,
     long Completed, long Failed, DateTime LastCreatedAt);
 public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
-    string EventType, DateTime OccurredAt, JsonElement? Payload);
+    string ActivityType, int Attempts, string EventType, DateTime OccurredAt,
+    JsonElement? Payload);
 
 /// <summary>
 /// Hub-managed durable sequential workflow execution. The gateway alone
@@ -376,18 +384,105 @@ public sealed class HubWorkflowStore(
         CancellationToken ct)
     {
         await using var cmd = DataSource.CreateCommand("""
-            SELECT step_index,task_id,event_type,occurred_at,payload::text
-            FROM wfc_scale.hub_workflow_history
-            WHERE workflow_id=@id ORDER BY step_index,occurred_at
+            SELECT h.step_index,h.task_id,t.task_type,t.attempts,
+                   h.event_type,h.occurred_at,h.payload::text
+            FROM wfc_scale.hub_workflow_history h
+            JOIN wfc_scale.hub_task t ON t.id=h.task_id
+            WHERE h.workflow_id=@id ORDER BY h.occurred_at,h.step_index,h.task_id
             """);
         cmd.Parameters.AddWithValue("id", id);
         var items = new List<HubWorkflowHistoryEntry>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
             items.Add(new(reader.GetInt32(0),reader.GetGuid(1),reader.GetString(2),
-                reader.GetDateTime(3),reader.IsDBNull(4) ? null :
-                JsonDocument.Parse(reader.GetString(4)).RootElement.Clone()));
+                reader.GetInt32(3),reader.GetString(4),reader.GetDateTime(5),
+                reader.IsDBNull(6) ? null :
+                JsonDocument.Parse(reader.GetString(6)).RootElement.Clone()));
         return items;
+    }
+
+    public async Task<HubWorkflowListPage> ListAsync(string? hubId, string? search,
+        string? status, int page, int take, CancellationToken ct)
+    {
+        if (page is < 1 or > 10000 || take is < 1 or > 100 ||
+            hubId?.Length > 80 || search?.Length > 200 ||
+            (status is not null && status is not ("Ready" or "Running" or "Complete" or "Failed")))
+            throw new ArgumentException("Invalid Hub workflow list filter or paging");
+        var pattern = "%" + (search ?? "").Replace("\\", "\\\\")
+            .Replace("%", "\\%").Replace("_", "\\_") + "%";
+        const string where = """
+            WHERE (@hub IS NULL OR hub_id = @hub)
+              AND (@status IS NULL OR state = CASE @status
+                   WHEN 'Ready' THEN 0 WHEN 'Running' THEN 1
+                   WHEN 'Complete' THEN 2 WHEN 'Failed' THEN 3 ELSE -1 END)
+              AND (@search IS NULL OR
+                   id::text ILIKE @pattern ESCAPE '\\' OR
+                   definition_id ILIKE @pattern ESCAPE '\\' OR
+                   coalesce(run_id, '') ILIKE @pattern ESCAPE '\\')
+            """;
+        await using var db = await DataSource.OpenConnectionAsync(ct);
+        async Task<NpgsqlCommand> Command(string sql)
+        {
+            var command = new NpgsqlCommand(sql, db);
+            command.Parameters.Add("hub", NpgsqlDbType.Text).Value =
+                (object?)hubId ?? DBNull.Value;
+            command.Parameters.Add("status", NpgsqlDbType.Text).Value =
+                (object?)status ?? DBNull.Value;
+            command.Parameters.Add("search", NpgsqlDbType.Text).Value =
+                string.IsNullOrWhiteSpace(search) ? DBNull.Value : search;
+            command.Parameters.AddWithValue("pattern", pattern);
+            return await Task.FromResult(command);
+        }
+        long total;
+        await using (var count = await Command("SELECT count(*) FROM wfc_scale.hub_workflow " + where))
+            total = (long)(await count.ExecuteScalarAsync(ct) ?? 0L);
+
+        await using var listing = await Command("""
+            SELECT id,hub_id,definition_id,definition_version,run_id,state,
+                   next_step,step_count,last_error,created_at,completed_at
+            FROM wfc_scale.hub_workflow
+            """ + where + " ORDER BY created_at DESC, id DESC LIMIT @take OFFSET @offset");
+        listing.Parameters.AddWithValue("take", take);
+        listing.Parameters.AddWithValue("offset", (page - 1) * take);
+        var records = new List<HubWorkflowListItem>();
+        await using var reader = await listing.ExecuteReaderAsync(ct);
+        string[] states = ["Ready", "Running", "Complete", "Failed"];
+        while (await reader.ReadAsync(ct))
+            records.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
+                reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4),
+                states[reader.GetInt16(5)], reader.GetInt32(6), reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetDateTime(9), reader.IsDBNull(10) ? null : reader.GetDateTime(10)));
+        return new(records, total, page, take);
+    }
+
+    public async Task<HubWorkflowOverview> OverviewAsync(string? hubId, CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT count(*), count(*) FILTER (WHERE state=0),
+                   count(*) FILTER (WHERE state=1), count(*) FILTER (WHERE state=2),
+                   count(*) FILTER (WHERE state=3),
+                   count(*) FILTER (WHERE created_at>=now()-interval '24 hours'),
+                   count(*) FILTER (WHERE state=2 AND
+                       completed_at>=now()-interval '24 hours')
+            FROM wfc_scale.hub_workflow WHERE (@hub IS NULL OR hub_id=@hub)
+            """);
+        cmd.Parameters.Add("hub", NpgsqlDbType.Text).Value = (object?)hubId ?? DBNull.Value;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Overview unavailable");
+        return new(reader.GetInt64(0),reader.GetInt64(1),reader.GetInt64(2),
+            reader.GetInt64(3),reader.GetInt64(4),reader.GetInt64(5),reader.GetInt64(6));
+    }
+
+    public async Task<IReadOnlyList<string>> HubIdsAsync(CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT DISTINCT hub_id FROM wfc_scale.hub_workflow ORDER BY hub_id
+            """);
+        var ids = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) ids.Add(reader.GetString(0));
+        return ids;
     }
 
     /// <summary>
