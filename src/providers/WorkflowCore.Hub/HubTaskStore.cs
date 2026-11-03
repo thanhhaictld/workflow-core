@@ -176,10 +176,11 @@ public sealed class HubTaskStore : IAsyncDisposable
             {
                 await using var tx = await db.BeginTransactionAsync(ct);
                 Guid id; string hub; string taskType; int version, partition, attempts;
+                int? workflowStep;
                 long sequence; Guid? workflow; string payload;
                 await using (var row = new NpgsqlCommand("""
                     SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,
-                           payload::text,sequence,attempts
+                           payload::text,sequence,attempts,workflow_step
                     FROM wfc_scale.hub_task WHERE id = @id
                       AND attempts < max_attempts
                       AND ((state = 0 AND due_at <= now()) OR
@@ -199,6 +200,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     payload = reader.GetString(6);
                     sequence = reader.GetInt64(7);
                     attempts = reader.GetInt32(8);
+                    workflowStep = reader.IsDBNull(9) ? null : reader.GetInt32(9);
                 }
 
                 var constraints = new List<(string Key, int Limit, bool Fifo)>();
@@ -270,6 +272,33 @@ public sealed class HubTaskStore : IAsyncDisposable
                     var until = reader.GetDateTime(1);
                     found = new(id, hub, partition, taskType, version, workflow,
                         JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until);
+                }
+                // A lease is a durable fencing epoch. Keep one actual claim
+                // timestamp per managed workflow activity attempt, including
+                // retries and lease takeovers. This is NOT worker CPU time.
+                if (workflowStep is not null && workflow is not null && found is not null)
+                {
+                    await using (var replaced = new NpgsqlCommand("""
+                        UPDATE wfc_scale.hub_task_attempt
+                        SET finished_at=clock_timestamp(), outcome='LeaseExpired'
+                        WHERE task_id=@id AND finished_at IS NULL
+                        """, db, tx))
+                    {
+                        replaced.Parameters.AddWithValue("id", id);
+                        await replaced.ExecuteNonQueryAsync(ct);
+                    }
+                    await using var attempt = new NpgsqlCommand("""
+                        INSERT INTO wfc_scale.hub_task_attempt
+                            (task_id,epoch,workflow_id,step_index,attempt_number,worker_id)
+                        VALUES (@id,@epoch,@workflow,@step,@number,@worker)
+                        """, db, tx);
+                    attempt.Parameters.AddWithValue("id", id);
+                    attempt.Parameters.AddWithValue("epoch", found.Epoch);
+                    attempt.Parameters.AddWithValue("workflow", workflow.Value);
+                    attempt.Parameters.AddWithValue("step", workflowStep.Value);
+                    attempt.Parameters.AddWithValue("number", attempts + 1);
+                    attempt.Parameters.AddWithValue("worker", workerId);
+                    await attempt.ExecuteNonQueryAsync(ct);
                 }
                 await tx.CommitAsync(ct);
                 break;
