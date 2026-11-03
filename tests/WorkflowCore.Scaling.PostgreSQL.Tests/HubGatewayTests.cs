@@ -38,7 +38,7 @@ public sealed class HubGatewayTests
     private static Task<IReadOnlyList<HubLeasedTask>> Claim(HubTaskStore store,
         string hub, string owner, int count = 16) =>
         store.ClaimAsync(owner, new[] { hub },
-            new[] { new HubCapability("demo-activity", 1) },
+            new[] { new HubCapability(hub, "demo-activity", 1) },
             count, Lease, CancellationToken.None);
 
     [Fact]
