@@ -138,6 +138,24 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         cmd.Parameters.AddWithValue("fifo", p.StrictFifo);
     }
 
+    public async Task<IReadOnlyList<HubActivityRegistration>> ActivitiesAsync(CancellationToken ct)
+    {
+        await using var cmd=Source.CreateCommand("""
+            SELECT hub_id,activity_type,version,partitions,hub_concurrency,
+                   activity_concurrency,resource_name,resource_field,
+                   resource_capacity,resource_fifo
+            FROM wfc_scale.hub_activity_registration ORDER BY hub_id,activity_type,version
+            """);
+        var values=new List<HubActivityRegistration>();
+        await using var r=await cmd.ExecuteReaderAsync(ct);
+        while(await r.ReadAsync(ct))
+            values.Add(new(r.GetString(0),r.GetString(1),r.GetInt32(2),r.GetInt32(3),
+                r.GetInt32(4),r.GetInt32(5),
+                r.IsDBNull(6)?null:r.GetString(6),r.IsDBNull(7)?null:r.GetString(7),
+                r.GetInt32(8),r.GetBoolean(9)));
+        return values;
+    }
+
     public async Task<HubTaskRoute?> ResolveAsync(
         string hub, string activity, int version, JsonElement input, CancellationToken ct,
         NpgsqlConnection? connection = null, NpgsqlTransaction? transaction = null)
