@@ -1,4 +1,5 @@
 using System.Net;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -120,7 +121,9 @@ public sealed class HubRemoteWorker : BackgroundService, IDisposable
             ?? throw new InvalidOperationException("WFC_HUB_URL is required");
         var token = Environment.GetEnvironmentVariable("WFC_HUB_AUTH_TOKEN")
             ?? throw new InvalidOperationException("WFC_HUB_AUTH_TOKEN is required");
-        if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+        if (!(Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP") == "true" &&
+              url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Remote Hub requires HTTPS outside localhost.");
@@ -198,6 +201,14 @@ public sealed class HubRemoteWorker : BackgroundService, IDisposable
 
     private async Task RunTaskAsync(HubLeasedTask task, CancellationToken shutdown)
     {
+        using var span = HubTelemetry.Traces.StartActivity("hub.worker.activity.execute");
+        span?.SetTag("hub", task.HubId);
+        span?.SetTag("activity.type", task.TaskType);
+        span?.SetTag("workflow.id", task.WorkflowId?.ToString());
+        var startedAt = Stopwatch.GetTimestamp();
+        HubTelemetry.WorkerInflight.Add(1, HubTelemetry.HubTag(task.HubId),
+            HubTelemetry.ActivityTag(task.TaskType));
+        var completed = false;
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
         using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
         var heartbeat = HeartbeatAsync(task, execution, heartbeatStop.Token);
@@ -212,6 +223,7 @@ public sealed class HubRemoteWorker : BackgroundService, IDisposable
             if (response.StatusCode == HttpStatusCode.Conflict)
                 throw new OperationCanceledException("Hub rejected stale workflow task completion");
             response.EnsureSuccessStatusCode();
+            completed = true;
         }
         catch (OperationCanceledException) when (execution.IsCancellationRequested ||
             shutdown.IsCancellationRequested)
@@ -237,6 +249,15 @@ public sealed class HubRemoteWorker : BackgroundService, IDisposable
         }
         finally
         {
+            HubTelemetry.WorkerInflight.Add(-1, HubTelemetry.HubTag(task.HubId),
+                HubTelemetry.ActivityTag(task.TaskType));
+            HubTelemetry.WorkerExecutions.Add(1, HubTelemetry.HubTag(task.HubId),
+                HubTelemetry.ActivityTag(task.TaskType),
+                new KeyValuePair<string, object?>("outcome", completed ? "success" : "failure"));
+            HubTelemetry.WorkerExecutionDuration.Record(
+                Stopwatch.GetElapsedTime(startedAt).TotalSeconds,
+                HubTelemetry.HubTag(task.HubId), HubTelemetry.ActivityTag(task.TaskType));
+            span?.SetTag("task.completed", completed);
             await heartbeatStop.CancelAsync();
             try { await heartbeat; }
             catch (OperationCanceledException) { }
