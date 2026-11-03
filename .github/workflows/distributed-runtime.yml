@@ -101,12 +101,15 @@ jobs:
         shell: bash
         env:
           WFC_ENABLE_MANAGEMENT_WRITES: 'true'
+          WFC_HUB_ENABLED: 'true'
+          WFC_HUB_AUTH_TOKEN: 'ci-local-hub-secret-please-change-2026'
         run: |
           set -euo pipefail
           pwsh -NoProfile -File scripts/dev.ps1 api > /tmp/onboarding-api.log 2>&1 &
           api_pid=$!
           worker_pid=''
-          trap 'kill "$api_pid" "$worker_pid" 2>/dev/null || true' EXIT
+          remote_pid=''
+          trap 'kill "$api_pid" "$worker_pid" "$remote_pid" 2>/dev/null || true' EXIT
           for attempt in {1..40}; do
             if curl -fsS http://127.0.0.1:5000/health/ready > /dev/null; then break; fi
             sleep 2
@@ -120,6 +123,16 @@ jobs:
             tail -150 /tmp/onboarding-api.log
             echo 'Worker output:'
             tail -150 /tmp/onboarding-worker.log
+            exit 1
+          fi
+          # Remote worker intentionally does NOT receive workflow PostgreSQL credentials.
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5000 WORKERS=4 dotnet run --no-launch-profile             --project src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj             > /tmp/hub-remote-worker.log 2>&1 &
+          remote_pid=$!
+          if ! pwsh -NoProfile -File scripts/test-hub-gateway.ps1 -TimeoutSeconds 90; then
+            echo 'Remote worker output:'
+            tail -150 /tmp/hub-remote-worker.log
+            echo 'Hub API output:'
+            tail -150 /tmp/onboarding-api.log
             exit 1
           fi
       - name: Stop local PostgreSQL
