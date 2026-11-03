@@ -24,6 +24,7 @@ export type HubTraceStep = {
 };
 export type HubTraceEvent = {
   stepIndex: number;
+  activityType?: string;
   eventType: string;
   occurredAt: string;
 };
@@ -75,6 +76,26 @@ export function HubTraceWaterfall({
   const eventTime = (step: number) => history.find(event =>
     event.stepIndex === step && (event.eventType === "StepCompleted" ||
       event.eventType === "StepFailed"))?.occurredAt;
+
+  // A timer wait is a durable span reconstructed from actual Schedule/Fire
+  // timestamps, not an artificial long-lived OpenTelemetry activity.
+  const timerWindows = useMemo(() => history
+    .filter(event => event.eventType === "TimerScheduled")
+    .map(scheduled => {
+      const final = history.find(event => event.stepIndex === scheduled.stepIndex &&
+        (event.eventType === "TimerFired" || event.eventType === "TimerCancelled"));
+      return {
+        stepIndex: scheduled.stepIndex,
+        label: scheduled.activityType || "Timer",
+        start: scheduled.occurredAt,
+        finish: final?.occurredAt ?? null,
+        outcome: final?.eventType ?? "Waiting"
+      };
+    }), [history]);
+  const segments = [
+    ...trace.map(step => ({ kind: "activity" as const, step, stepIndex: step.stepIndex })),
+    ...timerWindows.map(timer => ({ kind: "timer" as const, timer, stepIndex: timer.stepIndex })),
+  ].sort((a, b) => a.stepIndex - b.stepIndex);
 
   const allAttempts = useMemo(() => trace.flatMap(step => step.attempts), [trace]);
   const hasRecordedClaims = allAttempts.length > 0;
@@ -140,7 +161,33 @@ export function HubTraceWaterfall({
           "bg-blue-500/60", "Whole workflow: " + formatDuration(rootDuration)))}
       </div>
 
-      {trace.map(step => {
+      {segments.map(segment => {
+        if (segment.kind === "timer") {
+          const t = segment.timer;
+          const until = t.finish ?? new Date(now).toISOString();
+          const elapsed = durationMs(t.start, until);
+          return <div key={"timer:" + t.stepIndex} style={gridStyle}
+            className={cn("grid items-center gap-3 border-b border-border/70 px-4 py-2.5",
+              selectedStep === t.stepIndex ? "bg-blue-500/5" : "hover:bg-muted/35")}>
+            <button type="button" onClick={() => onSelectStep(t.stepIndex)}
+              className="flex items-center gap-2 text-left">
+              <Clock3 size={15}/>
+              <span className="truncate text-xs font-semibold">{t.label}</span>
+              <Badge tone={t.outcome === "TimerFired" ? "green" :
+                t.outcome === "TimerCancelled" ? "amber" : "blue"}>
+                {t.outcome === "TimerFired" ? "Fired" :
+                  t.outcome === "TimerCancelled" ? "Cancelled" : "Waiting"}
+              </Badge>
+            </button>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {formatDuration(elapsed)}
+            </span>
+            {lane(bar(t.start, until,
+              t.outcome === "TimerCancelled" ? "bg-amber-500/70" : "bg-violet-500/70",
+              "Durable timer wait: " + formatDuration(elapsed)))}
+          </div>;
+        }
+        const step = segment.step;
         const folded = collapsed.includes(step.stepIndex);
         const terminalEvent = eventTime(step.stepIndex);
         const finished = step.attempts.filter(x => x.finishedAt);
@@ -241,6 +288,7 @@ export function HubTraceWaterfall({
         <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-emerald-500"/>Completed</span>
         <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-amber-500"/>Retry</span>
         <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-rose-500"/>Failed</span>
+        <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-violet-500"/>Durable timer wait</span>
         <span className="inline-flex items-center gap-1"><AlertTriangle size={13}/>
           Lease expiry means the Hub reclaimed ownership, not proof of stopped side effects.
         </span>
