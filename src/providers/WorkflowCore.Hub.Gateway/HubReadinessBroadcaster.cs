@@ -20,8 +20,8 @@ public sealed class HubReadinessBroadcaster(
     public void Publish(string hub)
     {
         foreach (var client in _clients.Values)
-            if (client.Hubs.Contains(hub))
-                client.Channel.Writer.TryWrite(hub);
+            if (client.Hubs.Contains(hub) && client.Channel.Writer.TryWrite(hub))
+                HubTelemetry.SseNotifications.Add(1, HubTelemetry.HubTag(hub));
     }
 
     public async IAsyncEnumerable<string> Subscribe(
@@ -35,6 +35,7 @@ public sealed class HubReadinessBroadcaster(
         });
         var subscriber = new Subscriber(new HashSet<string>(hubs, StringComparer.Ordinal), channel);
         _clients[id] = subscriber;
+        HubTelemetry.SseConnections.Add(1);
         try
         {
             // A subscriber always receives a wakeup on initial connection.
@@ -46,6 +47,7 @@ public sealed class HubReadinessBroadcaster(
         finally
         {
             _clients.TryRemove(id, out _);
+            HubTelemetry.SseConnections.Add(-1);
             channel.Writer.TryComplete();
         }
     }
