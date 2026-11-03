@@ -64,7 +64,7 @@ function WorkflowRow({ workflow }: { workflow: WorkflowItem }) {
         : <span className="text-xs text-muted-foreground">—</span>}
     </td>
     <td className="px-5 py-4">
-      <Link aria-label={`Review execution trace for ${workflow.definitionId}`} href={`/workflows/${workflow.id}`}
+      <Link aria-label={`Review execution trace for ${workflow.definitionId}`} href={path}
         className={buttonClasses("outline", "sm")}>Trace <ArrowRight size={13} /></Link>
     </td>
   </tr>;
