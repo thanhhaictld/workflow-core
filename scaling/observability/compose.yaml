@@ -29,9 +29,9 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        for migration in 002_distributed_runtime.sql 007_hub_gateway.sql 008_hub_workflows.sql; do
-          PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f "/sql/$migration"
-        done
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/002_distributed_runtime.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/007_hub_gateway.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/008_hub_workflows.sql
     restart: "no"
 
   hub:
