@@ -3,14 +3,18 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Clock3, GitBranch, LoaderCircle, RefreshCw, Search, Workflow } from "lucide-react";
-import { getJson } from "@/lib/api";
 import { durationMs, formatDate, formatDuration, shortId } from "@/lib/format";
 import type { WorkflowItem, WorkflowOverview, WorkflowPage } from "@/lib/types";
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Select, StatusBadge, buttonClasses } from "./ui";
 import { DemoOnboarding } from "./demo-onboarding";
 
 const PAGE_SIZE = 20;
-const statusOptions = ["All", "Runnable", "Complete", "Suspended", "Terminated"];
+const statusOptions = ["All", "Runnable", "Ready", "Running", "Complete", "Suspended", "Failed", "Terminated"];
+type UnifiedPage = WorkflowPage & {
+  overview: WorkflowOverview;
+  hubs: string[];
+  warnings: string[];
+};
 
 function Metric({ icon, label, value, hint, tone }: {
   icon: React.ReactNode; label: string; value: number | undefined; hint: string;
@@ -33,11 +37,13 @@ function Metric({ icon, label, value, hint, tone }: {
 }
 
 function WorkflowRow({ workflow }: { workflow: WorkflowItem }) {
+  const path = `/workflows/${workflow.id}` +
+    (workflow.source === "hub" ? "?source=hub" : "");
   const duration = durationMs(workflow.createdAt, workflow.completedAt);
   const age = workflow.completedAt ? duration : durationMs(workflow.createdAt, new Date().toISOString());
   return <tr className="border-t border-border/75 transition-colors hover:bg-muted/40">
     <td className="px-5 py-4">
-      <Link href={`/workflows/${workflow.id}`} className="group block max-w-[350px]">
+      <Link href={path} className="group block max-w-[350px]">
         <span className="flex items-center gap-2 font-semibold text-foreground group-hover:text-blue-600 dark:group-hover:text-blue-400">
           <span className="truncate">{workflow.definitionId}</span><ArrowRight className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
         </span>
@@ -45,6 +51,11 @@ function WorkflowRow({ workflow }: { workflow: WorkflowItem }) {
       </Link>
     </td>
     <td className="max-w-[220px] truncate px-5 py-4 text-xs text-muted-foreground">{workflow.reference || "—"}</td>
+    <td className="px-5 py-4">
+      <Badge tone={workflow.source === "hub" ? "blue" : "slate"}>
+        {workflow.source === "hub" ? workflow.hubId || "Hub" : "Legacy"}
+      </Badge>
+    </td>
     <td className="px-5 py-4"><StatusBadge status={workflow.status} /></td>
     <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(workflow.createdAt)}</td>
     <td className="whitespace-nowrap px-5 py-4 text-xs tabular-nums text-muted-foreground">{formatDuration(age)}</td>
@@ -65,12 +76,29 @@ export function WorkflowList() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("All");
+  const [hub, setHub] = useState("all");
+  const [hubs, setHubs] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [refreshSeq, setRefreshSeq] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+
+  useEffect(() => {
+    const selection = new URLSearchParams(window.location.search).get("hub");
+    if (selection && /^[a-zA-Z0-9_.:-]{1,80}$/.test(selection)) setHub(selection);
+  }, []);
+
+  function changeHub(value: string) {
+    setHub(value);
+    setPage(1);
+    const url = new URL(window.location.href);
+    if (value === "all") url.searchParams.delete("hub");
+    else url.searchParams.set("hub", value);
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -92,20 +120,30 @@ export function WorkflowList() {
     const controller = new AbortController();
     const params = new URLSearchParams({
       page: String(page), take: String(PAGE_SIZE),
-      status, search: debouncedSearch
+      status, search: debouncedSearch, hub
     });
     setLoading(true);
-    Promise.all([
-      getJson<WorkflowOverview>("/monitor/overview", controller.signal),
-      getJson<WorkflowPage>(`/monitor/workflows?${params.toString()}`, controller.signal)
-    ]).then(([stats, records]) => {
-      setOverview(stats); setList(records); setError(null);
+    fetch(`/api/workflow-feed?${params.toString()}`, {
+      cache: "no-store", signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Workflow feed returned HTTP ${response.status}`);
+      }
+      return response.json() as Promise<UnifiedPage>;
+    }).then(records => {
+      if (controller.signal.aborted) return;
+      setOverview(records.overview);
+      setList(records);
+      setHubs(records.hubs);
+      setWarnings(records.warnings);
+      setError(null);
       setLastUpdated(new Date().toISOString());
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Unable to load workflows");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [status, page, debouncedSearch, refreshSeq]);
+  }, [status, hub, page, debouncedSearch, refreshSeq]);
 
   const pages = Math.max(1, Math.ceil((list?.total ?? 0) / PAGE_SIZE));
 
@@ -129,21 +167,25 @@ export function WorkflowList() {
     </div>
 
     {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-300/50 bg-rose-500/5 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-      <span className="flex items-center gap-2"><AlertTriangle size={16} />{error}. Check that the .NET API is running and WORKFLOW_API_URL is correct.</span>
+      <span className="flex items-center gap-2"><AlertTriangle size={16} />{error}. Check the legacy monitoring API and Workflow Hub connectivity.</span>
       <Button size="sm" onClick={reload}>Retry</Button>
+    </div>}
+
+    {warnings.length > 0 && <div role="status" className="rounded-lg border border-amber-300/50 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+      {warnings.join(" ")} Showing results from the available sources.
     </div>}
 
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <Metric icon={<GitBranch size={19} />} label="Total workflows" value={overview?.total} hint={`${overview?.created24h ?? "—"} started in the last 24 hours`} tone="slate" />
-      <Metric icon={<Activity size={19} />} label="Runnable" value={overview?.running} hint="Currently runnable workflow instances" tone="blue" />
+      <Metric icon={<Activity size={19} />} label="Runnable / active" value={overview?.running} hint="Legacy runnable plus Hub ready/running instances" tone="blue" />
       <Metric icon={<CheckCircle2 size={19} />} label="Completed" value={overview?.completed} hint={`${overview?.completed24h ?? "—"} completed in the last 24 hours`} tone="green" />
-      <Metric icon={<AlertTriangle size={19} />} label="With execution errors" value={overview?.withErrors} hint="Historical errors, including recovered runs" tone="red" />
+      <Metric icon={<AlertTriangle size={19} />} label="With execution errors" value={overview?.withErrors} hint="Legacy errors and failed Hub runs" tone="red" />
     </div>
 
-    <DemoOnboarding onCreated={reload} />
+    {(hub === "all" || hub === "legacy") && <DemoOnboarding onCreated={reload} />}
 
     <Card className="overflow-hidden">
-      <CardHeader title="Workflow runs" description="Latest executions ordered by start time · click a run for a Temporal-style trace"
+      <CardHeader title="Workflow runs" description="Latest executions across legacy Workflow Core and Workflow Hub · click a run for history"
         action={<span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {loading && <LoaderCircle size={13} className="animate-spin" />}
           {lastUpdated ? `Updated ${new Date(lastUpdated).toLocaleTimeString()}` : "Awaiting API"}
@@ -155,6 +197,12 @@ export function WorkflowList() {
             <Search size={16} className="pointer-events-none absolute left-3 top-[11px] text-muted-foreground" />
             <Input aria-label="Search workflow ID, definition or reference" className="pl-9" placeholder="Search workflow ID, definition, reference..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          <Select aria-label="Filter by hub" value={hub} onChange={e => changeHub(e.target.value)}>
+            <option value="all">All hubs &amp; legacy</option>
+            <option value="legacy">Legacy Workflow Core</option>
+            <option value="hub">All Workflow Hubs</option>
+            {hubs.map(id => <option key={id} value={id}>Hub: {id}</option>)}
+          </Select>
           <Select aria-label="Filter by status" value={status} onChange={e => { setStatus(e.target.value); setPage(1); }}>
             {statusOptions.map(option => <option key={option} value={option}>{option === "All" ? "All statuses" : option}</option>)}
           </Select>
@@ -163,10 +211,10 @@ export function WorkflowList() {
       </div>
 
       <div className="compact-scrollbar overflow-x-auto">
-        <table className="w-full min-w-[940px] text-left text-sm">
+        <table className="w-full min-w-[1060px] text-left text-sm">
           <thead className="bg-muted/60 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <tr><th className="px-5 py-3">Workflow</th><th className="px-5 py-3">Reference</th>
-              <th className="px-5 py-3">Status</th><th className="px-5 py-3">Started</th>
+              <th className="px-5 py-3">Hub</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Started</th>
               <th className="px-5 py-3">Elapsed</th><th className="px-5 py-3">Errors</th><th className="px-5 py-3">Review</th></tr>
           </thead>
           <tbody>
