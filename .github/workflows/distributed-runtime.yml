@@ -55,6 +55,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
       - name: Build OTEL library
         run: dotnet build src/providers/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
       - name: Build standalone Hub gateway
