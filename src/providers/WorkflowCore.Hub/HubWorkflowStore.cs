@@ -16,6 +16,8 @@ public sealed record HubWorkflowRunSummary(string RunId, long Total, long Ready,
     DateTime? LastCompletedAt, double? P50CompletionMs,
     double? P95CompletionMs, double? P99CompletionMs,
     double? MaxCompletionMs);
+public sealed record HubRecentRun(string RunId, long Total, long Ready, long Running,
+    long Completed, long Failed, DateTime LastCreatedAt);
 public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
     string EventType, DateTime OccurredAt, JsonElement? Payload);
 
@@ -386,6 +388,38 @@ public sealed class HubWorkflowStore(
                 reader.GetDateTime(3),reader.IsDBNull(4) ? null :
                 JsonDocument.Parse(reader.GetString(4)).RootElement.Clone()));
         return items;
+    }
+
+    /// <summary>
+    /// Read-only summary for the Next.js Hub Runs view. Never expose workflow
+    /// payloads or tenant IDs; the caller must authenticate at the gateway.
+    /// </summary>
+    public async Task<IReadOnlyList<HubRecentRun>> RecentRunsAsync(int take, CancellationToken ct)
+    {
+        if (take is < 1 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(take));
+        await using var command = DataSource.CreateCommand("""
+            SELECT run_id,
+                   count(*),
+                   count(*) FILTER (WHERE state=0),
+                   count(*) FILTER (WHERE state=1),
+                   count(*) FILTER (WHERE state=2),
+                   count(*) FILTER (WHERE state=3),
+                   max(created_at)
+            FROM wfc_scale.hub_workflow
+            WHERE run_id IS NOT NULL
+            GROUP BY run_id
+            ORDER BY max(created_at) DESC
+            LIMIT @take
+            """);
+        command.Parameters.AddWithValue("take", take);
+        var runs = new List<HubRecentRun>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            runs.Add(new(reader.GetString(0), reader.GetInt64(1),
+                reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4),
+                reader.GetInt64(5), reader.GetDateTime(6)));
+        return runs;
     }
 
     public async Task<HubWorkflowRunSummary> SummaryAsync(string runId, CancellationToken ct)
