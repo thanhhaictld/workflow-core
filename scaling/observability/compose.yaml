@@ -1,0 +1,168 @@
+name: workflow-hub-observability
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${PG_USER:-workflow}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
+      POSTGRES_DB: ${PG_DATABASE:-workflow}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hub_postgres:/var/lib/postgresql/data
+    # Never publish the database to the host in this stack.
+
+  migrate:
+    image: postgres:17
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../sql:/sql:ro
+    environment:
+      PG_USER: ${PG_USER:-workflow}
+      PG_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
+      PG_DATABASE: ${PG_DATABASE:-workflow}
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      for migration in 002_distributed_runtime.sql 007_hub_gateway.sql 008_hub_workflows.sql; do
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f "/sql/$$migration"
+      done
+    restart: "no"
+
+  hub:
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj
+    command: ["WorkflowCore.Hub.Host.dll"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:5100
+      WFC_PG: Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12}
+      WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      WFC_OTEL_LOGS_ENABLED: "true"
+      OTEL_SERVICE_INSTANCE_ID: hub-1
+    healthcheck:
+      test: ["CMD-SHELL", "echo > /dev/tcp/127.0.0.1/5100"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    ports:
+      - "127.0.0.1:${HUB_PORT:-5100}:5100"
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj
+    command: ["WorkflowCore.Scaling.Worker.dll"]
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      # No WFC_PG: remote workers do not access the workflow database.
+      WFC_HUB_URL: http://hub:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true" # Private container-network lab only
+      WORKERS: ${WORKERS:-16}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      WFC_OTEL_LOGS_ENABLED: "true"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.1
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
+
+  prometheus:
+    image: prom/prometheus:v3.7.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - hub_prometheus:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  tempo:
+    image: grafana/tempo:2.10.10
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - hub_tempo:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+
+  loki:
+    image: grafana/loki:3.6.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/local-config.yaml:ro
+      - hub_loki:/loki
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-local-grafana-change-this}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - hub_grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+
+  k6:
+    image: grafana/k6:1.8.2
+    profiles: ["load"]
+    depends_on:
+      hub:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    environment:
+      HUB_URL: http://hub:5100
+      HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
+      K6_WORKFLOWS: ${K6_WORKFLOWS:-1000}
+      K6_VUS: ${K6_VUS:-100}
+      K6_MAX_WAIT_SECONDS: ${K6_MAX_WAIT_SECONDS:-180}
+      K6_RUN_ID: ${K6_RUN_ID:-}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: "p(95),p(99),max"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "true"
+    volumes:
+      - ./k6:/scripts:ro
+      - ./results:/results
+    command: ["run", "--out", "experimental-prometheus-rw", "/scripts/hub-workflows.js"]
+
+volumes:
+  hub_postgres:
+  hub_prometheus:
+  hub_tempo:
+  hub_loki:
+  hub_grafana:
