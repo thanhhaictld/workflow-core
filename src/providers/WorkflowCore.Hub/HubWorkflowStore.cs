@@ -406,13 +406,15 @@ public sealed class HubWorkflowStore(
     {
         if (page is < 1 or > 10000 || take is < 1 or > 100 ||
             hubId?.Length > 80 || search?.Length > 200 ||
-            (status is not null && status is not ("Ready" or "Running" or "Complete" or "Failed")))
+            (status is not null && status is not ("Ready" or "Running" or "Runnable" or "Complete" or "Failed")))
             throw new ArgumentException("Invalid Hub workflow list filter or paging");
         var pattern = "%" + (search ?? "").Replace("\\", "\\\\")
             .Replace("%", "\\%").Replace("_", "\\_") + "%";
         const string where = """
             WHERE (@hub IS NULL OR hub_id = @hub)
-              AND (@status IS NULL OR state = CASE @status
+              AND (@status IS NULL OR
+                   (@status = 'Runnable' AND state IN (0,1)) OR
+                   state = CASE @status
                    WHEN 'Ready' THEN 0 WHEN 'Running' THEN 1
                    WHEN 'Complete' THEN 2 WHEN 'Failed' THEN 3 ELSE -1 END)
               AND (@search IS NULL OR
