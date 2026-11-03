@@ -31,6 +31,29 @@ public sealed class HubTaskPolicyBuilder
         return this;
     }
 
+    /// <summary>Limits admitted workflow execution tasks, not active
+    /// workflow instances waiting for external events.</summary>
+    public HubTaskPolicyBuilder MaxWorkflowTaskConcurrency(int limit)
+    {
+        Add("workflow-task", limit, false, _ => "all");
+        return this;
+    }
+
+    /// <summary>Same named resource across all business hubs.</summary>
+    public HubTaskPolicyBuilder ExclusiveGloballyBy(string resource,
+        Func<JsonElement, string?> key)
+    {
+        Add("global-exclusive:" + resource, 1, false, key);
+        return this;
+    }
+
+    public HubTaskPolicyBuilder SequentialGloballyBy(string resource,
+        Func<JsonElement, string?> key)
+    {
+        Add("global-sequential:" + resource, 1, true, key);
+        return this;
+    }
+
     public HubTaskPolicyBuilder ExclusiveBy(string resource, Func<JsonElement, string?> key)
     {
         Add("exclusive:" + resource, 1, false, key);
@@ -71,7 +94,8 @@ public sealed class HubPolicyRegistry
         int partitions, Action<HubTaskPolicyBuilder> configure)
     {
         if (string.IsNullOrWhiteSpace(hub) || string.IsNullOrWhiteSpace(taskType) ||
-            hub.Length > 80 || taskType.Length > 80 || version < 1 ||
+            hub.Length > 80 || taskType.Length > 80 ||
+            hub.Contains('|') || taskType.Contains('|') || version < 1 ||
             partitions < 1 || partitions > 4096)
             throw new ArgumentException("Invalid Hub task registration");
         var builder = new HubTaskPolicyBuilder();
@@ -101,7 +125,9 @@ public sealed class HubPolicyRegistry
                 Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
             var scope = rule.Name == "hub" ? $"hub:{def.Hub}" :
                 rule.Name == "activity" ? $"activity:{def.Hub}:{def.TaskType}" :
-                $"resource:{def.Hub}:{rule.Name}";
+                rule.Name == "workflow-task" ? $"workflow-task:{def.Hub}:{def.TaskType}" :
+                rule.Name.StartsWith("global-", StringComparison.Ordinal)
+                    ? $"global:{rule.Name}" : $"resource:{def.Hub}:{rule.Name}";
             var key = $"{scope}:{digest}";
             if (resources.ContainsKey(key))
                 throw new InvalidOperationException("Duplicate resource constraint: " + rule.Name);
