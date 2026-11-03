@@ -205,7 +205,6 @@ export async function GET(request: NextRequest) {
   }
 
   await Promise.all([readLegacy(), readHub()]);
-  if (!includeLegacy && hub === "legacy") succeeded++; // no-op for type safety
   if (succeeded === 0) {
     return NextResponse.json(
       { error: warnings.join(" ") || "No workflow sources are available" },
