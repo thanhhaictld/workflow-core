@@ -158,7 +158,7 @@ services:
       K6_RUN_ID: ${K6_RUN_ID:-}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_STATS: "p(95),p(99),max"
-      K6_PROMETHEUS_RW_STALE_MARKERS: "true"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "false"
     volumes:
       - ./k6:/scripts:ro
       - ./results:/results
