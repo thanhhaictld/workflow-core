@@ -52,6 +52,7 @@ public sealed class HubReadinessBroadcaster(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        var ticks = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -59,6 +60,10 @@ public sealed class HubReadinessBroadcaster(
                 await store.DeadLetterExpiredAsync(stoppingToken);
                 foreach (var hub in await store.ReadyHubsAsync(stoppingToken))
                     Publish(hub);
+                // SSE comments keep intermediaries from closing truly idle streams.
+                if (++ticks % 5 == 0)
+                    foreach (var client in _clients.Values)
+                        client.Channel.Writer.TryWrite("");
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogWarning(ex, "Hub readiness sweep failed"); }
