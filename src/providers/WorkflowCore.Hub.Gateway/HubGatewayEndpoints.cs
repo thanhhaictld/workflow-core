@@ -98,6 +98,38 @@ public static class HubGatewayEndpoints
             }
         });
 
+        routes.MapGet("/workflows", async (string? hub, string? search,
+            string? status, int? page, int? take,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await workflows.ListAsync(
+                    hub, search, status, page ?? 1, take ?? 20, ct));
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        routes.MapGet("/workflow-overview", async (string? hub,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            if (hub?.Length > 80)
+                return Results.BadRequest(new { error = "Invalid hub" });
+            return Results.Ok(await workflows.OverviewAsync(hub, ct));
+        });
+
+        routes.MapGet("/hubs", async (HubWorkflowStore workflows,
+            HubWorkflowRegistry registry, CancellationToken ct) =>
+        {
+            var persisted = await workflows.HubIdsAsync(ct);
+            return Results.Ok(persisted
+                .Concat(registry.Describe().Select(x => x.HubId))
+                .Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray());
+        });
+
         routes.MapGet("/workflows/{id:guid}", async (Guid id,
             HubWorkflowStore workflows, CancellationToken ct) =>
         {
