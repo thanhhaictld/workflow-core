@@ -2,7 +2,7 @@
 
 ## Target and registration
 
-New runtime project: `src/providers/WorkflowCore.Scaling.PostgreSQL`,
+New runtime project: `scaling/src/WorkflowCore.Scaling.PostgreSQL`,
 target framework **net10.0**. PostgreSQL provider and EF Core projects are
 referenced rather than duplicated.
 
@@ -74,7 +74,7 @@ implemented.
 
 ## Sample HTTP API (development only)
 
-File: `src/samples/WorkflowCore.Scaling.Api/Program.cs`.
+File: `scaling/sample/onboarding/WorkflowCore.Scaling.Api/Program.cs`.
 
 | Route | Behavior |
 |---|---|

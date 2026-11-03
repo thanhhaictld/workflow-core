@@ -55,7 +55,7 @@ schema scripts or applying breaking migrations.
 ```bash
 export WFC_PG='Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=REPLACE'
 export WORKERS=4
-dotnet run --project src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj --urls http://localhost:5180
+dotnet run --project scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj --urls http://localhost:5180
 ```
 
 This endpoint is unauthenticated. Bind only to loopback for local development;

@@ -50,7 +50,7 @@ Notes:
 
 | Component | Code location | Responsibility |
 |---|---|---|
-| `DistributedWorkflowEngine` | `src/providers/WorkflowCore.Scaling.PostgreSQL/DistributedWorkflowEngine.cs` | Create workflow/event intents, execute pointers, apply state transitions under fencing, deliver signals |
+| `DistributedWorkflowEngine` | `scaling/src/WorkflowCore.Scaling.PostgreSQL/DistributedWorkflowEngine.cs` | Create workflow/event intents, execute pointers, apply state transitions under fencing, deliver signals |
 | `FencedWorkQueue` | `.../FencedWorkQueue.cs` | Atomic batch claim; queue and workflow leases; renew/defer/retry; dead-letter exhausted items |
 | `DistributedWorkPump` | `.../DistributedWorkPump.cs` | Hosted bounded slot loops, polling, heartbeat, backoff, metrics/tracing |
 | `WorkQueueAdministration` | `.../WorkQueueAdministration.cs` | Queue counters, oldest ready age, manual dead-letter requeue |
