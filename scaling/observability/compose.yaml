@@ -37,7 +37,6 @@ services:
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/007_hub_gateway.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/008_hub_workflows.sql
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/009_hub_task_attempts.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.
@@ -67,28 +66,7 @@ services:
     depends_on:
       monitor-api-migrate:
         condition: service_completed_successfully
-      processor:
-    build:
-      context: ../..
-      dockerfile: scaling/observability/Dockerfile.app
-      args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj
-    command: ["WorkflowCore.Processor.Host.dll"]
-    depends_on:
-      hub:
-        condition: service_healthy
-      provisioner:
-        condition: service_started
-    environment:
-      WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
-      WORKERS: "${PROCESSOR_WORKERS:-16}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      WFC_OTEL_LOGS_ENABLED: "true"
-    restart: unless-stopped
-
-  otel-collector:
+      otel-collector:
         condition: service_started
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
@@ -163,6 +141,7 @@ services:
     ports:
       - "127.0.0.1:${HUB_PORT:-5100}:5100"
 
+
   provisioner:
     build:
       context: ../..
@@ -174,11 +153,31 @@ services:
       hub:
         condition: service_healthy
     environment:
-      # No WFC_PG: remote workers do not access the workflow database.
       WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true" # Private container-network lab only
-      WORKERS: ${WORKERS:-16}
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
+      WORKERS: "${WORKERS:-16}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      WFC_OTEL_LOGS_ENABLED: "true"
+    restart: unless-stopped
+
+  processor:
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj
+    command: ["WorkflowCore.Processor.Host.dll"]
+    depends_on:
+      hub:
+        condition: service_healthy
+      provisioner:
+        condition: service_started
+    environment:
+      WFC_HUB_URL: http://hub:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
+      WORKERS: "${PROCESSOR_WORKERS:-16}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       WFC_OTEL_LOGS_ENABLED: "true"
     restart: unless-stopped
