@@ -4,11 +4,13 @@ using WorkflowCore.Interface;
 using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Samples;
 using WorkflowCore.Scaling.Worker;
+using WorkflowCore.Hub.Telemetry;
 
 // Remote mode uses REST+SSE and has no workflow-state database credentials.
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WFC_HUB_URL")))
 {
     var remote = Host.CreateApplicationBuilder(args);
+    remote.Services.AddWorkflowHubOpenTelemetry("workflow-hub-worker");
     remote.Services.AddSingleton<IHubActivityHandler, ValidateTenantHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, ProvisionTenantHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, SendWelcomeHandler>();
@@ -23,6 +25,7 @@ var connectionString = Environment.GetEnvironmentVariable("WFC_PG")
     ?? throw new InvalidOperationException("WFC_PG connection string is required.");
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-core-legacy-worker");
 builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 {
     options.Concurrency = int.TryParse(Environment.GetEnvironmentVariable("WORKERS"), out var workers)
