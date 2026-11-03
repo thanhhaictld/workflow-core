@@ -1,6 +1,6 @@
 <Project>
     <PropertyGroup>
-        <TargetFrameworks Condition="'$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Api' and '$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Worker' and '$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Samples'">net6.0</TargetFrameworks>
+        <TargetFrameworks Condition="'$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Api' and '$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Worker' and '$(MSBuildProjectName)' != 'WorkflowCore.Scaling.Samples' and '$(MSBuildProjectName)' != 'WorkflowCore.Hub.Host'">net6.0</TargetFrameworks>
         <LangVersion>latest</LangVersion>
         <IsPackable>false</IsPackable>
     </PropertyGroup>
