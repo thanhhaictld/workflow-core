@@ -74,7 +74,7 @@ jobs:
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
           curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/legacy-monitor.html
-          curl --fail-with-body -fsS http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
+          curl --fail-with-body -fsSL http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
           curl --fail-with-body -fsS http://127.0.0.1:3002/backend/monitor/overview >/tmp/legacy-monitor-overview.json
           curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
           python3 - <<'PY'
@@ -84,7 +84,7 @@ jobs:
           assert isinstance(legacy,dict), 'Legacy monitor API did not return JSON'
           assert isinstance(hub.get('runs'),list), 'Next.js Hub proxy did not return run list'
           assert 'databaseConnections' in hub['diagnostics']
-          assert b'Hub runs' in open('/tmp/hub-monitor.html','rb').read()
+          assert b'Workflow monitoring' in open('/tmp/hub-monitor.html','rb').read()
           print('Next.js monitor, legacy backend and authenticated Hub proxy are online.')
           PY
           curl --fail-with-body -fsS -u admin:local-grafana-change-this \
