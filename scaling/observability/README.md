@@ -9,6 +9,9 @@ is not yet remote; this dashboard complements the previous Next.js monitor.
 ~~~mermaid
 flowchart LR
   K6["k6 workflow stress test"] -->|REST| H["Hub Gateway"]
+  UI["Next.js monitor"] -->|server-side Hub API| H
+  UI -->|legacy /backend proxy| API["Workflow Core monitor API"]
+  API --> P
   H --> P[("PostgreSQL")]
   H -. SSE tasks available .-> W["C# Remote Workers"]
   W -->|REST claim/complete| H
@@ -51,12 +54,19 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale worker=4
 ~~~
 
-The migrate container applies the idempotent SQL 002, 007 and 008 schemas
-before starting Hub; its PostgreSQL volume is isolated from the previous
-scaling/compose.monitor.yaml development stack.
+The migrate container applies SQL migrations 002–008, followed by the
+legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
+container. The Hub and legacy monitor API use the same local PostgreSQL
+instance but separate workflow state tables. The Next.js /backend rewrite
+targets the legacy API, while its Hub Runs page uses a server-side
+authenticated proxy to the Hub (the browser never sees the Hub bearer token).
+The volume is isolated from the previous scaling/compose.monitor.yaml stack.
 
 | Service | Local URL |
 | --- | --- |
+| Next.js workflow monitor | http://localhost:3002 |
+| Hub Runs in Next.js | http://localhost:3002/hub |
+| Legacy Workflow Core monitor API | http://localhost:5000/health/ready |
 | Grafana | http://localhost:3001 |
 | Workflow Hub Grafana dashboard | http://localhost:3001/d/workflow-hub-otel |
 | Prometheus | http://localhost:9090 |
@@ -65,6 +75,16 @@ scaling/compose.monitor.yaml development stack.
 | OTLP HTTP receiver | http://localhost:4318 |
 
 Grafana credentials: GRAFANA_USER and GRAFANA_PASSWORD from .env.
+
+**Two workflow views:** /workflows and /definitions show the existing
+Workflow Core IWorkflow<T> runtime, including its execution history and
+code-first metadata. /hub shows live recent Hub activity-chain runs,
+readiness/lease/dead-letter counts and PostgreSQL session usage while k6 runs.
+These are deliberately different execution engines; the existing monitor
+does not automatically reinterpret Hub workflows as legacy workflow pointers.
+The monitor API's embedded legacy worker is disabled by default so it
+does not compete for database connections during Hub stress tests.
+To run the legacy demo executor, set MONITOR_EMBEDDED_WORKER=true in .env.
 
 ## Run the 1,000-workflow k6 E2E stress test
 
@@ -144,7 +164,7 @@ curl 'http://localhost:9090/api/v1/query?query=workflow_hub_workflows_completed_
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_process_working_set_bytes'
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env logs --tail=100 \
-  hub worker otel-collector prometheus grafana tempo loki
+  hub worker monitor-api monitor otel-collector prometheus grafana tempo loki
 ~~~
 
 All host-published ports bind to loopback. PostgreSQL, Loki and the worker
