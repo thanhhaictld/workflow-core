@@ -139,6 +139,12 @@ public static class HubGatewayEndpoints
         routes.MapGet("/workflows/{id:guid}/history", async (Guid id,
             HubWorkflowStore workflows, CancellationToken ct) =>
             Results.Ok(await workflows.HistoryAsync(id, ct)));
+        routes.MapGet("/workflows/{id:guid}/trace", async (Guid id,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            if (await workflows.GetAsync(id, ct) is null) return Results.NotFound();
+            return Results.Ok(await workflows.TraceAsync(id, ct));
+        });
 
         routes.MapGet("/runs", async (int? take,
             HubWorkflowStore workflows, CancellationToken ct) =>
