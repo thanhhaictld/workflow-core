@@ -139,14 +139,17 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
     }
 
     public async Task<HubTaskRoute?> ResolveAsync(
-        string hub, string activity, int version, JsonElement input, CancellationToken ct)
+        string hub, string activity, int version, JsonElement input, CancellationToken ct,
+        NpgsqlConnection? connection = null, NpgsqlTransaction? transaction = null)
     {
-        await using var cmd = Source.CreateCommand("""
+        const string sql = """
             SELECT partitions,hub_concurrency,activity_concurrency,resource_name,
                    resource_field,resource_capacity,resource_fifo
             FROM wfc_scale.hub_activity_registration
             WHERE hub_id=@hub AND activity_type=@type AND version=@version
-            """);
+            """;
+        await using var cmd = connection is null ? Source.CreateCommand(sql) :
+            new NpgsqlCommand(sql, connection, transaction);
         cmd.Parameters.AddWithValue("hub", hub);
         cmd.Parameters.AddWithValue("type", activity);
         cmd.Parameters.AddWithValue("version", version);
