@@ -10,6 +10,7 @@
 | Document | Audience | Contents |
 |---|---|---|
 | [Architecture](architecture.md) | Architects/engineers | Context, boundaries, component diagram, scaling model |
+| [Workflow Hub Gateway](workflow-hub-gateway.md) | API developers / SREs | Standalone REST+SSE Hub, code-first concurrency, remote activity workers and operational limitations |
 | [Execution and event semantics](execution-semantics.md) | Runtime developers | Sequence diagrams, transaction boundaries, retries, `WaitFor` |
 | [Execution history](execution-history.md) | Runtime developers and SREs | Durable step attempts, append-only events, audit guarantees, query API |
 | [Workflow monitoring UI](../../monitor/README.md) | Operators / UI developers | Free AdminCN-inspired monitoring dashboard and Temporal-style step trace |
@@ -33,8 +34,9 @@ fenced workflow gates and a hosted execution pump. There is no separate
 scheduler/broker deployment today; each worker directly polls PostgreSQL using
 `FOR UPDATE SKIP LOCKED`.
 
-The API sample is for development benchmarks only and does **not** implement
-authentication. CI builds the sample and executes PostgreSQL integration tests;
+The legacy API sample is for development benchmarks only and does **not** implement
+production authentication. The separate Hub gateway requires a development
+bearer token, but also needs production authorization and identity hardening. CI builds the sample and executes PostgreSQL integration tests;
 CI is **not** a proof of sustained horizontal throughput, availability or
 crash consistency under all failure points.
 
@@ -52,4 +54,5 @@ crash consistency under all failure points.
 All guaranteed/implemented statements in this documentation refer to the
 **current branch tree**, not just the historical commit messages.
 
-- [Workflow definition version management](definition-version-management.md) — immutable metadata snapshots, version diff, lifecycle and admin controls.
+- [Workflow definition metadata review](definition-version-management.md) — code-first executable definitions, immutable metadata snapshots and read-only schema diffs.
+- [Workflow Hub Gateway](workflow-hub-gateway.md) — standalone, bounded-connection REST+SSE remote activity transport and PostgreSQL concurrency/FIFO admission. Existing workflow instances have not yet migrated to remote execution.
