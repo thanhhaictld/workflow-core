@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="../../providers/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj" />
     <ProjectReference Include="../../providers/WorkflowCore.Hub.Gateway/WorkflowCore.Hub.Gateway.csproj" />
+    <ProjectReference Include="../../providers/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj" />
     <ProjectReference Include="../WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
   </ItemGroup>
 </Project>
