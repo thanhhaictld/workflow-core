@@ -12,7 +12,9 @@ public sealed record HubWorkflowStatus(Guid Id, string HubId, string DefinitionI
     JsonElement Results, string? Error, DateTime CreatedAt, DateTime? CompletedAt);
 public sealed record HubWorkflowRunSummary(string RunId, long Total, long Ready,
     long Running, long Completed, long Failed, DateTime? FirstCreatedAt,
-    DateTime? LastCompletedAt);
+    DateTime? LastCompletedAt, double? P50CompletionMs,
+    double? P95CompletionMs, double? P99CompletionMs,
+    double? MaxCompletionMs);
 public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
     string EventType, DateTime OccurredAt, JsonElement? Payload);
 
@@ -373,7 +375,18 @@ public sealed class HubWorkflowStore(
                    count(*) FILTER (WHERE state=1),
                    count(*) FILTER (WHERE state=2),
                    count(*) FILTER (WHERE state=3),
-                   min(created_at),max(completed_at)
+                   min(created_at),max(completed_at),
+                   percentile_cont(0.50) WITHIN GROUP (
+                       ORDER BY extract(epoch FROM (completed_at-created_at))*1000)
+                       FILTER (WHERE state=2),
+                   percentile_cont(0.95) WITHIN GROUP (
+                       ORDER BY extract(epoch FROM (completed_at-created_at))*1000)
+                       FILTER (WHERE state=2),
+                   percentile_cont(0.99) WITHIN GROUP (
+                       ORDER BY extract(epoch FROM (completed_at-created_at))*1000)
+                       FILTER (WHERE state=2),
+                   max(extract(epoch FROM (completed_at-created_at))*1000)
+                       FILTER (WHERE state=2)
             FROM wfc_scale.hub_workflow
             WHERE run_id=@run
             """);
@@ -383,7 +396,11 @@ public sealed class HubWorkflowStore(
         return new(runId, reader.GetInt64(0),reader.GetInt64(1),
             reader.GetInt64(2),reader.GetInt64(3),reader.GetInt64(4),
             reader.IsDBNull(5) ? null : reader.GetDateTime(5),
-            reader.IsDBNull(6) ? null : reader.GetDateTime(6));
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+            reader.IsDBNull(7) ? null : reader.GetDouble(7),
+            reader.IsDBNull(8) ? null : reader.GetDouble(8),
+            reader.IsDBNull(9) ? null : reader.GetDouble(9),
+            reader.IsDBNull(10) ? null : (double)reader.GetDecimal(10));
     }
 
     // Lock task and its workflow in the same transaction. The order prevents
