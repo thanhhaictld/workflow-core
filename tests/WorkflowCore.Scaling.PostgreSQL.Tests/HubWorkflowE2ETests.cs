@@ -114,6 +114,61 @@ public sealed class HubWorkflowE2ETests
     }
 
     [Fact]
+    public async Task MonitorList_FiltersHubStatusAndSearch_WithNamedDurableHistory()
+    {
+        if (Database is null) return;
+        var hub = NewHub();
+        var otherHub = NewHub();
+        var (tasks, workflows) = Create(hub);
+        await using (tasks)
+        {
+            var a = await workflows.StartAsync(
+                Request(hub, "tenant-alpha", runId: "load-alpha"),
+                CancellationToken.None);
+            var b = await workflows.StartAsync(
+                Request(hub, "tenant-beta", runId: "load-beta"),
+                CancellationToken.None);
+
+            var before = await workflows.ListAsync(hub, null, "Ready", 1, 100, CancellationToken.None);
+            Assert.Equal(2, before.Total);
+            Assert.Equal(2, before.Items.Count);
+
+            var first = await ClaimOne(tasks, hub, "worker-monitor");
+            Assert.True(await workflows.CompleteAsync(first.Id, "worker-monitor", first.Epoch,
+                """{"validated":true}""", CancellationToken.None));
+            var second = await ClaimOne(tasks, hub, "worker-monitor");
+            Assert.True(await workflows.CompleteAsync(second.Id, "worker-monitor", second.Epoch,
+                """{"provisioned":true}""", CancellationToken.None));
+
+            var complete = await workflows.ListAsync(hub, "load-alpha", "Complete", 1, 10,
+                CancellationToken.None);
+            Assert.Equal(1, complete.Total);
+            Assert.Equal(a, complete.Items[0].Id);
+            Assert.Equal("Complete", complete.Items[0].State);
+
+            var page2 = await workflows.ListAsync(hub, null, null, 2, 1, CancellationToken.None);
+            Assert.Equal(2, page2.Total);
+            Assert.Single(page2.Items);
+
+            var other = await workflows.ListAsync(otherHub, null, null, 1, 20,
+                CancellationToken.None);
+            Assert.Equal(0, other.Total);
+            Assert.Empty(other.Items);
+
+            var history = await workflows.HistoryAsync(a, CancellationToken.None);
+            Assert.Equal(new[] { "validate", "provision" },
+                history.Select(item => item.ActivityType).ToArray());
+            Assert.Equal(new[] { 0, 1 }, history.Select(item => item.StepIndex).ToArray());
+            Assert.Equal("StepCompleted", history[0].EventType);
+            Assert.True(history[0].Attempts >= 1);
+            var overview = await workflows.OverviewAsync(hub, CancellationToken.None);
+            Assert.Equal(2, overview.Total);
+            Assert.Equal(1, overview.Completed);
+            Assert.Equal(1, overview.Ready);
+        }
+    }
+
+    [Fact]
     public async Task Retry_HigherLeaseEpochRejectsStaleCompletion()
     {
         if (Database is null) return;
