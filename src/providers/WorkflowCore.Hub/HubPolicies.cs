@@ -88,7 +88,12 @@ public sealed class HubPolicyRegistry
         var resources = new Dictionary<string, HubResourceRule>(StringComparer.Ordinal);
         foreach (var rule in def.Rules)
         {
-            var value = rule.Selector(payload);
+            string? value;
+            try { value = rule.Selector(payload); }
+            catch (KeyNotFoundException error)
+            {
+                throw new ArgumentException("Missing policy resource key: " + rule.Name, error);
+            }
             if (string.IsNullOrWhiteSpace(value))
                 throw new ArgumentException("Missing policy resource key: " + rule.Name);
             // Avoid putting raw tenant IDs or other sensitive routing keys in SQL.
