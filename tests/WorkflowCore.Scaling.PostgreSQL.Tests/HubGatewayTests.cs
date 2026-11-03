@@ -124,6 +124,38 @@ public sealed class HubGatewayTests
     }
 
     [Fact]
+    public async Task ConcurrentWorkerClaims_NeverExceedExclusivePermit()
+    {
+        if (Database is null) return;
+        var hub = Key();
+        var policy = Registry(hub, 1, fifo: false);
+        await using var store = new HubTaskStore(Database, 8);
+        for (var i = 0; i < 8; i++)
+            await Create(store, policy, hub, "same");
+        var claims = await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(i => Claim(store, hub, "worker-" + i, 1)));
+        Assert.Equal(1, claims.Sum(list => list.Count));
+    }
+
+    [Fact]
+    public async Task GlobalExclusiveResource_SerializesAcrossBusinessHubs()
+    {
+        if (Database is null) return;
+        var a = Key();
+        var b = Key();
+        var policy = new HubPolicyRegistry()
+            .Register(a, "demo-activity", 1, 8, p => p
+                .ExclusiveGloballyBy("shared-database", x => x.GetProperty("resourceId").GetString()))
+            .Register(b, "demo-activity", 1, 8, p => p
+                .ExclusiveGloballyBy("shared-database", x => x.GetProperty("resourceId").GetString()));
+        await using var store = new HubTaskStore(Database, 4);
+        await Create(store, policy, a, "database-one");
+        await Create(store, policy, b, "database-one");
+        Assert.Single(await Claim(store, a, "worker-A"));
+        Assert.Empty(await Claim(store, b, "worker-B"));
+    }
+
+    [Fact]
     public void CodeFirstPolicy_RequiringResource_IsEnforcedBeforeEnqueue()
     {
         var registry = Registry(Key(), 1, fifo: true);
