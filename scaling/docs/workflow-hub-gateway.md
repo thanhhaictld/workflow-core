@@ -147,3 +147,13 @@ keys, strict FIFO, retry blocking, idempotency, lease takeover and stale
 epoch rejection. CI also boots a separate Hub gateway and DB-free worker,
 submits activities via REST, observes per-key serialization and verifies
 completion across the SSE dispatch path.
+
+## 1,000 concurrent workflow benchmark
+
+The Hub now contains an experimental, code-first multi-step remote workflow
+chain with atomic step progression, durable results and history. It is **not**
+a full adapter for the legacy `IWorkflow<T>` runtime.
+
+Two GitHub CI runs staged 1,000 workflows before starting workers and
+completed 3,000 remote steps with zero workflow failures. See
+[full reproducible performance results](workflow-hub-1000-performance.md).
