@@ -53,8 +53,20 @@ public static class HubGatewayEndpoints
             return await next(context);
         });
 
-        routes.MapGet("/policies", (HubPolicyRegistry registry) =>
-            Results.Ok(registry.Describe()));
+        routes.MapGet("/policies", async (HubPolicyRegistry registry,
+            HubDefinitionStore published, CancellationToken ct) =>
+        {
+            var external=await published.ActivitiesAsync(ct);
+            return Results.Ok(registry.Describe().Cast<object>().Concat(
+                external.Select(p=>(object)new {
+                    p.HubId, TaskType=p.ActivityType,p.Version,
+                    PartitionCount=p.Partitions,
+                    Rules=new [] {
+                        "hub: capacity="+p.HubConcurrency,
+                        "activity: capacity="+p.ActivityConcurrency
+                    }
+                })));
+        });
         routes.MapGet("/definitions", async (HubWorkflowRegistry registry,
             HubDefinitionStore published, CancellationToken ct) =>
         {
