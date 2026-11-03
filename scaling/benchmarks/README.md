@@ -12,7 +12,7 @@ migration job.
 
 ```bash
 export WFC_PG='Host=localhost;Database=workflow;Username=workflow;Password=***'
-dotnet run --project src/samples/WorkflowCore.Scaling.Api --urls http://localhost:5180
+dotnet run --project scaling/sample/onboarding/WorkflowCore.Scaling.Api --urls http://localhost:5180
 
 # second terminal:
 k6 run scaling/benchmarks/k6-start-workflows.js -e URL=http://localhost:5180 -e RATE=100
