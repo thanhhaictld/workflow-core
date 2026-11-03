@@ -102,7 +102,7 @@ pwsh ./scripts/dev.ps1 hub
 
 # Terminal 2: submit 1000 workflows, assert all are pending.
 $env:WFC_LOAD_PHASE = 'submit'
-dotnet run -c Release --project src/samples/WorkflowCore.Hub.LoadTest
+dotnet run -c Release --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest
 
 # Terminals 3-6: start four remote workers (with no WFC_PG).
 $env:WORKERS = '32'
@@ -110,7 +110,7 @@ pwsh ./scripts/dev.ps1 remote-worker
 
 # Terminal 2, after workers are running:
 $env:WFC_LOAD_PHASE = 'verify'
-dotnet run -c Release --project src/samples/WorkflowCore.Hub.LoadTest
+dotnet run -c Release --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest
 ~~~
 
 In manual runs, WFC_LOAD_RUN_ID and WFC_LOAD_REPORT must remain unchanged

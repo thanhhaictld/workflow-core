@@ -13,10 +13,10 @@ flowchart LR
   W -->|"REST claim / heartbeat / complete"| H
 ~~~
 
-The standalone Hub host is under src/samples/WorkflowCore.Hub.Host.
-The API/broadcaster project is src/providers/WorkflowCore.Hub.Gateway.
+The standalone Hub host is under scaling/sample/onboarding/WorkflowCore.Hub.Host.
+The API/broadcaster project is scaling/src/WorkflowCore.Hub.Gateway.
 The bounded Npgsql store and code-first policy registry are in
-src/providers/WorkflowCore.Hub.
+scaling/src/WorkflowCore.Hub.
 
 Business hubs are namespaces (onboarding, billing, backup).
 Partition IDs are computed deterministically and stored with each task.
