@@ -11,7 +11,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "5s",
   "time": {
@@ -1095,6 +1095,124 @@
           "sort": "none"
         }
       }
+    },
+    {
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 14,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 21,
+      "title": "Durable timer throughput and errors",
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(workflow_hub_timer_fired_total[1m]))",
+          "legendFormat": "Fired/s",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(workflow_hub_timer_scheduler_errors_total[1m]))",
+          "legendFormat": "Scheduler errors/s",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 14,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 22,
+      "title": "Timer fire lag p50 / p95 / p99 (seconds)",
+      "gridPos": {
+        "x": 12,
+        "y": 69,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50,sum by (le) (rate(workflow_hub_timer_fire_lag_seconds_bucket[2m])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95,sum by (le) (rate(workflow_hub_timer_fire_lag_seconds_bucket[2m])))",
+          "legendFormat": "p95",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99,sum by (le) (rate(workflow_hub_timer_fire_lag_seconds_bucket[2m])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
     }
   ],
   "description": "Process memory, workflow throughput, concurrency, PostgreSQL pressure, HTTP latency and k6 load-test metrics."
