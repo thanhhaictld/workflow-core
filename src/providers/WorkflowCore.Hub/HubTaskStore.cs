@@ -30,6 +30,7 @@ public sealed record HubTaskFailureRequest(string WorkerId, long Epoch,
 public sealed class HubTaskStore : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
+    internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12)
     {
@@ -273,6 +274,15 @@ public sealed class HubTaskStore : IAsyncDisposable
             results.Add(found);
         }
         return results;
+    }
+
+    public async Task<bool> IsManagedWorkflowStepAsync(Guid id, CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("""
+            SELECT workflow_step IS NOT NULL FROM wfc_scale.hub_task WHERE id=@id
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
     public async Task<bool> HeartbeatAsync(Guid id, string worker, long epoch,
