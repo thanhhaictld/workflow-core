@@ -20,6 +20,37 @@ public interface IHubActivityHandler
     Task<JsonElement> ExecuteAsync(JsonElement payload, CancellationToken ct);
 }
 
+public sealed class ValidateTenantHandler : IHubActivityHandler
+{
+    public string HubId => "onboarding";
+    public string TaskType => "validate-tenant";
+    public int Version => 1;
+    public async Task<JsonElement> ExecuteAsync(JsonElement payload, CancellationToken ct)
+    {
+        var tenantId = payload.GetProperty("tenantId").GetString();
+        if (string.IsNullOrWhiteSpace(tenantId))
+            throw new ArgumentException("Missing tenantId");
+        await Task.Delay(15, ct);
+        return JsonSerializer.SerializeToElement(new { tenantId, validated = true });
+    }
+}
+
+public sealed class SendWelcomeHandler : IHubActivityHandler
+{
+    public string HubId => "onboarding";
+    public string TaskType => "send-welcome";
+    public int Version => 1;
+    public async Task<JsonElement> ExecuteAsync(JsonElement payload, CancellationToken ct)
+    {
+        await Task.Delay(15, ct);
+        return JsonSerializer.SerializeToElement(new
+        {
+            tenantId = payload.GetProperty("tenantId").GetString(),
+            welcomeSent = true
+        });
+    }
+}
+
 public sealed class ProvisionTenantHandler : IHubActivityHandler
 {
     public string HubId => "onboarding";
