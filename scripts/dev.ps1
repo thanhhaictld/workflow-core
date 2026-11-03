@@ -118,7 +118,8 @@ function Apply-EfMigrations {
 function Apply-DatabaseSchema {
     Apply-EfMigrations
     foreach ($migration in @('002_distributed_runtime.sql', '003_signal_delivery.sql',
-        '004_request_dedupe.sql', '005_execution_history.sql', '006_definition_versions.sql')) {
+        '004_request_dedupe.sql', '005_execution_history.sql', '006_definition_versions.sql',
+        '007_hub_gateway.sql')) {
         Write-Host "Applying $migration..."
         Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
