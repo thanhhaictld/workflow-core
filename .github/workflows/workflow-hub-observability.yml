@@ -198,7 +198,10 @@ jobs:
           assert any(x['source']=='legacy' for x in combined['items'])
           assert any(x['source']=='hub' for x in combined['items'])
           print('PASS: unified list returns both sources and hub/status/pagination filters')
-          open('/tmp/hub-workflow-id','w').write(hub['items'][0]['id'])
+          # The preceding timer test also creates a completed 4-step workflow.
+          # Only validate the 3-step activity workload in this assertion.
+          selected=next(x for x in hub['items'] if x['definitionId']=='tenant-onboarding')
+          open('/tmp/hub-workflow-id','w').write(selected['id'])
           PY
           workflow_id="$(cat /tmp/hub-workflow-id)"
           curl --fail-with-body -fsS "http://127.0.0.1:3002/api/hub-workflows/$workflow_id" > /tmp/unified-hub-trace.json
@@ -208,6 +211,7 @@ jobs:
           result=json.load(open('/tmp/unified-hub-trace.json'))
           w=result['workflow']
           history=result['history']
+          print('Selected workflow:',w['definitionId'],'nextStep:',w['nextStep'],'steps:',w['stepCount'])
           assert w['state']=='Complete'
           assert w['nextStep']==3 and w['stepCount']==3
           assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2]

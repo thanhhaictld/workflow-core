@@ -1,8 +1,9 @@
 # Workflow Hub observability and local k6 stress lab
 
-This is an optional, private local stack for the **real Hub-backed three-step
-onboarding activity chain**. The legacy Workflow Core IWorkflow<T> executor
-is not yet remote; this dashboard complements the previous Next.js monitor.
+This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
+The generic Hub includes an embedded durable timer scheduler. The legacy
+Workflow Core IWorkflow<T> runtime remains separate; the new remote execution
+adapter currently supports a code-first sequential Activity/Delay workflow slice.
 
 ## Architecture
 
@@ -13,8 +14,12 @@ flowchart LR
   UI -->|legacy /backend proxy| API["Workflow Core monitor API"]
   API --> P
   H --> P[("PostgreSQL")]
-  H -. SSE tasks available .-> W["C# Remote Workers"]
+  H -. SSE workflow tasks .-> PR["Workflow Processor"]
+  H -. SSE activity tasks .-> W["Activity Provisioner"]
+  PR -->|REST transition commands| H
   W -->|REST claim/complete| H
+  H -->|local internal module| S["Embedded Timer Scheduler"]
+  S -->|durable timer transactions| P
   H -->|OTLP metrics/traces/logs| O["OpenTelemetry Collector"]
   W -->|OTLP| O
   O --> M["Prometheus"]
@@ -26,7 +31,7 @@ flowchart LR
   L --> G
 ~~~
 
-Hub PostgreSQL pool defaults to 12 sessions. Worker containers have NO
+Hub PostgreSQL pool defaults to 12 sessions. Processor and provisioner containers have NO
 workflow-state database credentials. OTLP metrics export every 5 seconds,
 and the Prometheus scrape interval is 5 seconds.
 
@@ -41,7 +46,7 @@ cp scaling/observability/.env.example scaling/observability/.env
 
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
-  up -d --build --scale worker=4
+  up -d --build --scale provisioner=4
 
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env ps
@@ -54,7 +59,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale worker=4
 ~~~
 
-The migrate container applies SQL migrations 002–009, followed by the
+The migrate container applies SQL migrations 002–010, followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
@@ -98,6 +103,19 @@ The old /hub URL redirects to /workflows?hub=hub.
 The monitor API's embedded legacy worker is disabled by default so it
 does not compete for database connections during Hub stress tests.
 To run the legacy demo executor, set MONITOR_EMBEDDED_WORKER=true in .env.
+
+## Co-hosted durable timer scheduler
+
+`WorkflowCore.Hub.Scheduling` runs within Hub Host by default. Set
+`HUB_SCHEDULER_ENABLED=false` only when you deploy a separate scheduler
+host using the same scheduling module later. PostgreSQL owns timer deadlines;
+SSE is a non-durable hint. The timer journal populates actual waiting bars
+in the existing Next.js workflow waterfall.
+
+To run a timer-based k6 workload, set `K6_DEFINITION=tenant-onboarding-timer`
+in `scaling/observability/.env` and run k6 as below. Timer fire rate and
+p50/p95/p99 fire lag are available in Grafana. To compare HTTP throughput,
+run the default `tenant-onboarding` definition.
 
 ## Run the 1,000-workflow k6 E2E stress test
 
@@ -158,8 +176,8 @@ Prometheus labels.
 
 ### Traces and logs
 
-Grafana > Explore > Tempo: query services workflow-hub and
-workflow-hub-worker. Trace context flows from HTTP through Hub and worker
+Grafana > Explore > Tempo: query workflow-hub, workflow-processor and
+workflow-provisioner services. Trace context flows from HTTP through Hub and worker
 REST calls; the never-ending SSE stream is excluded from server spans.
 Grafana > Explore > Loki: inspect OTLP application logs.
 WFC_OTEL_LOGS_ENABLED is enabled in this private lab.
@@ -177,7 +195,7 @@ curl 'http://localhost:9090/api/v1/query?query=workflow_hub_workflows_completed_
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_process_working_set_bytes'
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env logs --tail=100 \
-  hub worker monitor-api monitor otel-collector prometheus grafana tempo loki
+  hub processor provisioner monitor-api monitor otel-collector prometheus grafana tempo loki
 ~~~
 
 All host-published ports bind to loopback. PostgreSQL, Loki and the worker

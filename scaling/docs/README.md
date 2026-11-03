@@ -10,6 +10,7 @@
 | Document | Audience | Contents |
 |---|---|---|
 | [Architecture](architecture.md) | Architects/engineers | Context, boundaries, component diagram, scaling model |
+| [Implemented embedded scheduler and processor runbook](hub-remote-scheduler-implementation.md) | Developers / SREs | Current implementation, architecture boundaries, endpoints, build/run instructions, testing status and known limitations |
 | [Final Hub architecture and embedded scheduler plan](hub-embedded-scheduler-final-plan.md) | Runtime and platform engineers | Generic REST Hub, independent workflow processor/provisioner, co-hosted scheduler module, durable timers, safe extraction roadmap |
 | [Workflow Hub Gateway](workflow-hub-gateway.md) | API developers / SREs | Standalone REST+SSE Hub, code-first concurrency, remote activity workers and operational limitations |
 | [1,000-workflow Hub performance](workflow-hub-1000-performance.md) | Performance engineers / SREs | Two measured passing CI simulations, throughput, p95, DB sessions, reproduction |

@@ -49,6 +49,7 @@ public sealed class HubTimerSchedulerService(
         using var timer=new PeriodicTimer(TimeSpan.FromMilliseconds(options.PollIntervalMs));
         using var gate=new SemaphoreSlim(options.MaxConcurrentBatches);
         var pending=new HashSet<Task>();
+        long sampled=0;
         while(!ct.IsCancellationRequested)
         {
             try
@@ -69,6 +70,8 @@ public sealed class HubTimerSchedulerService(
             try
             {
                 var fired=await store.FireDueAsync(options.BatchSize,token);
+                if(Interlocked.Increment(ref sampled)%10==0)
+                    HubTelemetry.PublishTimerSnapshot(await store.MetricsAsync(token));
                 if(fired>0)logger.LogDebug("Hub scheduler fired {Fired} timers",fired);
             }
             catch(OperationCanceledException) when(token.IsCancellationRequested){}

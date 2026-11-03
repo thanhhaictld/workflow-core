@@ -7,11 +7,11 @@ The original Workflow Core projects remain untouched under repository `src/` and
 
 ```text
 scaling/
-├── WorkflowCore.Scaling.slnx       # 10 scaling projects
+├── WorkflowCore.Scaling.slnx       # scaling projects
 ├── src/                            # Hub, Gateway, Telemetry, PostgreSQL runtime
 ├── tests/                          # PostgreSQL integration tests
 └── sample/
-    └── onboarding/                 # Gateway host, monitor API, workers, samples, load test
+    └── onboarding/                 # Gateway host, Processor and Provisioner, API, samples, load test
 ```
 
 Build the new projects without loading the upstream solution:

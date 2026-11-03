@@ -1,6 +1,6 @@
 # Architecture decision and implementation plan — Hub-owned embedded scheduler
 
-Status: **PROPOSED, NOT IMPLEMENTED**
+Status: **IMPLEMENTATION IN PROGRESS** (see [implementation runbook](hub-remote-scheduler-implementation.md)); full native IWorkflow<T> adapter and production hardening remain outstanding.
 Base branch: `refactor/scaling-project-layout`
 Scope: replace the current Hub-owned demo activity chain with an infrastructure-only REST/SSE Hub, an independent code-first Workflow Processor host, an Activity/Provisioner host, and a durable scheduler **in the Hub process**.
 Primary decision: schedule execution is a separate .NET module, but initially **not** a separate deployment.

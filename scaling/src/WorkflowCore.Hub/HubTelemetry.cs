@@ -23,6 +23,20 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_workflows_failed", "{workflow}");
     public static readonly Histogram<double> WorkflowDuration =
         Meter.CreateHistogram<double>("workflow_hub_workflow_duration_seconds", "s");
+    private static long _pendingTimers;
+    private static long _dueTimers;
+    private static readonly ObservableGauge<long> TimerPending =
+        Meter.CreateObservableGauge("workflow_hub_timer_pending",
+            () => Volatile.Read(ref _pendingTimers), "{timer}");
+    private static readonly ObservableGauge<long> TimerDue =
+        Meter.CreateObservableGauge("workflow_hub_timer_due",
+            () => Volatile.Read(ref _dueTimers), "{timer}");
+    public static void PublishTimerSnapshot(HubRemoteTimerMetrics metrics)
+    {
+        Interlocked.Exchange(ref _pendingTimers, metrics.Pending);
+        Interlocked.Exchange(ref _dueTimers, metrics.Due);
+    }
+
     public static readonly Counter<long> TimerFired =
         Meter.CreateCounter<long>("workflow_hub_timer_fired", "{timer}");
     public static readonly Histogram<double> TimerFireLag =
