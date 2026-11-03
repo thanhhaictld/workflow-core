@@ -25,6 +25,13 @@ public sealed record HubWorkflowOverview(long Total, long Ready, long Running,
     long Completed, long Failed, long Created24h, long Completed24h);
 public sealed record HubRecentRun(string RunId, long Total, long Ready, long Running,
     long Completed, long Failed, DateTime LastCreatedAt);
+public sealed record HubWorkflowTraceAttempt(
+    long Epoch, int AttemptNumber, string WorkerId,
+    DateTime ClaimedAt, DateTime? FinishedAt, string Outcome);
+public sealed record HubWorkflowTraceStep(
+    int StepIndex, Guid TaskId, string ActivityType, int Version,
+    string State, DateTime? ReadyAt,
+    IReadOnlyList<HubWorkflowTraceAttempt> Attempts);
 public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
     string ActivityType, int Attempts, string EventType, DateTime OccurredAt,
     JsonElement? Payload);
@@ -228,6 +235,20 @@ public sealed class HubWorkflowStore(
             complete.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = result;
             if (await complete.ExecuteNonQueryAsync(ct) != 1) return false;
         }
+        // Persist completion of this exact fenced lease in the same transaction
+        // as step/result commit. Historic pre-migration tasks can have no row.
+        await using (var attempt = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task_attempt
+            SET finished_at=clock_timestamp(),outcome='Completed'
+            WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
+              AND finished_at IS NULL
+            """, db, tx))
+        {
+            attempt.Parameters.AddWithValue("id", taskId);
+            attempt.Parameters.AddWithValue("epoch", epoch);
+            attempt.Parameters.AddWithValue("owner", owner);
+            await attempt.ExecuteNonQueryAsync(ct);
+        }
         await using (var progress = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_workflow
             SET next_step=@next,
@@ -312,6 +333,20 @@ public sealed class HubWorkflowStore(
             fail.Parameters.AddWithValue("epoch", epoch);
             if (await fail.ExecuteNonQueryAsync(ct) != 1) return false;
         }
+        await using (var attempt = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task_attempt
+            SET finished_at=clock_timestamp(),
+                outcome=CASE WHEN @dead THEN 'Failed' ELSE 'RetryScheduled' END
+            WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
+              AND finished_at IS NULL
+            """, db, tx))
+        {
+            attempt.Parameters.AddWithValue("id", taskId);
+            attempt.Parameters.AddWithValue("epoch", epoch);
+            attempt.Parameters.AddWithValue("owner", owner);
+            attempt.Parameters.AddWithValue("dead", dead);
+            await attempt.ExecuteNonQueryAsync(ct);
+        }
         if (dead)
         {
             await using var terminate = new NpgsqlCommand("""
@@ -378,6 +413,72 @@ public sealed class HubWorkflowStore(
             JsonDocument.Parse(reader.GetString(8)).RootElement.Clone(),
             reader.IsDBNull(9) ? null : reader.GetString(9),
             reader.GetDateTime(10),reader.IsDBNull(11) ? null : reader.GetDateTime(11));
+    }
+
+    /// <summary>
+    /// A durable lease-based trace waterfall. ClaimedAt is persisted by the Hub
+    /// when it fences and assigns a task. It is NOT necessarily the precise
+    /// remote handler start (which belongs to OpenTelemetry worker spans).
+    /// Historic workflows without attempt rows have no fabricated bars.
+    /// </summary>
+    public async Task<IReadOnlyList<HubWorkflowTraceStep>> TraceAsync(Guid id,
+        CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT t.workflow_step,t.id,t.task_type,t.task_version,t.state,
+                   CASE WHEN t.workflow_step=0 THEN w.created_at
+                     ELSE (SELECT max(h.occurred_at)
+                           FROM wfc_scale.hub_workflow_history h
+                           WHERE h.workflow_id=t.workflow_id
+                             AND h.step_index=t.workflow_step-1
+                             AND h.event_type='StepCompleted') END AS ready_at,
+                   a.epoch,a.attempt_number,a.worker_id,
+                   a.claimed_at,a.finished_at,a.outcome
+            FROM wfc_scale.hub_task t
+            JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+            LEFT JOIN wfc_scale.hub_task_attempt a ON a.task_id=t.id
+            WHERE t.workflow_id=@id AND t.workflow_step IS NOT NULL
+            ORDER BY t.workflow_step,a.epoch
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        var grouped = new List<HubWorkflowTraceStep>();
+        var attempts = new List<HubWorkflowTraceAttempt>();
+        int previousIndex = -1;
+        Guid taskId = default;
+        string activity = "";
+        int version = 0;
+        string state = "";
+        DateTime? readyAt = null;
+        void Flush()
+        {
+            if (previousIndex < 0) return;
+            grouped.Add(new(previousIndex, taskId, activity, version,
+                state, readyAt, attempts.ToArray()));
+            attempts.Clear();
+        }
+        string[] states = ["Ready", "Leased", "Completed", "Failed"];
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            int index = reader.GetInt32(0);
+            if (index != previousIndex)
+            {
+                Flush();
+                previousIndex = index;
+                taskId = reader.GetGuid(1);
+                activity = reader.GetString(2);
+                version = reader.GetInt32(3);
+                state = states[reader.GetInt16(4)];
+                readyAt = reader.IsDBNull(5) ? null : reader.GetDateTime(5);
+            }
+            if (!reader.IsDBNull(6))
+                attempts.Add(new(reader.GetInt64(6),reader.GetInt32(7),
+                    reader.GetString(8),reader.GetDateTime(9),
+                    reader.IsDBNull(10) ? null : reader.GetDateTime(10),
+                    reader.GetString(11)));
+        }
+        Flush();
+        return grouped;
     }
 
     public async Task<IReadOnlyList<HubWorkflowHistoryEntry>> HistoryAsync(Guid id,
