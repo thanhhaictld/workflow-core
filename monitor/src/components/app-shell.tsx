@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, BookOpen, ChevronRight, CircleHelp, GitBranch, Gauge, Layers3, ListTree, Menu, Moon, Sun, X } from "lucide-react";
+import { Activity, BookOpen, ChevronRight, CircleHelp, GitBranch, Layers3, ListTree, Menu, Moon, Sun, X } from "lucide-react";
 import { Button, cn } from "./ui";
 
 const documentation = "https://github.com/thanhhaictld/workflow-core/blob/feat/workflow-monitor-dashboard/scaling/docs/execution-history.md";
@@ -12,7 +12,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isDetail = /^\/workflows\/[^/]+/.test(pathname);
   const isDefinitions = pathname.startsWith("/definitions");
-  const isHub = pathname.startsWith("/hub");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dark, setDark] = useState(false);
 
@@ -61,11 +60,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             isDefinitions ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
           <Layers3 size={17} /><span>Workflow definitions</span><ChevronRight size={15} className="ml-auto opacity-50" />
         </Link>
-        <Link href="/hub" onClick={() => setSidebarOpen(false)}
-          className={cn("mt-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
-            isHub ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
-          <Gauge size={17} /><span>Hub runs</span><ChevronRight size={15} className="ml-auto opacity-50" />
-        </Link>
         <div className="mt-8 px-3 pb-3 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Resources</div>
         <a href={documentation} target="_blank" rel="noreferrer"
           className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted">
@@ -90,7 +84,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex min-w-0 items-center gap-2 truncate text-sm">
             <span className="hidden text-muted-foreground sm:inline">Monitor</span>
             <ChevronRight size={14} className="hidden text-muted-foreground sm:inline" />
-            <span className="font-medium">{isHub ? "Hub runs" : isDefinitions ? "Definition management" : isDetail ? "Execution detail" : "Workflow runs"}</span>
+            <span className="font-medium">{isDefinitions ? "Definition management" : isDetail ? "Execution detail" : "Workflow runs"}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
