@@ -109,6 +109,52 @@ jobs:
           assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
           print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
           PY
+      - name: Verify unified workflow list, Hub filtering and durable step history
+        run: |
+          set -euo pipefail
+          # One legacy instance creates a mixed-source monitor feed.
+          curl --fail-with-body -fsS -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"tenantId":"smoke-legacy-otel","organizationName":"Smoke Test"}' \
+            http://127.0.0.1:5000/api/demo/onboardings > /tmp/legacy-created.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&take=10&page=2' > /tmp/unified-hub-page2.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=legacy' > /tmp/unified-legacy.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=all' > /tmp/unified-all.json
+          python3 - <<'PY'
+          import json
+          hub=json.load(open('/tmp/unified-hub.json'))
+          p2=json.load(open('/tmp/unified-hub-page2.json'))
+          legacy=json.load(open('/tmp/unified-legacy.json'))
+          combined=json.load(open('/tmp/unified-all.json'))
+          assert hub['total']>=20, hub
+          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in hub['items'])
+          assert p2['items'] and p2['total']>=20
+          assert legacy['total']>=1, legacy
+          assert all(x['source']=='legacy' for x in legacy['items'])
+          assert combined['total']>=21 and combined['total']==hub['total']+legacy['total']
+          assert {'hub','legacy','onboarding'}.issubset({'hub','legacy',*combined['hubs']})
+          assert any(x['source']=='legacy' for x in combined['items'])
+          assert any(x['source']=='hub' for x in combined['items'])
+          print('PASS: unified list returns both sources and hub/status/pagination filters')
+          open('/tmp/hub-workflow-id','w').write(hub['items'][0]['id'])
+          PY
+          workflow_id="$(cat /tmp/hub-workflow-id)"
+          curl --fail-with-body -fsS "http://127.0.0.1:3002/api/hub-workflows/$workflow_id" > /tmp/unified-hub-trace.json
+          curl --fail-with-body -fsS "http://127.0.0.1:3002/workflows/$workflow_id?source=hub" > /tmp/unified-hub-trace.html
+          python3 - <<'PY'
+          import json
+          result=json.load(open('/tmp/unified-hub-trace.json'))
+          w=result['workflow']
+          history=result['history']
+          assert w['state']=='Complete'
+          assert w['nextStep']==3 and w['stepCount']==3
+          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2]
+          assert [e['activityType'] for e in history if e['eventType']=='StepCompleted']==[
+            'validate-tenant','provision-tenant','send-welcome']
+          assert result['definition']['steps'][0]['activityType']=='validate-tenant'
+          print('PASS: Hub workflow opens in existing detail route with named, ordered history')
+          PY
       - name: Verify OTLP Hub metrics and Prometheus remote-write samples
         run: |
           set -euo pipefail
