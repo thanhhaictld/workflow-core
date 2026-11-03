@@ -97,7 +97,9 @@ public static class HubGatewayEndpoints
             if (request.Hubs is null || request.Capabilities is null ||
                 request.MaxTasks is < 1 or > 32 ||
                 request.Hubs.Any(x => string.IsNullOrWhiteSpace(x) || x.Length > 80) ||
-                request.Capabilities.Any(x => x.Version < 1 || string.IsNullOrWhiteSpace(x.TaskType)))
+                request.Capabilities.Any(x => x.Version < 1 || string.IsNullOrWhiteSpace(x.HubId) ||
+                    string.IsNullOrWhiteSpace(x.TaskType) || x.HubId.Length > 80 ||
+                    x.TaskType.Length > 80))
                 return Results.BadRequest(new { error = "Invalid worker capabilities" });
             try
             {
