@@ -485,11 +485,20 @@ public sealed class HubWorkflowStore(
         CancellationToken ct)
     {
         await using var cmd = DataSource.CreateCommand("""
-            SELECT h.step_index,h.task_id,t.task_type,t.attempts,
-                   h.event_type,h.occurred_at,h.payload::text
-            FROM wfc_scale.hub_workflow_history h
-            JOIN wfc_scale.hub_task t ON t.id=h.task_id
-            WHERE h.workflow_id=@id ORDER BY h.occurred_at,h.step_index,h.task_id
+            SELECT step_index,task_id,activity_type,attempts,event_type,
+                   occurred_at,payload
+            FROM (
+                SELECT h.step_index,h.task_id,t.task_type AS activity_type,t.attempts,
+                       h.event_type,h.occurred_at,h.payload::text AS payload
+                FROM wfc_scale.hub_workflow_history h
+                JOIN wfc_scale.hub_task t ON t.id=h.task_id
+                WHERE h.workflow_id=@id
+                UNION ALL
+                SELECT e.step_index,COALESCE(e.task_id,'00000000-0000-0000-0000-000000000000'::uuid),
+                       e.activity_type,0,e.event_type,e.occurred_at,e.payload::text
+                FROM wfc_scale.hub_workflow_event e
+                WHERE e.workflow_id=@id
+            ) h ORDER BY occurred_at,step_index,task_id
             """);
         cmd.Parameters.AddWithValue("id", id);
         var items = new List<HubWorkflowHistoryEntry>();
