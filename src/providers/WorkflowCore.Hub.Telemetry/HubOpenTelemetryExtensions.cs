@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -36,7 +37,8 @@ public static class HubOpenTelemetryExtensions
                 .AddService(serviceName, serviceVersion: "1.0.0", serviceInstanceId: instance))
             .WithMetrics(metrics =>
             {
-                metrics.AddMeter(HubTelemetry.MeterName, "WorkflowCore.Hub.Process")
+                metrics.AddMeter(HubTelemetry.MeterName, "WorkflowCore.Hub.Process",
+                        "WorkflowCore.Distributed", "Npgsql")
                     .AddRuntimeInstrumentation()
                     .AddHttpClientInstrumentation();
 
@@ -51,7 +53,7 @@ public static class HubOpenTelemetryExtensions
             })
             .WithTracing(tracing =>
             {
-                tracing.AddSource(HubTelemetry.ActivitySourceName)
+                tracing.AddSource(HubTelemetry.ActivitySourceName, "WorkflowCore.Distributed")
                     .AddHttpClientInstrumentation();
 
                 if (httpServer)
