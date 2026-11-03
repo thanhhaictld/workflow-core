@@ -11,6 +11,7 @@ const TOTAL = Math.max(1, Number(__ENV.K6_WORKFLOWS || 1000));
 const VUS = Math.max(1, Number(__ENV.K6_VUS || 100));
 const TIMEOUT = Math.max(15, Number(__ENV.K6_MAX_WAIT_SECONDS || 180));
 const MODE = __ENV.K6_MODE || "e2e";
+const DEFINITION = __ENV.K6_DEFINITION || "tenant-onboarding";
 
 const starts = new Counter("hub_workflows_started");
 const completed = new Counter("hub_workflows_completed");
@@ -60,7 +61,7 @@ export default function (data) {
   const tenant = data.runId + "-tenant-" + index;
   const body = JSON.stringify({
     hubId: "onboarding",
-    definitionId: "tenant-onboarding",
+    definitionId: DEFINITION,
     version: 1,
     runId: data.runId,
     idempotencyKey: data.runId + ":" + index,
@@ -106,11 +107,17 @@ export default function (data) {
 
     if (result.state === "Complete") {
       const outcome = check(result, {
-        "all three workflow steps completed": r =>
-          r.nextStep === 3 && r.stepCount === 3 &&
-          r.results["0"].validated === true &&
-          r.results["1"].provisioned === true &&
-          r.results["2"].welcomeSent === true,
+        "all workflow steps completed": r =>
+          DEFINITION === "tenant-onboarding-timer"
+            ? r.nextStep === 4 && r.stepCount === 4 &&
+              r.results["0"].validated === true &&
+              r.results["1"].timerFired === true &&
+              r.results["2"].provisioned === true &&
+              r.results["3"].welcomeSent === true
+            : r.nextStep === 3 && r.stepCount === 3 &&
+              r.results["0"].validated === true &&
+              r.results["1"].provisioned === true &&
+              r.results["2"].welcomeSent === true,
       });
       if (outcome) {
         completed.add(1);

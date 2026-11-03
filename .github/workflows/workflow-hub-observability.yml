@@ -132,6 +132,42 @@ jobs:
           assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
           print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
           PY
+      - name: Verify embedded timer scheduler and durable wait history
+        run: |
+          python3 - <<'PY'
+          import json,time,urllib.request
+          url='http://127.0.0.1:5100/api/hub/'
+          token='ci-local-hub-secret-please-change-2026'
+          def call(method,path,body=None):
+            data=json.dumps(body).encode() if body is not None else None
+            req=urllib.request.Request(url+path,data=data,method=method,headers={
+              'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+            with urllib.request.urlopen(req,timeout=10) as resp:
+              return json.load(resp)
+          body={
+            'hubId':'onboarding','definitionId':'tenant-onboarding-timer','version':1,
+            'runId':'ci-durable-timer','idempotencyKey':'ci-timer-once',
+            'input':{'tenantId':'ci-timer-tenant','organizationName':'Timer regression'}
+          }
+          workflow=call('POST','workflows',body)['workflowId']
+          deadline=time.monotonic()+50
+          while time.monotonic()<deadline:
+            state=call('GET','workflows/'+workflow)
+            if state['state'] in ('Complete','Failed'):break
+            time.sleep(.5)
+          assert state['state']=='Complete',state
+          assert state['stepCount']==4 and state['nextStep']==4
+          assert state['results']['1']['timerFired'] is True
+          history=call('GET','workflows/'+workflow+'/history')
+          scheduled=[e for e in history if e['eventType']=='TimerScheduled']
+          fired=[e for e in history if e['eventType']=='TimerFired']
+          assert len(scheduled)==len(fired)==1, history
+          assert scheduled[0]['stepIndex']==fired[0]['stepIndex']==1
+          assert fired[0]['occurredAt']>=scheduled[0]['occurredAt']
+          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,2,3]
+          assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
+          print('PASS: external processor + activity host + co-hosted scheduler + durable timer journal')
+          PY
       - name: Verify unified workflow list, Hub filtering and durable step history
         run: |
           set -euo pipefail

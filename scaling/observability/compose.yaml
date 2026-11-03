@@ -252,6 +252,7 @@ services:
       HUB_URL: http://hub:5100
       HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
       K6_WORKFLOWS: ${K6_WORKFLOWS:-1000}
+      K6_DEFINITION: ${K6_DEFINITION:-tenant-onboarding}
       K6_VUS: ${K6_VUS:-100}
       K6_MAX_WAIT_SECONDS: ${K6_MAX_WAIT_SECONDS:-180}
       K6_RUN_ID: ${K6_RUN_ID:-}
