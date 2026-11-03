@@ -57,15 +57,18 @@ docker compose -f scaling/observability/compose.yaml --env-file scaling/observab
 The migrate container applies SQL migrations 002–008, followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
-instance but separate workflow state tables. The Next.js /backend rewrite
-targets the legacy API, while its Hub Runs page uses a server-side
-authenticated proxy to the Hub (the browser never sees the Hub bearer token).
+instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
+runs page merges both persistence backends through server-side APIs (the
+browser never sees the Hub bearer token).
 The volume is isolated from the previous scaling/compose.monitor.yaml stack.
 
 | Service | Local URL |
 | --- | --- |
 | Next.js workflow monitor | http://localhost:3002 |
-| Hub Runs in Next.js | http://localhost:3002/hub |
+| Unified Workflow runs (all sources) | http://localhost:3002/workflows |
+| Only Hub workflows | http://localhost:3002/workflows?hub=hub |
+| Onboarding business Hub only | http://localhost:3002/workflows?hub=onboarding |
+| Legacy workflows only | http://localhost:3002/workflows?hub=legacy |
 | Legacy Workflow Core monitor API | http://localhost:5000/health/ready |
 | Grafana | http://localhost:3001 |
 | Workflow Hub Grafana dashboard | http://localhost:3001/d/workflow-hub-otel |
@@ -76,12 +79,14 @@ The volume is isolated from the previous scaling/compose.monitor.yaml stack.
 
 Grafana credentials: GRAFANA_USER and GRAFANA_PASSWORD from .env.
 
-**Two workflow views:** /workflows and /definitions show the existing
-Workflow Core IWorkflow<T> runtime, including its execution history and
-code-first metadata. /hub shows live recent Hub activity-chain runs,
-readiness/lease/dead-letter counts and PostgreSQL session usage while k6 runs.
-These are deliberately different execution engines; the existing monitor
-does not automatically reinterpret Hub workflows as legacy workflow pointers.
+**One workflow list:** /workflows lists legacy and Hub executions together,
+sorted newest-first with a Hub filter (All, Legacy, All Hubs, individual hub).
+Each Hub row opens /workflows/{id}?source=hub, showing its true durable
+StepCompleted/StepRetryScheduled/StepFailed events and step results; legacy
+rows retain their existing detailed Workflow Core execution trace.
+Hub-generated workflows are not invented or copied into legacy journals.
+The old /hub URL redirects to /workflows?hub=hub.
+
 The monitor API's embedded legacy worker is disabled by default so it
 does not compete for database connections during Hub stress tests.
 To run the legacy demo executor, set MONITOR_EMBEDDED_WORKER=true in .env.
