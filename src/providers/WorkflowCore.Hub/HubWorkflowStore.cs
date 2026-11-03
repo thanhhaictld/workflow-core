@@ -443,7 +443,7 @@ public sealed class HubWorkflowStore(
             SELECT id,hub_id,definition_id,definition_version,run_id,state,
                    next_step,step_count,last_error,created_at,completed_at
             FROM wfc_scale.hub_workflow
-            """ + where + " ORDER BY created_at DESC, id DESC LIMIT @take OFFSET @offset");
+            """ + " " + where + " ORDER BY created_at DESC, id DESC LIMIT @take OFFSET @offset");
         listing.Parameters.AddWithValue("take", take);
         listing.Parameters.AddWithValue("offset", (page - 1) * take);
         var records = new List<HubWorkflowListItem>();
