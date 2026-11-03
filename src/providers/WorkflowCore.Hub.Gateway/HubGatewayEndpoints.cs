@@ -18,6 +18,12 @@ public static class HubGatewayEndpoints
             ? Math.Clamp(max, 1, 100) : 12;
         services.AddSingleton(new HubTaskStore(connectionString, maxConnections));
         services.AddSingleton(new HubPolicyRegistry()
+            .Register("onboarding", "validate-tenant", 1, 32, policy => policy
+                .MaxHubConcurrency(100)
+                .MaxActivityConcurrency(100))
+            .Register("onboarding", "send-welcome", 1, 32, policy => policy
+                .MaxHubConcurrency(100)
+                .MaxActivityConcurrency(100))
             .Register("onboarding", "provision-tenant", 1, 32, policy => policy
                 .MaxHubConcurrency(100)
                 .MaxActivityConcurrency(20)
@@ -28,6 +34,12 @@ public static class HubGatewayEndpoints
             .Register("billing", "capture-payment", 1, 32, policy => policy
                 .MaxHubConcurrency(64)
                 .LimitBy("account", 2, body => StringKey(body, "accountId"))));
+        services.AddSingleton(new HubWorkflowRegistry()
+            .Register("onboarding", "tenant-onboarding", 1, 32, builder => builder
+                .Activity("validate-tenant")
+                .Then("provision-tenant")
+                .Then("send-welcome")));
+        services.AddSingleton<HubWorkflowStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
         return services;
@@ -56,6 +68,50 @@ public static class HubGatewayEndpoints
 
         routes.MapGet("/policies", (HubPolicyRegistry registry) =>
             Results.Ok(registry.Describe()));
+        routes.MapGet("/definitions", (HubWorkflowRegistry registry) =>
+            Results.Ok(registry.Describe()));
+
+        routes.MapPost("/workflows", async (
+            HubWorkflowStartRequest request, HubWorkflowStore workflows,
+            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+        {
+            try
+            {
+                var id = await workflows.StartAsync(request, ct);
+                readiness.Publish(request.HubId);
+                return Results.Accepted($"/api/hub/workflows/{id}", new { workflowId = id });
+            }
+            catch (KeyNotFoundException)
+            {
+                return Results.NotFound(new { error = "Unknown code-first Hub workflow" });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
+        routes.MapGet("/workflows/{id:guid}", async (Guid id,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            var workflow = await workflows.GetAsync(id, ct);
+            return workflow is null ? Results.NotFound() : Results.Ok(workflow);
+        });
+        routes.MapGet("/workflows/{id:guid}/history", async (Guid id,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+            Results.Ok(await workflows.HistoryAsync(id, ct)));
+
+        routes.MapGet("/runs/{runId}/summary", async (string runId,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            if (runId.Length is < 1 or > 100)
+                return Results.BadRequest(new { error = "Invalid run identifier" });
+            return Results.Ok(await workflows.SummaryAsync(runId, ct));
+        });
 
         routes.MapPost("/tasks", async (HubEnqueueRequest request,
             HubPolicyRegistry registry, HubTaskStore store,
@@ -122,13 +178,17 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/complete", async (
             Guid id, HubTaskResultRequest request, HubTaskStore store,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubWorkflowStore workflows, HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
-            var done = await store.CompleteAsync(id, request.WorkerId, request.Epoch,
-                request.Result.GetRawText(), ct);
+            var managed = await store.IsManagedWorkflowStepAsync(id, ct);
+            var done = managed
+                ? await workflows.CompleteAsync(id, request.WorkerId, request.Epoch,
+                    request.Result.GetRawText(), ct)
+                : await store.CompleteAsync(id, request.WorkerId, request.Epoch,
+                    request.Result.GetRawText(), ct);
             if (done)
             {
                 var task = await store.GetAsync(id, ct);
@@ -140,13 +200,17 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/fail", async (
             Guid id, HubTaskFailureRequest request, HubTaskStore store,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubWorkflowStore workflows, HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Error) ||
                 request.RetryDelaySeconds is < 0 or > 3600)
                 return Results.BadRequest(new { error = "Invalid retry request" });
-            var failed = await store.FailAsync(id, request.WorkerId, request.Epoch,
-                request.Error, TimeSpan.FromSeconds(request.RetryDelaySeconds), ct);
+            var managed = await store.IsManagedWorkflowStepAsync(id, ct);
+            var failed = managed
+                ? await workflows.FailAsync(id, request.WorkerId, request.Epoch,
+                    request.Error, TimeSpan.FromSeconds(request.RetryDelaySeconds), ct)
+                : await store.FailAsync(id, request.WorkerId, request.Epoch,
+                    request.Error, TimeSpan.FromSeconds(request.RetryDelaySeconds), ct);
             if (failed)
             {
                 var task = await store.GetAsync(id, ct);
