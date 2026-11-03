@@ -32,10 +32,14 @@ builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 });
 builder.Services.AddBenchmarkProvisionDemo();
 builder.Services.AddTenantOnboardingDemo();
+if (Environment.GetEnvironmentVariable("WFC_HUB_ENABLED") == "true")
+    builder.Services.AddHubGateway(connectionString);
 builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
 builder.Services.AddSingleton(sp => new DefinitionCatalog(connectionString,
     sp.GetRequiredService<ILogger<DefinitionCatalog>>()));
 var app = builder.Build();
+if (Environment.GetEnvironmentVariable("WFC_HUB_ENABLED") == "true")
+    app.MapHubGateway();
 
 // The old workflow host is used for definition registration ONLY.
 // Do not call host.Start(): the v2 runtime owns every scheduler and consumer.
