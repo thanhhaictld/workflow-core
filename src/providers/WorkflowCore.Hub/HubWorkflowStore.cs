@@ -1,0 +1,416 @@
+using System.Text.Json;
+using Npgsql;
+using NpgsqlTypes;
+
+namespace WorkflowCore.Hub;
+
+public sealed record HubWorkflowStartRequest(string HubId, string DefinitionId,
+    int Version, JsonElement Input, string? IdempotencyKey = null,
+    string? RunId = null);
+public sealed record HubWorkflowStatus(Guid Id, string HubId, string DefinitionId,
+    int Version, int PartitionId, string State, int NextStep, int StepCount,
+    JsonElement Results, string? Error, DateTime CreatedAt, DateTime? CompletedAt);
+public sealed record HubWorkflowRunSummary(string RunId, long Total, long Ready,
+    long Running, long Completed, long Failed, DateTime? FirstCreatedAt,
+    DateTime? LastCompletedAt);
+public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
+    string EventType, DateTime OccurredAt, JsonElement? Payload);
+
+/// <summary>
+/// Hub-managed durable sequential workflow execution. The gateway alone
+/// accesses PostgreSQL; each activity completion and next-step release is
+/// committed atomically. The same bounded DataSource is shared with HubTaskStore.
+/// </summary>
+public sealed class HubWorkflowStore(
+    HubTaskStore tasks, HubPolicyRegistry policies, HubWorkflowRegistry definitions)
+{
+    private NpgsqlDataSource DataSource => tasks.DataSource;
+
+    public async Task<Guid> StartAsync(HubWorkflowStartRequest request, CancellationToken ct)
+    {
+        var definition = definitions.Get(request.HubId, request.DefinitionId, request.Version)
+            ?? throw new KeyNotFoundException("Unknown code-first Hub workflow");
+        if (request.Input.ValueKind != JsonValueKind.Object ||
+            request.Input.GetRawText().Length > 65536 ||
+            request.IdempotencyKey?.Length > 128 || request.RunId?.Length > 100)
+            throw new ArgumentException("Invalid workflow input, run identifier or idempotency key");
+
+        var routes = definition.Steps.Select(step =>
+            policies.Resolve(definition.HubId, step.ActivityType, step.Version, request.Input))
+            .ToArray();
+        if (routes.Any(route => route.PartitionCount != definition.Partitions))
+            throw new InvalidOperationException("Activity and workflow partition counts differ");
+
+        var resources = routes.SelectMany(route => route.Resources)
+            .GroupBy(resource => resource.Key, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var first = group.First();
+                if (group.Any(other => other.Capacity != first.Capacity ||
+                                       other.StrictFifo != first.StrictFifo))
+                    throw new InvalidOperationException("Inconsistent concurrency policy");
+                return first;
+            }).OrderBy(x => x.Key, StringComparer.Ordinal).ToArray();
+
+        var id = Guid.NewGuid();
+        var partition = HubPartitionRouter.ForWorkflow(id, definition.Partitions);
+        var input = request.Input.GetRawText();
+
+        await using var db = await DataSource.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        await using (var insert = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_workflow
+                (id, hub_id, definition_id, definition_version, partition_id,
+                 input_json, step_count, run_id, idempotency_key)
+            VALUES (@id, @hub, @definition, @version, @partition, @input,
+                    @count, @run, @key)
+            ON CONFLICT DO NOTHING RETURNING id
+            """, db, tx))
+        {
+            insert.Parameters.AddWithValue("id", id);
+            insert.Parameters.AddWithValue("hub", definition.HubId);
+            insert.Parameters.AddWithValue("definition", definition.DefinitionId);
+            insert.Parameters.AddWithValue("version", definition.Version);
+            insert.Parameters.AddWithValue("partition", partition);
+            insert.Parameters.Add("input", NpgsqlDbType.Jsonb).Value = input;
+            insert.Parameters.AddWithValue("count", routes.Length);
+            insert.Parameters.Add("run", NpgsqlDbType.Text).Value =
+                (object?)request.RunId ?? DBNull.Value;
+            insert.Parameters.Add("key", NpgsqlDbType.Text).Value =
+                (object?)request.IdempotencyKey ?? DBNull.Value;
+            var inserted = await insert.ExecuteScalarAsync(ct);
+            if (inserted is null)
+            {
+                if (request.IdempotencyKey is null)
+                    throw new InvalidOperationException("Workflow ID collision");
+                await using var existing = new NpgsqlCommand("""
+                    SELECT id FROM wfc_scale.hub_workflow
+                    WHERE hub_id=@hub AND idempotency_key=@key
+                      AND definition_id=@definition AND definition_version=@version
+                      AND input_json=@input AND run_id IS NOT DISTINCT FROM @run
+                    """, db, tx);
+                existing.Parameters.AddWithValue("hub", definition.HubId);
+                existing.Parameters.AddWithValue("key", request.IdempotencyKey);
+                existing.Parameters.AddWithValue("definition", definition.DefinitionId);
+                existing.Parameters.AddWithValue("version", definition.Version);
+                existing.Parameters.Add("input", NpgsqlDbType.Jsonb).Value = input;
+                existing.Parameters.Add("run", NpgsqlDbType.Text).Value =
+                    (object?)request.RunId ?? DBNull.Value;
+                var previous = await existing.ExecuteScalarAsync(ct);
+                if (previous is null)
+                    throw new InvalidOperationException("Workflow idempotency key payload mismatch");
+                await tx.CommitAsync(ct);
+                return (Guid)previous;
+            }
+        }
+
+        // Register/verify resources under a deterministic lock order, including
+        // strict FIFO keys, before allocating sequence numbers to future tasks.
+        foreach (var resource in resources)
+        {
+            await using (var insert = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
+                VALUES (@key,@limit,@fifo)
+                ON CONFLICT (resource_key) DO NOTHING
+                """, db, tx))
+            {
+                insert.Parameters.AddWithValue("key", resource.Key);
+                insert.Parameters.AddWithValue("limit", resource.Capacity);
+                insert.Parameters.AddWithValue("fifo", resource.StrictFifo);
+                await insert.ExecuteNonQueryAsync(ct);
+            }
+            await using var check = new NpgsqlCommand("""
+                SELECT capacity,strict_fifo FROM wfc_scale.hub_resource
+                WHERE resource_key=@key FOR UPDATE
+                """, db, tx);
+            check.Parameters.AddWithValue("key", resource.Key);
+            await using var reader = await check.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct) ||
+                reader.GetInt32(0) != resource.Capacity ||
+                reader.GetBoolean(1) != resource.StrictFifo)
+                throw new InvalidOperationException("Existing concurrency policy does not match C#");
+        }
+
+        for (var step = 0; step < routes.Length; step++)
+        {
+            var taskId = Guid.NewGuid();
+            await using (var task = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task
+                    (id,hub_id,partition_id,task_type,task_version,workflow_id,
+                     workflow_step,payload,due_at)
+                VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,
+                        @payload,CASE WHEN @first THEN now()
+                                      ELSE 'infinity'::timestamptz END)
+                """, db, tx))
+            {
+                task.Parameters.AddWithValue("id", taskId);
+                task.Parameters.AddWithValue("hub", definition.HubId);
+                task.Parameters.AddWithValue("partition", partition);
+                task.Parameters.AddWithValue("type", routes[step].TaskType);
+                task.Parameters.AddWithValue("version", routes[step].Version);
+                task.Parameters.AddWithValue("workflow", id);
+                task.Parameters.AddWithValue("step", step);
+                task.Parameters.AddWithValue("first", step == 0);
+                task.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = input;
+                await task.ExecuteNonQueryAsync(ct);
+            }
+            foreach (var resource in routes[step].Resources)
+            {
+                await using var relation = new NpgsqlCommand("""
+                    INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
+                    VALUES (@task,@resource)
+                    """, db, tx);
+                relation.Parameters.AddWithValue("task", taskId);
+                relation.Parameters.AddWithValue("resource", resource.Key);
+                await relation.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await tx.CommitAsync(ct);
+        return id;
+    }
+
+    public async Task<bool> CompleteAsync(Guid taskId, string owner, long epoch,
+        string result, CancellationToken ct)
+    {
+        await using var db = await DataSource.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        var task = await LockManagedTaskAsync(db, tx, taskId, ct);
+        if (task is null) return false;
+        if (task.State == 2)
+        {
+            await using var repeat = new NpgsqlCommand("""
+                SELECT 1 FROM wfc_scale.hub_task
+                WHERE id=@id AND state=2 AND last_owner=@owner
+                  AND epoch=@epoch AND result_json=@result
+                """, db, tx);
+            repeat.Parameters.AddWithValue("id", taskId);
+            repeat.Parameters.AddWithValue("owner", owner);
+            repeat.Parameters.AddWithValue("epoch", epoch);
+            repeat.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = result;
+            return await repeat.ExecuteScalarAsync(ct) is not null;
+        }
+        if (task.State != 1 || task.Owner != owner || task.Epoch != epoch ||
+            task.LeaseUntil <= DateTime.UtcNow || task.WorkflowState >= 2 ||
+            task.NextStep != task.Step)
+            return false;
+
+        await using (var complete = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task
+            SET state=2, owner=NULL, lease_until=NULL, updated_at=now(),
+                result_json=@result
+            WHERE id=@id AND state=1 AND owner=@owner AND epoch=@epoch
+              AND lease_until>now()
+            """, db, tx))
+        {
+            complete.Parameters.AddWithValue("id", taskId);
+            complete.Parameters.AddWithValue("owner", owner);
+            complete.Parameters.AddWithValue("epoch", epoch);
+            complete.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = result;
+            if (await complete.ExecuteNonQueryAsync(ct) != 1) return false;
+        }
+        await using (var progress = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_workflow
+            SET next_step=@next,
+                state=CASE WHEN @next=step_count THEN 2 ELSE 1 END,
+                results_json=jsonb_set(results_json, ARRAY[@index],
+                                       @result::jsonb, true),
+                completed_at=CASE WHEN @next=step_count THEN now() ELSE NULL END,
+                updated_at=now()
+            WHERE id=@workflow AND next_step=@step AND state IN (0,1)
+            """, db, tx))
+        {
+            progress.Parameters.AddWithValue("next", task.Step + 1);
+            progress.Parameters.AddWithValue("index", task.Step.ToString());
+            progress.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = result;
+            progress.Parameters.AddWithValue("workflow", task.WorkflowId);
+            progress.Parameters.AddWithValue("step", task.Step);
+            if (await progress.ExecuteNonQueryAsync(ct) != 1) return false;
+        }
+        await using (var history = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_workflow_history
+                (workflow_id,step_index,task_id,event_type,payload)
+            VALUES (@workflow,@step,@task,'StepCompleted',@result)
+            ON CONFLICT DO NOTHING
+            """, db, tx))
+        {
+            history.Parameters.AddWithValue("workflow", task.WorkflowId);
+            history.Parameters.AddWithValue("step", task.Step);
+            history.Parameters.AddWithValue("task", taskId);
+            history.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = result;
+            await history.ExecuteNonQueryAsync(ct);
+        }
+        await using (var next = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task
+            SET due_at=now(), updated_at=now()
+            WHERE workflow_id=@workflow AND workflow_step=@step AND state=0
+              AND due_at='infinity'::timestamptz
+            """, db, tx))
+        {
+            next.Parameters.AddWithValue("workflow", task.WorkflowId);
+            next.Parameters.AddWithValue("step", task.Step + 1);
+            await next.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<bool> FailAsync(Guid taskId, string owner, long epoch,
+        string error, TimeSpan retryDelay, CancellationToken ct)
+    {
+        if (retryDelay < TimeSpan.Zero || retryDelay > TimeSpan.FromHours(1))
+            return false;
+        await using var db = await DataSource.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        var task = await LockManagedTaskAsync(db, tx, taskId, ct);
+        if (task is null || task.State != 1 || task.Owner != owner ||
+            task.Epoch != epoch || task.LeaseUntil <= DateTime.UtcNow ||
+            task.WorkflowState >= 2)
+            return false;
+        var dead = task.Attempts >= task.MaxAttempts;
+        await using (var fail = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task
+            SET state=CASE WHEN @dead THEN 3 ELSE 0 END,
+                owner=NULL,lease_until=NULL,due_at=now()+@delay,
+                last_error=@error,updated_at=now()
+            WHERE id=@id AND state=1 AND owner=@owner AND epoch=@epoch
+              AND lease_until>now()
+            """, db, tx))
+        {
+            fail.Parameters.AddWithValue("dead", dead);
+            fail.Parameters.Add("delay", NpgsqlDbType.Interval).Value = retryDelay;
+            fail.Parameters.AddWithValue("error", error.Length > 1000 ? error[..1000] : error);
+            fail.Parameters.AddWithValue("id", taskId);
+            fail.Parameters.AddWithValue("owner", owner);
+            fail.Parameters.AddWithValue("epoch", epoch);
+            if (await fail.ExecuteNonQueryAsync(ct) != 1) return false;
+        }
+        if (dead)
+        {
+            await using var terminate = new NpgsqlCommand("""
+                UPDATE wfc_scale.hub_workflow
+                SET state=3,last_error=@error,completed_at=now(),updated_at=now()
+                WHERE id=@id AND state IN (0,1)
+                """, db, tx);
+            terminate.Parameters.AddWithValue("id", task.WorkflowId);
+            terminate.Parameters.AddWithValue("error", error.Length > 1000 ? error[..1000] : error);
+            await terminate.ExecuteNonQueryAsync(ct);
+        }
+        await using (var history = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_workflow_history
+                (workflow_id,step_index,task_id,event_type)
+            VALUES (@workflow,@step,@task,@event)
+            ON CONFLICT DO NOTHING
+            """, db, tx))
+        {
+            history.Parameters.AddWithValue("workflow", task.WorkflowId);
+            history.Parameters.AddWithValue("step", task.Step);
+            history.Parameters.AddWithValue("task", taskId);
+            history.Parameters.AddWithValue("event", dead ? "StepFailed" : "StepRetryScheduled");
+            await history.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task ReconcileDeadAsync(CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            UPDATE wfc_scale.hub_workflow w
+            SET state=3,completed_at=now(),updated_at=now(),
+                last_error='Task exhausted its lease/retry limit'
+            WHERE w.state IN (0,1) AND EXISTS (
+                SELECT 1 FROM wfc_scale.hub_task t
+                WHERE t.workflow_id=w.id AND t.workflow_step IS NOT NULL
+                  AND t.state=3
+            )
+            """);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<HubWorkflowStatus?> GetAsync(Guid id, CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT id,hub_id,definition_id,definition_version,partition_id,
+                   state,next_step,step_count,results_json::text,last_error,
+                   created_at,completed_at
+            FROM wfc_scale.hub_workflow WHERE id=@id
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        var states = new[] { "Ready", "Running", "Complete", "Failed" };
+        return new(reader.GetGuid(0),reader.GetString(1),reader.GetString(2),
+            reader.GetInt32(3),reader.GetInt32(4),states[reader.GetInt16(5)],
+            reader.GetInt32(6),reader.GetInt32(7),
+            JsonDocument.Parse(reader.GetString(8)).RootElement.Clone(),
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.GetDateTime(10),reader.IsDBNull(11) ? null : reader.GetDateTime(11));
+    }
+
+    public async Task<IReadOnlyList<HubWorkflowHistoryEntry>> HistoryAsync(Guid id,
+        CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT step_index,task_id,event_type,occurred_at,payload::text
+            FROM wfc_scale.hub_workflow_history
+            WHERE workflow_id=@id ORDER BY step_index,occurred_at
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        var items = new List<HubWorkflowHistoryEntry>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            items.Add(new(reader.GetInt32(0),reader.GetGuid(1),reader.GetString(2),
+                reader.GetDateTime(3),reader.IsDBNull(4) ? null :
+                JsonDocument.Parse(reader.GetString(4)).RootElement.Clone()));
+        return items;
+    }
+
+    public async Task<HubWorkflowRunSummary> SummaryAsync(string runId, CancellationToken ct)
+    {
+        await using var cmd = DataSource.CreateCommand("""
+            SELECT count(*),
+                   count(*) FILTER (WHERE state=0),
+                   count(*) FILTER (WHERE state=1),
+                   count(*) FILTER (WHERE state=2),
+                   count(*) FILTER (WHERE state=3),
+                   min(created_at),max(completed_at)
+            FROM wfc_scale.hub_workflow
+            WHERE run_id=@run
+            """);
+        cmd.Parameters.AddWithValue("run", runId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Summary unavailable");
+        return new(runId, reader.GetInt64(0),reader.GetInt64(1),
+            reader.GetInt64(2),reader.GetInt64(3),reader.GetInt64(4),
+            reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6));
+    }
+
+    // Lock task and its workflow in the same transaction. The order prevents
+    // concurrent completion/failure from changing the same pointer twice.
+    private static async Task<ManagedTask?> LockManagedTaskAsync(
+        NpgsqlConnection db, NpgsqlTransaction tx, Guid id, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand("""
+            SELECT t.workflow_id,t.workflow_step,t.state,t.owner,t.epoch,
+                   t.lease_until,t.attempts,t.max_attempts,
+                   w.state,w.next_step
+            FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w
+              ON w.id=t.workflow_id
+            WHERE t.id=@id AND t.workflow_step IS NOT NULL
+            FOR UPDATE OF t,w
+            """, db, tx);
+        cmd.Parameters.AddWithValue("id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new(reader.GetGuid(0),reader.GetInt32(1),reader.GetInt16(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),reader.GetInt64(4),
+            reader.IsDBNull(5) ? DateTime.MinValue : reader.GetDateTime(5),
+            reader.GetInt32(6),reader.GetInt32(7),reader.GetInt16(8),
+            reader.GetInt32(9));
+    }
+
+    private sealed record ManagedTask(Guid WorkflowId, int Step, short State,
+        string? Owner, long Epoch, DateTime LeaseUntil, int Attempts,
+        int MaxAttempts, short WorkflowState, int NextStep);
+}
