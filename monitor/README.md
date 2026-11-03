@@ -7,8 +7,10 @@ Read-only monitoring UI for the distributed PostgreSQL Workflow Core runtime.
   https://github.com/shadcnstudio/shadcn-nextjs-admincn-admin-template-free)
   color tokens and dashboard layout. The full upstream template and its
   unrelated CRM/mail/calendar pages are **not** copied.
-- **Workflow runs:** status cards, search by instance GUID/definition/reference,
-  status filter, server-side pagination, manual/15-second refresh.
+- **Workflow runs:** a single sorted list of legacy Workflow Core and remote Hub
+  workflows, filter by legacy/any Hub/individual business Hub, search, status,
+  paginated results, manual/15-second refresh. Hub rows open a dedicated
+  durable step-history view in the same /workflows/{id} route.
 - **Execution detail:** definition-based interactive workflow flow diagram, current workflow status, elapsed time, correlation IDs,
   retries/errors, a per-attempt waterfall similar to Temporal's trace view,
   step-span inspector, complete paginated journal, execution pointers, and
@@ -281,3 +283,28 @@ https://github.com/shadcnstudio/shadcn-nextjs-admincn-admin-template-free
 This monitor copies/adapts the free template's public theme conventions.
 It does not redistribute NexaCRM (paid) or imply affiliation with Shadcn
 Studio.
+
+## Unified Hub monitoring (observability Compose)
+
+The observability Compose stack provides both the legacy API and the
+authenticated Workflow Hub. Open /workflows at http://localhost:3002;
+use the **Filter by hub** select for All hubs + legacy, Legacy Workflow
+Core, All Workflow Hubs, or a specific Hub namespace such as onboarding.
+The old /hub URL redirects to the same list with hub=hub selected.
+
+Hub rows show the business Hub label and link to the same workflow detail
+path with ?source=hub. The detail displays real durable step completions,
+retries and failures from the Hub's journal and the versioned, code-first
+activity sequence. It does not invent legacy execution pointers, heartbeat
+events or attempt start timestamps. Legacy rows keep the existing
+Temporal-style flow and paginated execution history.
+
+Next.js server-side routes /api/workflow-feed and
+/api/hub-workflows/{id} protect the Hub bearer token. Search, status and
+pagination are resolved across the backends before merging. The current
+aggregator fetches a bounded prefix of both lists for global pagination;
+this is intended for the local lab, not unbounded production history.
+Enable authentication, per-tenant authorization and keyset pagination
+before exposing the monitor to external users.
+
+See ../scaling/observability/README.md for Docker Compose and k6 usage.
