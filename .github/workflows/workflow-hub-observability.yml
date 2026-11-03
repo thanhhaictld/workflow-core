@@ -153,6 +153,22 @@ jobs:
           assert [e['activityType'] for e in history if e['eventType']=='StepCompleted']==[
             'validate-tenant','provision-tenant','send-welcome']
           assert result['definition']['steps'][0]['activityType']=='validate-tenant'
+          spans=result['trace']
+          assert len(spans)==3, spans
+          assert [s['stepIndex'] for s in spans]==[0,1,2]
+          assert [s['activityType'] for s in spans]==[
+            'validate-tenant','provision-tenant','send-welcome']
+          assert all(len(s['attempts'])>=1 for s in spans), spans
+          assert all(
+            a['outcome']=='Completed' and a['claimedAt'] and a['finishedAt']
+            for s in spans for a in s['attempts']
+          ), spans
+          assert all(
+            a['finishedAt']>=a['claimedAt']
+            for s in spans for a in s['attempts']
+          )
+          assert all(s['readyAt'] is not None for s in spans)
+          print('PASS: Hub waterfall has real claim/finish durations across 3 activities')
           print('PASS: Hub workflow opens in existing detail route with named, ordered history')
           PY
       - name: Verify OTLP Hub metrics and Prometheus remote-write samples
