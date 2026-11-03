@@ -57,7 +57,7 @@ jobs:
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
       - name: Build and launch local OTEL / Grafana / workflow stack
         run: |
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale worker=2
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale provisioner=2
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
       - name: Verify Hub, legacy monitoring API, Next.js UI and Grafana readiness
         run: |
@@ -97,6 +97,27 @@ jobs:
           assert len(x['dashboard']['panels']) >= 16
           print('Grafana provisioned dashboard verified.')
           PY
+      - name: Verify remote workflow metadata registered through REST
+        run: |
+          set -euo pipefail
+          for i in {1..40}; do
+            curl -fsS -H "Authorization: Bearer ci-local-hub-secret-please-change-2026" http://127.0.0.1:5100/api/hub/definitions > /tmp/remote-definitions.json
+            if python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/remote-definitions.json'))
+          assert any(d['definitionId']=='tenant-onboarding' for d in defs)
+          assert any(d['definitionId']=='tenant-onboarding-timer' for d in defs)
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/remote-definitions.json'))
+          assert any(d['definitionId']=='tenant-onboarding' for d in defs)
+          print('PASS: externally published workflow definitions are durable and visible')
+          PY
+
       - name: Run real 20-workflow k6 E2E test and send data to Prometheus
         run: |
           chmod 0777 scaling/observability/results
