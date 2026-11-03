@@ -187,3 +187,108 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  hub-load-1000:
+    name: Hub — 1000 concurrent 3-step workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      WFC_PG: Host=127.0.0.1;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only;Timeout=45
+      WFC_HUB_URL: http://127.0.0.1:5100
+      WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
+      WFC_HUB_DB_POOL: '12'
+      WFC_LOAD_COUNT: '1000'
+      WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
+      WFC_LOAD_RUN_ID: ci-hub-1000-perf
+      WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
+      WFC_LOAD_TIMEOUT_SECONDS: '360'
+      PGPASSWORD: workflow_dev_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare isolated Hub database
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+      - name: Build Hub, remote worker and performance harness
+        run: |
+          dotnet build src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
+          dotnet build src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+          dotnet build src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
+      - name: Stage 1000 workflows, then execute all via DB-free workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --no-build -c Release \
+            --project src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
+            --urls http://127.0.0.1:5100 > /tmp/perf-hub.log 2>&1 &
+          hub_pid=$!
+          worker_pids=''
+          cleanup() {
+            kill "$hub_pid" 2>/dev/null || true
+            for p in $worker_pids; do kill "$p" 2>/dev/null || true; done
+          }
+          trap cleanup EXIT
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5100/health/ready
+          # No workers yet: all 1000 workflow instances must be durably pending.
+          if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
+            --project src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            tail -150 /tmp/perf-hub.log
+            exit 1
+          fi
+          for i in 1 2 3 4; do
+            # No PostgreSQL credential is available to the remote workers.
+            env -u WFC_PG WORKERS=32 dotnet run --no-build -c Release \
+              --project src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
+              > "/tmp/perf-worker-$i.log" 2>&1 &
+            worker_pids="$worker_pids $!"
+          done
+          if ! WFC_LOAD_PHASE=verify dotnet run --no-build -c Release \
+            --project src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            tail -150 /tmp/perf-hub.log
+            for i in 1 2 3 4; do tail -100 "/tmp/perf-worker-$i.log"; done
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          report = json.load(open('/tmp/workflow-hub-1000.json'))
+          assert report['valid'] and report['completedWorkflows'] == 1000
+          assert report['peakSimultaneousPending'] == 1000
+          assert report['verifiedWorkflowHistories'] >= 10
+          # A 12-connection Hub pool plus diagnostic and PostgreSQL service overhead.
+          assert report['peakDatabaseConnections'] <= 24, report
+          print('PASS: 1000 complete code-first remote workflows; 3000 steps; bounded DB pool')
+          print('Throughput:', report['processingThroughputWorkflowsPerSecond'])
+          print('Workflow p95 (ms):', report['completionLatencyP95Ms'])
+          print('Peak DB sessions:', report['peakDatabaseConnections'])
+          PY
+      - name: Upload reproducible benchmark result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workflow-hub-1000-performance
+          path: |
+            /tmp/workflow-hub-1000.json
+            /tmp/perf-hub.log
+            /tmp/perf-worker-*.log
+          if-no-files-found: warn
