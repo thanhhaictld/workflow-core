@@ -380,5 +380,11 @@ public sealed class HubTaskStore : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task PingAsync(CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("SELECT 1");
+        await cmd.ExecuteScalarAsync(ct);
+    }
+
     public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
 }
