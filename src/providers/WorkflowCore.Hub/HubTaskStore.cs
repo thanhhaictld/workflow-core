@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -140,6 +141,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
         int maxTasks, TimeSpan lease, CancellationToken ct)
     {
+        using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
+        var claimStarted = Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(workerId) || workerId.Length > 128 ||
             hubs.Count is < 1 or > 32 || capabilities.Count is < 1 or > 128 ||
             maxTasks is < 1 or > 32 || lease < TimeSpan.FromSeconds(10) ||
@@ -274,7 +277,11 @@ public sealed class HubTaskStore : IAsyncDisposable
 
             if (found is null) break;
             results.Add(found);
+            HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(found.HubId),
+                HubTelemetry.ActivityTag(found.TaskType));
         }
+        HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds);
+        span?.SetTag("tasks.claimed", results.Count);
         return results;
     }
 
