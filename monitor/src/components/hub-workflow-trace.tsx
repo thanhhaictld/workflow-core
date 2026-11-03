@@ -47,7 +47,7 @@ type HubDetailResponse = {
 };
 type Tab = "trace" | "history" | "state";
 
-const eventTone = (event: string) => event === "StepCompleted" ? "green" as const
+const eventTone = (event: string) => event === "StepCompleted" || event === "TimerFired" || event === "WorkflowCompleted" ? "green" as const
   : event === "StepFailed" ? "red" as const : "amber" as const;
 
 export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
@@ -93,7 +93,8 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
     const events = history.filter(record => record.stepIndex === index);
     const last = events[events.length - 1];
     const declared = detail?.definition?.steps[index]?.activityType;
-    const completed = events.some(event => event.eventType === "StepCompleted");
+    const completed = events.some(event => event.eventType === "StepCompleted" ||
+      event.eventType === "TimerFired");
     const failed = events.some(event => event.eventType === "StepFailed");
     const progress = workflow?.nextStep ?? 0;
     const state = completed || index < progress ? "Complete"
