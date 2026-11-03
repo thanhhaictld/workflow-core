@@ -1,5 +1,31 @@
 # Distributed Workflow Core runtime (PostgreSQL)
 
+## Isolated .NET project layout
+
+All **new** .NET projects added after upstream `master` live under `scaling/`.
+The original Workflow Core projects remain untouched under repository `src/` and `test/`.
+
+```text
+scaling/
+├── WorkflowCore.Scaling.slnx       # 10 scaling projects
+├── src/                            # Hub, Gateway, Telemetry, PostgreSQL runtime
+├── tests/                          # PostgreSQL integration tests
+└── sample/
+    └── onboarding/                 # Gateway host, monitor API, workers, samples, load test
+```
+
+Build the new projects without loading the upstream solution:
+
+```bash
+dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
+dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release
+```
+
+The `scaling/src` projects reference original Workflow Core assemblies from
+`src/`; assembly names, namespaces, HTTP endpoints, and Docker service names
+are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
+
+
 > **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
 
 This branch introduces a **new .NET 10-only execution runtime** for Workflow Core.
