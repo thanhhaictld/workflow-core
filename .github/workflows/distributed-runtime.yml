@@ -1,7 +1,7 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability, refactor/scaling-project-layout]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability, refactor/scaling-project-layout, feat/hub-remote-processor-scheduler]
   pull_request:
     paths:
       - 'scaling/src/WorkflowCore.Scaling.PostgreSQL/**'
@@ -56,6 +56,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library

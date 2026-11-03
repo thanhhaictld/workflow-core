@@ -3,6 +3,9 @@
     <Project Path="src/WorkflowCore.Hub/WorkflowCore.Hub.csproj" />
     <Project Path="src/WorkflowCore.Hub.Gateway/WorkflowCore.Hub.Gateway.csproj" />
     <Project Path="src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj" />
+    <Project Path="src/WorkflowCore.Hub.Scheduling/WorkflowCore.Hub.Scheduling.csproj" />
+    <Project Path="src/WorkflowCore.Hub.Client/WorkflowCore.Hub.Client.csproj" />
+    <Project Path="src/WorkflowCore.RemoteExecution/WorkflowCore.RemoteExecution.csproj" />
     <Project Path="src/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj" />
   </Folder>
   <Folder Name="/sample/onboarding/">
@@ -11,6 +14,8 @@
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj" />
+    <Project Path="sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj" />
+    <Project Path="sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj" />

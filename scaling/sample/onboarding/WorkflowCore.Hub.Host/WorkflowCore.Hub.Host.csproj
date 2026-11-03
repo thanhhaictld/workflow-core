@@ -7,5 +7,6 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/WorkflowCore.Hub.Gateway/WorkflowCore.Hub.Gateway.csproj" />
     <ProjectReference Include="../../../src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore.Hub.Scheduling/WorkflowCore.Hub.Scheduling.csproj" />
   </ItemGroup>
 </Project>

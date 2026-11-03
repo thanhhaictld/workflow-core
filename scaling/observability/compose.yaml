@@ -37,6 +37,7 @@ services:
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/007_hub_gateway.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/008_hub_workflows.sql
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/009_hub_task_attempts.sql
+        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.
@@ -66,7 +67,28 @@ services:
     depends_on:
       monitor-api-migrate:
         condition: service_completed_successfully
-      otel-collector:
+      processor:
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj
+    command: ["WorkflowCore.Processor.Host.dll"]
+    depends_on:
+      hub:
+        condition: service_healthy
+      provisioner:
+        condition: service_started
+    environment:
+      WFC_HUB_URL: http://hub:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
+      WORKERS: "${PROCESSOR_WORKERS:-16}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      WFC_OTEL_LOGS_ENABLED: "true"
+    restart: unless-stopped
+
+  otel-collector:
         condition: service_started
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
@@ -123,6 +145,10 @@ services:
       ASPNETCORE_URLS: http://0.0.0.0:5100
       WFC_PG: Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12}
       WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
+      WorkflowHub__Scheduler__Enabled: "${HUB_SCHEDULER_ENABLED:-true}"
+      WorkflowHub__Scheduler__PollIntervalMs: "500"
+      WorkflowHub__Scheduler__BatchSize: "100"
+      WorkflowHub__Scheduler__MaxConcurrentBatches: "2"
       WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_METRIC_EXPORT_INTERVAL: "5000"
@@ -137,13 +163,13 @@ services:
     ports:
       - "127.0.0.1:${HUB_PORT:-5100}:5100"
 
-  worker:
+  provisioner:
     build:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.app
       args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj
-    command: ["WorkflowCore.Scaling.Worker.dll"]
+        PROJECT: scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj
+    command: ["WorkflowCore.Provisioner.Host.dll"]
     depends_on:
       hub:
         condition: service_healthy

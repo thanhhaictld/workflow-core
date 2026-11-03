@@ -5,6 +5,7 @@ on:
     branches:
       - feat/workflow-hub-otel-observability
       - refactor/scaling-project-layout
+      - feat/hub-remote-processor-scheduler
     paths:
       - 'scaling/**'
       - 'monitor/**'

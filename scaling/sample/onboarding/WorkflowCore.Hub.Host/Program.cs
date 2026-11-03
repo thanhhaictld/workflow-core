@@ -1,6 +1,7 @@
 using WorkflowCore.Hub;
 using WorkflowCore.Hub.Gateway;
 using WorkflowCore.Hub.Telemetry;
+using WorkflowCore.Hub.Scheduling;
 
 // Standalone Hub storage/dispatcher deployment. This process never registers
 // or executes Workflow Core C# workflow definitions.
@@ -10,6 +11,7 @@ var connectionString = builder.Configuration.GetConnectionString("Workflow")
     ?? throw new InvalidOperationException("Standalone Hub requires WFC_PG");
 builder.Services.AddWorkflowHubOpenTelemetry("workflow-hub", httpServer: true);
 builder.Services.AddHubGateway(connectionString);
+builder.Services.AddHubScheduling(builder.Configuration.GetSection("WorkflowHub:Scheduler"));
 var app = builder.Build();
 app.MapHubGateway();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
