@@ -239,7 +239,7 @@ public sealed class HubWorkflowStore(
         // as step/result commit. Historic pre-migration tasks can have no row.
         await using (var attempt = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task_attempt
-            SET finished_at=clock_timestamp(),outcome='Completed'
+            SET finished_at=now(),outcome='Completed'
             WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
               AND finished_at IS NULL
             """, db, tx))
@@ -335,7 +335,7 @@ public sealed class HubWorkflowStore(
         }
         await using (var attempt = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task_attempt
-            SET finished_at=clock_timestamp(),
+            SET finished_at=now(),
                 outcome=CASE WHEN @dead THEN 'Failed' ELSE 'RetryScheduled' END
             WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
               AND finished_at IS NULL
