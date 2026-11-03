@@ -151,7 +151,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             var candidates = new List<Guid>();
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
-                WHERE hub_id = ANY(@hubs) AND task_type || ':' || task_version::text = ANY(@types)
+                WHERE hub_id = ANY(@hubs)
+                  AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
                   AND attempts < max_attempts
                   AND ((state = 0 AND due_at <= now()) OR
                        (state = 1 AND lease_until < now()))
