@@ -5,9 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../WorkflowCore/WorkflowCore.csproj" />
-    <ProjectReference Include="../WorkflowCore.Persistence.PostgreSQL/WorkflowCore.Persistence.PostgreSQL.csproj" />
-    <ProjectReference Include="../WorkflowCore.Persistence.EntityFramework/WorkflowCore.Persistence.EntityFramework.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore/WorkflowCore.csproj" />
+    <ProjectReference Include="../../../src/providers/WorkflowCore.Persistence.PostgreSQL/WorkflowCore.Persistence.PostgreSQL.csproj" />
+    <ProjectReference Include="../../../src/providers/WorkflowCore.Persistence.EntityFramework/WorkflowCore.Persistence.EntityFramework.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
     <PackageReference Include="Npgsql" Version="9.0.4" />

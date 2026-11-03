@@ -1,0 +1,4 @@
+<Project>
+  <!-- Preserve original provider assembly/package metadata after relocating into scaling. -->
+  <Import Project="../../src/Directory.Build.props" />
+</Project>

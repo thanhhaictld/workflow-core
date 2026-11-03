@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore.Hub.Gateway/WorkflowCore.Hub.Gateway.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj" />
+    <ProjectReference Include="../WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
+  </ItemGroup>
+</Project>
