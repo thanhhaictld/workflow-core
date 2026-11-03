@@ -14,12 +14,13 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'check-tools', 'bootstrap', 'setup', 'up', 'dev',
-        'api', 'worker', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
+        'api', 'worker', 'hub', 'remote-worker', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
         'db-logs', 'db-reset', 'seed', 'approve', 'test', 'build', 'check', 'clean')]
     [string] $Task = 'help',
     [ValidateRange(0, 65535)][int] $PgPort = 0,
     [ValidateRange(0, 65535)][int] $ApiPort = 0,
     [ValidateRange(0, 65535)][int] $UiPort = 0,
+    [ValidateRange(0, 65535)][int] $HubPort = 0,
     [string] $PgUser,
     [string] $PgPassword,
     [string] $PgDatabase,
@@ -37,18 +38,20 @@ $MonitorDir = Join-Path $RepoRoot 'monitor'
 $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
 $ApiProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj'
 $WorkerProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
+$HubProject = Join-Path $RepoRoot 'src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
 $TestProject = Join-Path $RepoRoot 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
 $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
 
 if ($PgPort -eq 0) { $PgPort = if ($env:PG_PORT) { [int]$env:PG_PORT } else { 55432 } }
 if ($ApiPort -eq 0) { $ApiPort = if ($env:API_PORT) { [int]$env:API_PORT } else { 5000 } }
 if ($UiPort -eq 0) { $UiPort = if ($env:UI_PORT) { [int]$env:UI_PORT } else { 3002 } }
+if ($HubPort -eq 0) { $HubPort = if ($env:HUB_PORT) { [int]$env:HUB_PORT } else { 5100 } }
 if (-not $PgUser) { $PgUser = if ($env:PG_USER) { $env:PG_USER } else { 'workflow' } }
 if (-not $PgPassword) { $PgPassword = if ($env:PG_PASSWORD) { $env:PG_PASSWORD } else { 'workflow_dev_only' } }
 if (-not $PgDatabase) { $PgDatabase = if ($env:PG_DATABASE) { $env:PG_DATABASE } else { 'workflow' } }
 if ($env:CONFIRM -eq 'reset') { $ConfirmReset = $true }
 
-if (@($PgPort, $ApiPort, $UiPort) | Where-Object { $_ -lt 1 }) {
+if (@($PgPort, $ApiPort, $UiPort, $HubPort) | Where-Object { $_ -lt 1 }) {
     throw 'Port settings must be in range 1..65535.'
 }
 foreach ($setting in @(@('PG_PORT', "$PgPort"), @('PG_USER', $PgUser),
@@ -161,6 +164,21 @@ function Start-Worker {
     Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $WorkerProject)
 }
 
+function Start-Hub {
+    if (-not $env:WFC_HUB_AUTH_TOKEN) { throw "Set WFC_HUB_AUTH_TOKEN (24+ characters) before starting the Hub" }
+    Apply-DatabaseSchema
+    $env:WFC_PG = $LocalConnection
+    Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
+        $HubProject, '--urls', "http://127.0.0.1:$HubPort")
+}
+
+function Start-RemoteWorker {
+    if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
+    if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }
+    Remove-Item Env:WFC_PG -ErrorAction SilentlyContinue
+    Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $WorkerProject)
+}
+
 function Start-Ui {
     Install-Monitor
     $env:WORKFLOW_API_URL = "http://127.0.0.1:$ApiPort"
@@ -232,7 +250,9 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 up          Bootstrap and start API + worker + UI
   pwsh ./scripts/dev.ps1 dev         Alias for up
   pwsh ./scripts/dev.ps1 api         Run .NET API only (no embedded workers)
-  pwsh ./scripts/dev.ps1 worker      Run independent queue/step worker
+  pwsh ./scripts/dev.ps1 worker      Run legacy PostgreSQL-backed worker
+  pwsh ./scripts/dev.ps1 hub         Run standalone REST+SSE Hub gateway (set WFC_HUB_AUTH_TOKEN)
+  pwsh ./scripts/dev.ps1 remote-worker  Run Hub activity worker without PostgreSQL
   pwsh ./scripts/dev.ps1 ui          Run Next.js dashboard only
   pwsh ./scripts/dev.ps1 seed        Create happy, retry, approval and parallel runs
   pwsh ./scripts/dev.ps1 approve -WorkflowId UUID   Signal onboarding approval
@@ -241,13 +261,13 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
-  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–006 migrations
+  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–007 migrations
   pwsh ./scripts/dev.ps1 db-down     Stop PostgreSQL (keep data)
   pwsh ./scripts/dev.ps1 db-logs     Tail PostgreSQL logs
   pwsh ./scripts/dev.ps1 db-reset -ConfirmReset    DELETE local DB volume
   pwsh ./scripts/dev.ps1 clean       Delete Next.js build cache
 
-Port overrides: -PgPort 55433 -ApiPort 5001 -UiPort 3001
+Port overrides: -PgPort 55433 -ApiPort 5001 -UiPort 3001 -HubPort 5101
 Environment overrides: PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE, API_PORT, UI_PORT.
 GNU Make shortcuts are available where Make is installed: make up / make test.
 '@
@@ -267,6 +287,8 @@ try {
         'dev'         { Start-Development }
         'api'         { Start-Api }
         'worker'      { Start-Worker }
+        'hub'         { Start-Hub }
+        'remote-worker' { Start-RemoteWorker }
         'ui'          { Start-Ui }
         'seed' {
             foreach ($scenario in @(
@@ -310,6 +332,7 @@ try {
             Install-Monitor
             Invoke-External -Executable 'dotnet' -Arguments @('build', $ApiProject, '-c', 'Release')
             Invoke-External -Executable 'dotnet' -Arguments @('build', $WorkerProject, '-c', 'Release')
+            Invoke-External -Executable 'dotnet' -Arguments @('build', $HubProject, '-c', 'Release')
             Invoke-External -Executable $NpmCommand -Arguments @('run', 'build') -Directory $MonitorDir
         }
         'db-logs' { Invoke-Compose -ComposeArgs @('logs', '-f', 'postgres') }
