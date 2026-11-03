@@ -21,6 +21,8 @@ public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
 public sealed record HubTaskHeartbeatRequest(string WorkerId, long Epoch);
 public sealed record HubTaskFailureRequest(string WorkerId, long Epoch,
     string Error, int RetryDelaySeconds = 2);
+public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long ActiveDbConnections,
+    long ReadyTasks, long LeasedTasks, long DeadTasks);
 
 /// <summary>
 /// PostgreSQL-authoritative Hub task queue. Resources are locked in stable
@@ -388,6 +390,23 @@ public sealed class HubTaskStore : IAsyncDisposable
             WHERE state=1 AND lease_until<now() AND attempts>=max_attempts
             """);
         return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<HubDatabaseDiagnostics> DiagnosticsAsync(CancellationToken ct)
+    {
+        await using var command = _dataSource.CreateCommand("""
+            SELECT (SELECT count(*) FROM pg_stat_activity
+                    WHERE datname=current_database()),
+                   (SELECT count(*) FROM pg_stat_activity
+                    WHERE datname=current_database() AND state='active'),
+                   (SELECT count(*) FROM wfc_scale.hub_task WHERE state=0 AND due_at<=now()),
+                   (SELECT count(*) FROM wfc_scale.hub_task WHERE state=1 AND lease_until>now()),
+                   (SELECT count(*) FROM wfc_scale.hub_task WHERE state=3)
+            """);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Database metrics unavailable");
+        return new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2),
+            reader.GetInt64(3), reader.GetInt64(4));
     }
 
     public async Task PingAsync(CancellationToken ct)
