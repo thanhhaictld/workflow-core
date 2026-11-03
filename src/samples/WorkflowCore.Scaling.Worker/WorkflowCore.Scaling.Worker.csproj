@@ -8,5 +8,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <ProjectReference Include="../WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
+    <ProjectReference Include="../../providers/WorkflowCore.Hub/WorkflowCore.Hub.csproj" />
   </ItemGroup>
 </Project>
