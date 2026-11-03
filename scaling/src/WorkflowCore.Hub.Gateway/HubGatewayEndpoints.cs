@@ -17,28 +17,14 @@ public static class HubGatewayEndpoints
         var maxConnections = int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_DB_POOL"), out var max)
             ? Math.Clamp(max, 1, 100) : 12;
         services.AddSingleton(new HubTaskStore(connectionString, maxConnections));
-        services.AddSingleton(new HubPolicyRegistry()
-            .Register("onboarding", "validate-tenant", 1, 32, policy => policy
-                .MaxHubConcurrency(100)
-                .MaxActivityConcurrency(100))
-            .Register("onboarding", "send-welcome", 1, 32, policy => policy
-                .MaxHubConcurrency(100)
-                .MaxActivityConcurrency(100))
-            .Register("onboarding", "provision-tenant", 1, 32, policy => policy
-                .MaxHubConcurrency(100)
-                .MaxActivityConcurrency(20)
-                .SequentialBy("tenant", body => StringKey(body, "tenantId")))
-            .Register("backup", "restore-database", 1, 16, policy => policy
-                .MaxHubConcurrency(16)
-                .SequentialBy("database", body => StringKey(body, "databaseId")))
-            .Register("billing", "capture-payment", 1, 32, policy => policy
-                .MaxHubConcurrency(64)
-                .LimitBy("account", 2, body => StringKey(body, "accountId"))));
-        services.AddSingleton(new HubWorkflowRegistry()
-            .Register("onboarding", "tenant-onboarding", 1, 32, builder => builder
-                .Activity("validate-tenant")
-                .Then("provision-tenant")
-                .Then("send-welcome")));
+        // Generic infrastructure only: all business metadata is published
+        // by independent processor/provisioner hosts through authenticated REST.
+        // The empty in-memory registries retain the pre-existing inline-chain
+        // API for compatibility with explicit integration-test registrations.
+        services.AddSingleton(new HubPolicyRegistry());
+        services.AddSingleton(new HubWorkflowRegistry());
+        services.AddSingleton<HubDefinitionStore>();
+        services.AddSingleton<HubRemoteWorkflowStore>();
         services.AddSingleton<HubWorkflowStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
@@ -69,18 +55,52 @@ public static class HubGatewayEndpoints
 
         routes.MapGet("/policies", (HubPolicyRegistry registry) =>
             Results.Ok(registry.Describe()));
-        routes.MapGet("/definitions", (HubWorkflowRegistry registry) =>
-            Results.Ok(registry.Describe()));
+        routes.MapGet("/definitions", async (HubWorkflowRegistry registry,
+            HubDefinitionStore published, CancellationToken ct) =>
+        {
+            var remote=await published.DefinitionsAsync(ct);
+            return Results.Ok(registry.Describe().Cast<object>().Concat(
+                remote.Select(d=> (object)new {
+                    d.HubId,d.DefinitionId,d.Version,d.Partitions,
+                    Steps=d.Metadata.TryGetProperty("steps",out var steps)
+                        ? steps : default(System.Text.Json.JsonElement)
+                })));
+        });
+        routes.MapPost("/definitions", async (HubDefinitionRegistration definition,
+            HubDefinitionStore store, CancellationToken ct) =>
+        {
+            try {
+                var created=await store.RegisterAsync(definition,ct);
+                return created?Results.Created("/api/hub/definitions",new{registered=true}):
+                    Results.Ok(new{registered=true,idempotent=true});
+            }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
+        routes.MapPost("/activity-registrations", async (HubActivityRegistration policy,
+            HubDefinitionStore store, CancellationToken ct) =>
+        {
+            try {
+                var created=await store.RegisterActivityAsync(policy,ct);
+                return created?Results.Created("/api/hub/activity-registrations",new{registered=true}):
+                    Results.Ok(new{registered=true,idempotent=true});
+            }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
         routes.MapGet("/diagnostics", async (HubTaskStore store, CancellationToken ct) =>
             Results.Ok(await store.DiagnosticsAsync(ct)));
 
         routes.MapPost("/workflows", async (
             HubWorkflowStartRequest request, HubWorkflowStore workflows,
+            HubRemoteWorkflowStore remote, HubDefinitionStore registry,
             HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             try
             {
-                var id = await workflows.StartAsync(request, ct);
+                var def=await registry.GetAsync(request.HubId,request.DefinitionId,request.Version,ct);
+                var id = def is null ? await workflows.StartAsync(request, ct)
+                    : await remote.StartAsync(request,ct);
                 readiness.Publish(request.HubId);
                 return Results.Accepted($"/api/hub/workflows/{id}", new { workflowId = id });
             }
@@ -96,6 +116,29 @@ public static class HubGatewayEndpoints
             {
                 return Results.Conflict(new { error = ex.Message });
             }
+        });
+
+        routes.MapGet("/workflows/{id:guid}/runtime", async (Guid id,
+            HubRemoteWorkflowStore remote, CancellationToken ct) =>
+        {
+            var runtime=await remote.GetRuntimeAsync(id,ct);
+            return runtime is null?Results.NotFound():Results.Ok(runtime);
+        });
+        routes.MapPost("/workflows/{id:guid}/transitions", async (Guid id,
+            HubTransitionRequest request, HubRemoteWorkflowStore remote,
+            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+        {
+            try
+            {
+                var result=await remote.CommitAsync(id,request,ct);
+                if(result is null)return Results.Conflict(new{error="Stale task lease or workflow revision"});
+                var runtime=await remote.GetRuntimeAsync(id,ct);
+                if(runtime is not null)readiness.Publish(runtime.HubId);
+                return Results.Ok(result);
+            }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(KeyNotFoundException ex){return Results.NotFound(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
 
         routes.MapGet("/workflows", async (string? hub, string? search,
@@ -227,17 +270,22 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/complete", async (
             Guid id, HubTaskResultRequest request, HubTaskStore store,
-            HubWorkflowStore workflows, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubWorkflowStore workflows, HubRemoteWorkflowStore remote,
+            HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
-            var managed = await store.IsManagedWorkflowStepAsync(id, ct);
-            var done = managed
-                ? await workflows.CompleteAsync(id, request.WorkerId, request.Epoch,
-                    request.Result.GetRawText(), ct)
-                : await store.CompleteAsync(id, request.WorkerId, request.Epoch,
-                    request.Result.GetRawText(), ct);
+            var remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
+            var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
+            var done = remoteActivity
+                ? await remote.CompleteActivityAsync(id,request.WorkerId,
+                    request.Epoch,request.Result.GetRawText(),ct)
+                : managed
+                    ? await workflows.CompleteAsync(id, request.WorkerId, request.Epoch,
+                        request.Result.GetRawText(), ct)
+                    : await store.CompleteAsync(id, request.WorkerId, request.Epoch,
+                        request.Result.GetRawText(), ct);
             if (done)
             {
                 var task = await store.GetAsync(id, ct);
@@ -297,7 +345,4 @@ public static class HubGatewayEndpoints
         return app;
     }
 
-    private static string? StringKey(JsonElement body, string name) =>
-        body.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() : null;
 }
