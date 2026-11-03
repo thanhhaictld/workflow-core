@@ -13,6 +13,14 @@ https://github.com/danielgerlag/conductor
 
 ## Documentation
 
+### OpenTelemetry + Grafana + k6 local stress lab
+
+The experimental [Workflow Hub observability stack](scaling/observability/README.md)
+adds OTLP metrics/traces/logs for Hub and workers, a Docker Compose
+Prometheus/Grafana/Tempo/Loki stack, provisioned resource/throughput dashboards,
+and a k6 script for 1,000 code-first three-step remote workflows.
+A separate CI job starts the Compose stack and verifies exported telemetry.
+
 ### Standalone Workflow Hub Gateway and concurrency policies (experimental)
 
 The `feat/workflow-hub-gateway-concurrency` branch adds a standalone REST +
