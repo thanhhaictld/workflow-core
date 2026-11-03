@@ -149,7 +149,7 @@ public sealed class HubRemoteWorker : BackgroundService, IDisposable
             if (capacity <= 0) return;
             var query = new HubClaimRequest(_workerId,
                 _handlers.Keys.Select(x => x.Hub).Distinct().ToArray(),
-                _handlers.Keys.Select(x => new HubCapability(x.Type, x.Version)).Distinct().ToArray(),
+                _handlers.Keys.Select(x => new HubCapability(x.Hub, x.Type, x.Version)).Distinct().ToArray(),
                 Math.Min(capacity, 16));
             using var response = await _http.PostAsJsonAsync("api/hub/workers/tasks:claim",
                 query, ct);
