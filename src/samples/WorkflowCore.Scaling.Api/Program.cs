@@ -6,6 +6,7 @@ using WorkflowCore.Persistence.EntityFramework.Models;
 using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Api;
+using WorkflowCore.Hub.Gateway;
 using WorkflowCore.Scaling.Samples;
 
 var builder = WebApplication.CreateBuilder(args);
