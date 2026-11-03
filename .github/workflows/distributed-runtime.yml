@@ -1,10 +1,11 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency]
   pull_request:
     paths:
       - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
+      - 'src/providers/WorkflowCore.Hub/**'
       - 'src/WorkflowCore/**'
       - 'src/samples/WorkflowCore.Scaling.Api/**'
       - 'src/samples/WorkflowCore.Scaling.Samples/**'
@@ -49,6 +50,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
       - name: Build benchmark API
         run: dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Build standalone sample worker
