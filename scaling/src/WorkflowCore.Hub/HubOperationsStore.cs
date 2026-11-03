@@ -261,6 +261,15 @@ public sealed class HubOperationsStore(HubTaskStore tasks)
             partitions, activities, policies, workers, timers, trends };
     }
 
+    public async Task PruneSamplesAsync(CancellationToken ct)
+    {
+        await using var cmd = Source.CreateCommand("""
+            DELETE FROM wfc_scale.hub_monitor_sample
+            WHERE bucket < now() - interval '7 days'
+            """);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     // Per-minute durable snapshots, idempotent across multiple Hub replicas.
     public async Task RecordSampleAsync(CancellationToken ct)
     {

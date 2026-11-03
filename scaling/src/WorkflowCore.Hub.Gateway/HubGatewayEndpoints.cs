@@ -26,6 +26,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubDefinitionStore>();
         services.AddSingleton<HubRemoteWorkflowStore>();
         services.AddSingleton<HubWorkflowStore>();
+        services.AddSingleton<HubOperationsStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
         services.AddHostedService<HubMetricsSampler>();
@@ -99,6 +100,12 @@ public static class HubGatewayEndpoints
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
+        routes.MapGet("/operations", async (string? hub, int? windowMinutes,
+            HubOperationsStore operations, CancellationToken ct) =>
+        {
+            try { return Results.Ok(await operations.SnapshotAsync(hub, windowMinutes ?? 60, ct)); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });
         routes.MapGet("/diagnostics", async (HubTaskStore store, CancellationToken ct) =>
             Results.Ok(await store.DiagnosticsAsync(ct)));
