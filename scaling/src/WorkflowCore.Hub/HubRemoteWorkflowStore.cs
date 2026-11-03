@@ -324,7 +324,7 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             var currentOwner=r.IsDBNull(1)?null:r.GetString(1);
             var last=r.IsDBNull(2)?null:r.GetString(2);
             var currentEpoch=r.GetInt64(3);
-            var until=r.IsDBNull(4)?null:r.GetDateTime(4);
+            DateTime? until=r.IsDBNull(4)?null:r.GetDateTime(4);
             if(state==2 && currentEpoch==epoch && last==worker)
             {
                 var stored=r.IsDBNull(5)?null:r.GetString(5);
