@@ -100,8 +100,9 @@ jobs:
       - name: Verify remote workflow metadata registered through REST
         run: |
           set -euo pipefail
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
           for i in {1..40}; do
-            curl -fsS -H "Authorization: Bearer ci-local-hub-secret-please-change-2026" http://127.0.0.1:5100/api/hub/definitions > /tmp/remote-definitions.json
+            curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:5100/api/hub/definitions > /tmp/remote-definitions.json
             if python3 - <<'PY'
           import json
           defs=json.load(open('/tmp/remote-definitions.json'))
@@ -137,7 +138,8 @@ jobs:
           python3 - <<'PY'
           import json,time,urllib.request
           url='http://127.0.0.1:5100/api/hub/'
-          token='ci-local-hub-secret-please-change-2026'
+          token=next(line.split('=',1)[1].strip() for line in
+            open('scaling/observability/.env.example') if line.startswith('WFC_HUB_AUTH_TOKEN='))
           def call(method,path,body=None):
             data=json.dumps(body).encode() if body is not None else None
             req=urllib.request.Request(url+path,data=data,method=method,headers={
