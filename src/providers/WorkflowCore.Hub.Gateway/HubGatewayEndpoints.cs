@@ -42,6 +42,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubWorkflowStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
+        services.AddHostedService<HubMetricsSampler>();
         return services;
     }
 
