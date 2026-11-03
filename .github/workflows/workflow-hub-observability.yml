@@ -6,6 +6,8 @@ on:
       - feat/workflow-hub-otel-observability
     paths:
       - 'scaling/observability/**'
+      - 'monitor/**'
+      - 'src/samples/WorkflowCore.Scaling.Api/**'
       - 'src/providers/WorkflowCore.Hub/**'
       - 'src/providers/WorkflowCore.Hub.Gateway/**'
       - 'src/providers/WorkflowCore.Hub.Telemetry/**'
@@ -55,18 +57,36 @@ jobs:
         run: |
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale worker=2
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
-      - name: Verify collector, Hub and Grafana readiness
+      - name: Verify Hub, legacy monitoring API, Next.js UI and Grafana readiness
         run: |
           set -euo pipefail
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
-               curl -fsS http://127.0.0.1:3001/api/health >/dev/null; then break; fi
+               curl -fsS http://127.0.0.1:3001/api/health >/dev/null &&
+               curl -fsS http://127.0.0.1:5000/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:3002/hub >/dev/null &&
+               curl -fsS http://127.0.0.1:3002/backend/monitor/overview >/dev/null; then break; fi
             sleep 2
           done
           curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
+          curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
+          curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/legacy-monitor.html
+          curl --fail-with-body -fsS http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
+          curl --fail-with-body -fsS http://127.0.0.1:3002/backend/monitor/overview >/tmp/legacy-monitor-overview.json
+          curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
+          python3 - <<'PY'
+          import json
+          legacy=json.load(open('/tmp/legacy-monitor-overview.json'))
+          hub=json.load(open('/tmp/hub-monitor-overview.json'))
+          assert isinstance(legacy,dict), 'Legacy monitor API did not return JSON'
+          assert isinstance(hub.get('runs'),list), 'Next.js Hub proxy did not return run list'
+          assert 'databaseConnections' in hub['diagnostics']
+          assert b'Hub runs' in open('/tmp/hub-monitor.html','rb').read()
+          print('Next.js monitor, legacy backend and authenticated Hub proxy are online.')
+          PY
           curl --fail-with-body -fsS -u admin:local-grafana-change-this \
             http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel >/tmp/grafana-dashboard.json
           python3 - <<'PY'
@@ -82,6 +102,13 @@ jobs:
             run --rm -e K6_WORKFLOWS=20 -e K6_VUS=10 \
             -e K6_MAX_WAIT_SECONDS=120 k6
           test -s scaling/observability/results/k6-summary.json
+          curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview > /tmp/hub-monitor-after-load.json
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/hub-monitor-after-load.json'))
+          assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
+          print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
+          PY
       - name: Verify OTLP Hub metrics and Prometheus remote-write samples
         run: |
           set -euo pipefail
