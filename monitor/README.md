@@ -10,7 +10,8 @@ Read-only monitoring UI for the distributed PostgreSQL Workflow Core runtime.
 - **Workflow runs:** a single sorted list of legacy Workflow Core and remote Hub
   workflows, filter by legacy/any Hub/individual business Hub, search, status,
   paginated results, manual/15-second refresh. Hub rows open a dedicated
-  durable step-history view in the same /workflows/{id} route.
+  durable distributed-trace-style waterfall (with lease spans, retry attempts,
+  queue wait, zoom and event inspector) in the same /workflows/{id} route.
 - **Execution detail:** definition-based interactive workflow flow diagram, current workflow status, elapsed time, correlation IDs,
   retries/errors, a per-attempt waterfall similar to Temporal's trace view,
   step-span inspector, complete paginated journal, execution pointers, and
@@ -293,10 +294,15 @@ Core, All Workflow Hubs, or a specific Hub namespace such as onboarding.
 The old /hub URL redirects to the same list with hub=hub selected.
 
 Hub rows show the business Hub label and link to the same workflow detail
-path with ?source=hub. The detail displays real durable step completions,
-retries and failures from the Hub's journal and the versioned, code-first
-activity sequence. It does not invent legacy execution pointers, heartbeat
-events or attempt start timestamps. Legacy rows keep the existing
+path with ?source=hub. The detail uses a **waterfall time ruler** comparable
+to the legacy distributed trace: workflow duration, activity lanes, actual
+fenced claim→commit lease spans, retry spans, queue waits, worker identities,
+click-to-inspect attempt metadata, and 1x–8x zoom. Completion and failure
+events remain in a separate journal tab. Activity claims are not precise
+remote handler start timestamps: use Tempo for CPU/handler execution spans.
+For pre-migration runs missing claim timing, display only honest terminal
+event markers rather than fabricated duration bars. SQL migration 009 must
+run for new attempts to be recorded. Legacy rows keep the existing
 Temporal-style flow and paginated execution history.
 
 Next.js server-side routes /api/workflow-feed and
