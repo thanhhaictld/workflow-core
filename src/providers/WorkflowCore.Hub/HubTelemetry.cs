@@ -57,6 +57,36 @@ public static class HubTelemetry
         ProcessMeter.CreateObservableGauge("workflow_hub_threadpool_pending",
             () => ThreadPool.PendingWorkItemCount, "{work_item}");
 
+    private static long _databaseConnections;
+    private static long _activeDatabaseConnections;
+    private static long _queueReady;
+    private static long _queueLeased;
+    private static long _queueDead;
+    private static readonly ObservableGauge<long> DatabaseConnections =
+        Meter.CreateObservableGauge("workflow_hub_database_connections",
+            () => Volatile.Read(ref _databaseConnections), "{connection}");
+    private static readonly ObservableGauge<long> ActiveDatabaseConnections =
+        Meter.CreateObservableGauge("workflow_hub_database_active_connections",
+            () => Volatile.Read(ref _activeDatabaseConnections), "{connection}");
+    private static readonly ObservableGauge<long> QueueReady =
+        Meter.CreateObservableGauge("workflow_hub_queue_ready",
+            () => Volatile.Read(ref _queueReady), "{task}");
+    private static readonly ObservableGauge<long> QueueLeased =
+        Meter.CreateObservableGauge("workflow_hub_queue_leased",
+            () => Volatile.Read(ref _queueLeased), "{task}");
+    private static readonly ObservableGauge<long> QueueDead =
+        Meter.CreateObservableGauge("workflow_hub_queue_dead",
+            () => Volatile.Read(ref _queueDead), "{task}");
+
+    public static void PublishDatabaseSnapshot(HubDatabaseDiagnostics stats)
+    {
+        Interlocked.Exchange(ref _databaseConnections, stats.DatabaseConnections);
+        Interlocked.Exchange(ref _activeDatabaseConnections, stats.ActiveDbConnections);
+        Interlocked.Exchange(ref _queueReady, stats.ReadyTasks);
+        Interlocked.Exchange(ref _queueLeased, stats.LeasedTasks);
+        Interlocked.Exchange(ref _queueDead, stats.DeadTasks);
+    }
+
     public static KeyValuePair<string, object?> HubTag(string hub) => new("hub", hub);
     public static KeyValuePair<string, object?> ActivityTag(string type) =>
         new("activity_type", type);
