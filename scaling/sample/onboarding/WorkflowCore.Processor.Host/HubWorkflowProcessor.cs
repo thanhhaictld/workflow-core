@@ -118,11 +118,11 @@ public sealed class HubWorkflowProcessor(HubRestClient client,
                 var step=definition.Steps[runtime.NextStep];
                 decision=step.Kind=="Delay"
                     ? new(_owner,task.Epoch,runtime.Revision,task.Id,"ScheduleTimer",
-                        TimerKey=step.ActivityType,
-                        DelayMilliseconds=step.DelayMilliseconds)
+                        TimerKey:step.ActivityType,
+                        DelayMilliseconds:step.DelayMilliseconds)
                     : new(_owner,task.Epoch,runtime.Revision,task.Id,"ScheduleActivity",
-                        ActivityType=step.ActivityType,ActivityVersion=step.Version,
-                        ActivityInput=runtime.Input);
+                        ActivityType:step.ActivityType,ActivityVersion:step.Version,
+                        ActivityInput:runtime.Input);
             }
             using var response=await client.Http.PostAsJsonAsync(
                 $"api/hub/workflows/{id}/transitions",decision,ct);
