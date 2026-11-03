@@ -122,7 +122,7 @@ public static class HubGatewayEndpoints
             Guid id, HubTaskResultRequest request, HubTaskStore store,
             HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
-            if (request.Result.ValueKind is JsonValueKind.Undefined ||
+            if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
             var done = await store.CompleteAsync(id, request.WorkerId, request.Epoch,
