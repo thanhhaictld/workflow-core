@@ -147,6 +147,12 @@ jobs:
             sleep 2
           done
           curl --fail-with-body -sS http://127.0.0.1:5100/health/ready
+          # Publish registered activity policies through REST before the
+          # existing standalone worker starts; the Gateway stays business-agnostic.
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 \
+            dotnet run --no-launch-profile \
+            --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+            -- --register-only
           # Remote worker intentionally does NOT receive workflow PostgreSQL credentials.
           env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WORKERS=4 \
             dotnet run --no-launch-profile \
@@ -233,10 +239,14 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
       - name: Build Hub, remote worker and performance harness
         run: |
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
       - name: Stage 1000 workflows, then execute all via DB-free workers
         shell: bash
@@ -257,17 +267,30 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5100/health/ready
-          # No workers yet: all 1000 workflow instances must be durably pending.
+          # Publish immutable workflow/activity metadata without starting the processors.
+          env -u WFC_PG dotnet run --no-build -c Release \
+            --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+            -- --register-only
+          env -u WFC_PG dotnet run --no-build -c Release \
+            --project scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj \
+            -- --register-only
+          # No processors yet: all 1000 workflow instances must be durably pending.
           if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
             --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
             tail -150 /tmp/perf-hub.log
             exit 1
           fi
           for i in 1 2 3 4; do
-            # No PostgreSQL credential is available to the remote workers.
+            # No PostgreSQL credential is available to application hosts.
             env -u WFC_PG WORKERS=32 dotnet run --no-build -c Release \
-              --project scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
+              --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
               > "/tmp/perf-worker-$i.log" 2>&1 &
+            worker_pids="$worker_pids $!"
+          done
+          for i in 1 2; do
+            env -u WFC_PG WORKERS=32 dotnet run --no-build -c Release \
+              --project scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj \
+              > "/tmp/perf-processor-$i.log" 2>&1 &
             worker_pids="$worker_pids $!"
           done
           if ! WFC_LOAD_PHASE=verify dotnet run --no-build -c Release \
@@ -298,4 +321,5 @@ jobs:
             /tmp/workflow-hub-1000.json
             /tmp/perf-hub.log
             /tmp/perf-worker-*.log
+            /tmp/perf-processor-*.log
           if-no-files-found: warn
