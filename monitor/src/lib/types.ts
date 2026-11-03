@@ -22,6 +22,8 @@ export interface WorkflowItem {
   createdAt: string;
   completedAt: string | null;
   errorCount: number;
+  source?: "legacy" | "hub";
+  hubId?: string | null;
 }
 
 export interface WorkflowPage {
