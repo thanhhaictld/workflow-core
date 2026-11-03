@@ -108,6 +108,14 @@ public static class HubGatewayEndpoints
             HubWorkflowStore workflows, CancellationToken ct) =>
             Results.Ok(await workflows.HistoryAsync(id, ct)));
 
+        routes.MapGet("/runs", async (int? take,
+            HubWorkflowStore workflows, CancellationToken ct) =>
+        {
+            if (take is < 1 or > 100)
+                return Results.BadRequest(new { error = "take must be 1..100" });
+            return Results.Ok(await workflows.RecentRunsAsync(take ?? 20, ct));
+        });
+
         routes.MapGet("/runs/{runId}/summary", async (string runId,
             HubWorkflowStore workflows, CancellationToken ct) =>
         {
