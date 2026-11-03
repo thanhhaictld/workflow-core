@@ -43,13 +43,13 @@ crash consistency under all failure points.
 
 ## Sources of truth
 
-- [New runtime source](../../src/providers/WorkflowCore.Scaling.PostgreSQL/)
+- [New runtime source](../src/WorkflowCore.Scaling.PostgreSQL/)
 - [Database migrations](../sql/)
-- [Runtime integration tests](../../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
+- [Runtime integration tests](../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
 - [CI job](../../.github/workflows/distributed-runtime.yml)
-- [Control-plane sample](../../src/samples/WorkflowCore.Scaling.Api/)
-- [Standalone worker](../../src/samples/WorkflowCore.Scaling.Worker/)
-- [Sample workflows](../../src/samples/WorkflowCore.Scaling.Samples/)
+- [Control-plane sample](../sample/onboarding/WorkflowCore.Scaling.Api/)
+- [Standalone worker](../sample/onboarding/WorkflowCore.Scaling.Worker/)
+- [Sample workflows](../sample/onboarding/WorkflowCore.Scaling.Samples/)
 - [k6 script](../benchmarks/k6-start-workflows.js)
 
 All guaranteed/implemented statements in this documentation refer to the

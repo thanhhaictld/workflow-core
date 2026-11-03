@@ -1,24 +1,24 @@
 name: Distributed PostgreSQL Runtime
 on:
   push:
-    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability]
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability, refactor/scaling-project-layout]
   pull_request:
     paths:
-      - 'src/providers/WorkflowCore.Scaling.PostgreSQL/**'
-      - 'src/providers/WorkflowCore.Hub/**'
-      - 'src/providers/WorkflowCore.Hub.Gateway/**'
-      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
-      - 'src/samples/WorkflowCore.Hub.Host/**'
+      - 'scaling/src/WorkflowCore.Scaling.PostgreSQL/**'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
       - 'src/WorkflowCore/**'
-      - 'src/samples/WorkflowCore.Scaling.Api/**'
-      - 'src/samples/WorkflowCore.Scaling.Samples/**'
-      - 'src/samples/WorkflowCore.Scaling.Worker/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Samples/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - 'scaling/**'
       - 'monitor/**'
       - 'Makefile'
       - 'scripts/**'
       - 'scaling/compose.monitor.yaml'
-      - 'tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - '.github/workflows/distributed-runtime.yml'
   workflow_dispatch:
 
@@ -56,16 +56,18 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+      - name: Build dedicated scaling solution
+        run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
-        run: dotnet build src/providers/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
+        run: dotnet build scaling/src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
       - name: Build standalone Hub gateway
-        run: dotnet build src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
+        run: dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
       - name: Build benchmark API
-        run: dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
+        run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Build standalone sample worker
-        run: dotnet build src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+        run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
       - name: Restore and test
-        run: dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
 
   monitor-build:
     runs-on: ubuntu-latest
@@ -136,7 +138,7 @@ jobs:
           fi
           # Hub runs as a separate deployable process with its own bounded pool.
           WFC_PG="Host=127.0.0.1;Port=55432;Database=workflow;Username=workflow;Password=workflow_dev_only" \
-            dotnet run --no-launch-profile --project src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
+            dotnet run --no-launch-profile --project scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
             --urls http://127.0.0.1:5100 > /tmp/hub-standalone.log 2>&1 &
           hub_pid=$!
           for attempt in {1..40}; do
@@ -147,7 +149,7 @@ jobs:
           # Remote worker intentionally does NOT receive workflow PostgreSQL credentials.
           env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WORKERS=4 \
             dotnet run --no-launch-profile \
-            --project src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
+            --project scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
             > /tmp/hub-remote-worker.log 2>&1 &
           remote_pid=$!
           if ! pwsh -NoProfile -File scripts/test-hub-gateway.ps1 -ApiUrl http://127.0.0.1:5100 -TimeoutSeconds 90; then
@@ -232,15 +234,15 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
       - name: Build Hub, remote worker and performance harness
         run: |
-          dotnet build src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
-          dotnet build src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
-          dotnet build src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
       - name: Stage 1000 workflows, then execute all via DB-free workers
         shell: bash
         run: |
           set -euo pipefail
           dotnet run --no-build -c Release \
-            --project src/samples/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
+            --project scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
             --urls http://127.0.0.1:5100 > /tmp/perf-hub.log 2>&1 &
           hub_pid=$!
           worker_pids=''
@@ -256,19 +258,19 @@ jobs:
           curl -fsS http://127.0.0.1:5100/health/ready
           # No workers yet: all 1000 workflow instances must be durably pending.
           if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
-            --project src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
             tail -150 /tmp/perf-hub.log
             exit 1
           fi
           for i in 1 2 3 4; do
             # No PostgreSQL credential is available to the remote workers.
             env -u WFC_PG WORKERS=32 dotnet run --no-build -c Release \
-              --project src/samples/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
+              --project scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj \
               > "/tmp/perf-worker-$i.log" 2>&1 &
             worker_pids="$worker_pids $!"
           done
           if ! WFC_LOAD_PHASE=verify dotnet run --no-build -c Release \
-            --project src/samples/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
             tail -150 /tmp/perf-hub.log
             for i in 1 2 3 4; do tail -100 "/tmp/perf-worker-$i.log"; done
             exit 1

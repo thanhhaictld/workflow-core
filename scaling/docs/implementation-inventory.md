@@ -9,15 +9,15 @@ head; inspect the final tree.
 
 | Path | Why it exists |
 |---|---|
-| `src/providers/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj` | net10.0 library referencing Core, EF and PostgreSQL |
+| `scaling/src/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj` | net10.0 library referencing Core, EF and PostgreSQL |
 | `FencedWorkQueue.cs` | Claim, lease renewal, workflow gate, retry/defer and dead-letter exhaustion |
 | `DistributedWorkflowEngine.cs` | Transactional workflow/event control plane and executor adapter |
 | `DistributedWorkPump.cs` | Hosted polling worker slots, heartbeat, retry, OpenTelemetry instrumentation |
 | `DistributedWorkflowServiceCollection.cs` | Registers new runtime and disables legacy background consumers |
 | `DeferredWorkException.cs` | Signal/ownership contention deferral |
 | `WorkQueueAdministration.cs` | Queue statistics and manual dead-letter replay |
-| `src/samples/WorkflowCore.Scaling.Api/` | Unauthenticated development HTTP benchmark |
-| `tests/WorkflowCore.Scaling.PostgreSQL.Tests/` | PostgreSQL integration suite |
+| `scaling/sample/onboarding/WorkflowCore.Scaling.Api/` | Unauthenticated development HTTP benchmark |
+| `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/` | PostgreSQL integration suite |
 | `.github/workflows/distributed-runtime.yml` | PostgreSQL 17 + .NET 10 CI |
 
 ## SQL and benchmark files

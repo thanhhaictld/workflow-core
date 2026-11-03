@@ -11,7 +11,7 @@ completed successfully:
 - SQL migrations `002`, `003`, `004` applied by psql.
 - **8/8** xUnit integration tests passed.
 
-Tests in `tests/WorkflowCore.Scaling.PostgreSQL.Tests/DistributedRuntimeTests.cs`:
+Tests in `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/DistributedRuntimeTests.cs`:
 1. ConcurrentWorkersCannotClaimSameWork
 2. ExpiredLeaseIsFencedFromNewGeneration
 3. WorkflowGateRejectsCompetingAndStaleOwners
@@ -34,8 +34,8 @@ long-running stress test, DR validation or proof of remote activity exactly-once
 5. Run:
 
 ```bash
-dotnet build src/samples/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
-dotnet test tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release
+dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
+dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release
 ```
 
 The smoke test runs existing Workflow Core EF migrations via

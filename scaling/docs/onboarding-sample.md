@@ -56,7 +56,7 @@ workflow pauses after access configuration, allowing inspectors to see
 
 ## Parallel fork/join review
 
-The shared [ParallelOnboarding.cs](../../src/samples/WorkflowCore.Scaling.Samples/ParallelOnboarding.cs)
+The shared [ParallelOnboarding.cs](../sample/onboarding/WorkflowCore.Scaling.Samples/ParallelOnboarding.cs)
 implements the same fluent API pattern as
 `StartWith(...).Parallel().Do(...).Do(...).Do(...).Join().Then(...)`.
 Each branch has two simulated steps with different delays.

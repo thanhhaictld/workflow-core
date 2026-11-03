@@ -4,24 +4,25 @@ on:
   push:
     branches:
       - feat/workflow-hub-otel-observability
+      - refactor/scaling-project-layout
     paths:
-      - 'scaling/observability/**'
+      - 'scaling/**'
       - 'monitor/**'
-      - 'src/samples/WorkflowCore.Scaling.Api/**'
-      - 'src/providers/WorkflowCore.Hub/**'
-      - 'src/providers/WorkflowCore.Hub.Gateway/**'
-      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
-      - 'src/samples/WorkflowCore.Hub.Host/**'
-      - 'src/samples/WorkflowCore.Scaling.Worker/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/**'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - '.github/workflows/workflow-hub-observability.yml'
   pull_request:
     paths:
-      - 'scaling/observability/**'
-      - 'src/providers/WorkflowCore.Hub/**'
-      - 'src/providers/WorkflowCore.Hub.Gateway/**'
-      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
-      - 'src/samples/WorkflowCore.Hub.Host/**'
-      - 'src/samples/WorkflowCore.Scaling.Worker/**'
+      - 'scaling/**'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - '.github/workflows/workflow-hub-observability.yml'
   workflow_dispatch:
 
