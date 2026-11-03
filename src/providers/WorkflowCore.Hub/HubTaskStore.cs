@@ -4,7 +4,7 @@ using NpgsqlTypes;
 
 namespace WorkflowCore.Hub;
 
-public sealed record HubCapability(string TaskType, int Version);
+public sealed record HubCapability(string HubId, string TaskType, int Version);
 public sealed record HubLeasedTask(
     Guid Id, string HubId, int PartitionId, string TaskType, int Version,
     Guid? WorkflowId, JsonElement Payload, long Epoch, int Attempts,
