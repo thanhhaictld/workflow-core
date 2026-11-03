@@ -27,10 +27,11 @@ services:
       PG_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
       PG_DATABASE: ${PG_DATABASE:-workflow}
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      for migration in 002_distributed_runtime.sql 007_hub_gateway.sql 008_hub_workflows.sql; do
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f "/sql/$$migration"
-      done
+    command:
+      - |
+        for migration in 002_distributed_runtime.sql 007_hub_gateway.sql 008_hub_workflows.sql; do
+          PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f "/sql/$migration"
+        done
     restart: "no"
 
   hub:
@@ -115,6 +116,7 @@ services:
 
   loki:
     image: grafana/loki:3.6.0
+    user: "0:0" # Local lab volume bootstrap; not production hardening
     command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
       - ./loki.yaml:/etc/loki/local-config.yaml:ro
@@ -132,7 +134,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - hub_grafana:/var/lib/grafana
     ports:
