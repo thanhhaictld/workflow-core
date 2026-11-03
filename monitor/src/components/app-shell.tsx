@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, BookOpen, ChevronRight, CircleHelp, GitBranch, Layers3, ListTree, Menu, Moon, Sun, X } from "lucide-react";
+import { Activity, BarChart3, BookOpen, ChevronRight, CircleHelp, GitBranch, Layers3, ListTree, Menu, Moon, Sun, X } from "lucide-react";
 import { Button, cn } from "./ui";
 
 const documentation = "https://github.com/thanhhaictld/workflow-core/blob/feat/workflow-monitor-dashboard/scaling/docs/execution-history.md";
@@ -50,6 +50,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <nav className="flex-1 px-3 py-6">
         <div className="px-3 pb-3 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Workspace</div>
+        <Link href="/operations" onClick={() => setSidebarOpen(false)}
+          className={cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+            pathname.startsWith("/operations") ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
+          <BarChart3 size={17} /><span>Operations dashboard</span><ChevronRight size={15} className="ml-auto opacity-50" />
+        </Link>
         <Link href="/workflows" onClick={() => setSidebarOpen(false)}
           className={cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
             pathname.startsWith("/workflows") ? "bg-primary/10 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted")}>
@@ -84,7 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex min-w-0 items-center gap-2 truncate text-sm">
             <span className="hidden text-muted-foreground sm:inline">Monitor</span>
             <ChevronRight size={14} className="hidden text-muted-foreground sm:inline" />
-            <span className="font-medium">{isDefinitions ? "Definition management" : isDetail ? "Execution detail" : "Workflow runs"}</span>
+            <span className="font-medium">{isDefinitions ? "Definition management" : isDetail ? "Execution detail" : pathname.startsWith("/operations") ? "Workflow operations" : "Workflow runs"}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -100,7 +105,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
       <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-7 sm:px-7 lg:py-9">{children}</main>
       <footer className="border-t border-border px-7 py-4 text-xs text-muted-foreground">
-        Workflow Core monitoring · real PostgreSQL history · simulated demo steps
+        Workflow Core monitoring · live PostgreSQL state · durable execution history
       </footer>
     </div>
   </div>;
