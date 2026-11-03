@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -30,6 +31,10 @@ public sealed class HubWorkflowStore(
 
     public async Task<Guid> StartAsync(HubWorkflowStartRequest request, CancellationToken ct)
     {
+        using var span = HubTelemetry.Traces.StartActivity("hub.workflow.start");
+        span?.SetTag("hub", request.HubId);
+        span?.SetTag("workflow.definition", request.DefinitionId);
+        var startedAt = Stopwatch.GetTimestamp();
         var definition = definitions.Get(request.HubId, request.DefinitionId, request.Version)
             ?? throw new KeyNotFoundException("Unknown code-first Hub workflow");
         if (request.Input.ValueKind != JsonValueKind.Object ||
@@ -168,6 +173,9 @@ public sealed class HubWorkflowStore(
             }
         }
         await tx.CommitAsync(ct);
+        HubTelemetry.WorkflowsStarted.Add(1, HubTelemetry.HubTag(request.HubId));
+        HubTelemetry.StoreOperationDuration.Record(Stopwatch.GetElapsedTime(startedAt).TotalSeconds,
+            HubTelemetry.HubTag(request.HubId), new("operation", "start"));
         return id;
     }
 
@@ -253,6 +261,14 @@ public sealed class HubWorkflowStore(
             await next.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+        HubTelemetry.TasksCompleted.Add(1, HubTelemetry.HubTag(task.HubId),
+            HubTelemetry.ActivityTag(task.ActivityType));
+        if (task.Step + 1 == task.StepCount)
+        {
+            HubTelemetry.WorkflowsCompleted.Add(1, HubTelemetry.HubTag(task.HubId));
+            HubTelemetry.WorkflowDuration.Record((DateTime.UtcNow - task.CreatedAt).TotalSeconds,
+                HubTelemetry.HubTag(task.HubId));
+        }
         return true;
     }
 
@@ -311,6 +327,11 @@ public sealed class HubWorkflowStore(
             await history.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+        HubTelemetry.TasksFailed.Add(1, HubTelemetry.HubTag(task.HubId),
+            HubTelemetry.ActivityTag(task.ActivityType),
+            new KeyValuePair<string, object?>("outcome", dead ? "dead" : "retry"));
+        if (dead)
+            HubTelemetry.WorkflowsFailed.Add(1, HubTelemetry.HubTag(task.HubId));
         return true;
     }
 
@@ -411,7 +432,7 @@ public sealed class HubWorkflowStore(
         await using var cmd = new NpgsqlCommand("""
             SELECT t.workflow_id,t.workflow_step,t.state,t.owner,t.epoch,
                    t.lease_until,t.attempts,t.max_attempts,
-                   w.state,w.next_step
+                   w.state,w.next_step,t.hub_id,t.task_type,w.created_at,w.step_count
             FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w
               ON w.id=t.workflow_id
             WHERE t.id=@id AND t.workflow_step IS NOT NULL
@@ -424,10 +445,12 @@ public sealed class HubWorkflowStore(
             reader.IsDBNull(3) ? null : reader.GetString(3),reader.GetInt64(4),
             reader.IsDBNull(5) ? DateTime.MinValue : reader.GetDateTime(5),
             reader.GetInt32(6),reader.GetInt32(7),reader.GetInt16(8),
-            reader.GetInt32(9));
+            reader.GetInt32(9),reader.GetString(10),reader.GetString(11),
+            reader.GetDateTime(12),reader.GetInt32(13));
     }
 
     private sealed record ManagedTask(Guid WorkflowId, int Step, short State,
         string? Owner, long Epoch, DateTime LeaseUntil, int Attempts,
-        int MaxAttempts, short WorkflowState, int NextStep);
+        int MaxAttempts, short WorkflowState, int NextStep,
+        string HubId, string ActivityType, DateTime CreatedAt, int StepCount);
 }
