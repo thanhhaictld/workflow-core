@@ -280,9 +280,28 @@ export function OperationsDashboard() {
             points={data.trends} property="activityCompleted" />
           <ChartBars title="Active leases" description="Persisted queue samples" points={data.trends} property="leased" isNullable />
         </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Kpi label="SSE sessions" value={data.processMetrics.values.sseConnections === undefined ||
+            data.processMetrics.values.sseConnections === null ? "N/A" : data.processMetrics.values.sseConnections}
+            caption="Current OTel Prometheus gauge; global" />
+          <Kpi label="Hub claim latency P95" value={formatAge(data.processMetrics.values.hubClaimP95Seconds ?? null)}
+            caption="Claim operation latency, last 5m" />
+          <Kpi label="Worker execution P95" value={formatAge(data.processMetrics.values.workerExecutionP95Seconds ?? null)}
+            caption="Activity worker duration, last 5m" />
+          <Kpi label="Timer fire lag P95" value={formatAge(data.processMetrics.values.timerLagP95Seconds ?? null)}
+            caption="Scheduler trigger lateness, last 5m" />
+          <Kpi label="Hub HTTP latency P95" value={formatAge(data.processMetrics.values.httpP95Seconds ?? null)}
+            caption="HTTP request latency, last 5m" />
+          <Kpi label="Scheduler errors (5m)" value={data.processMetrics.values.timerSchedulerErrors5m ?? "N/A"}
+            caption="OTel counter increase" />
+        </div>
         <Card className="p-5">
-          <p className="font-semibold">Gateway delivery and SSE telemetry</p>
-          <p className="mt-2 text-sm text-muted-foreground">SSE notification counts, live SSE connections, dispatch claim latency, and process metrics are already emitted through the WorkflowCore.Hub OpenTelemetry meter. These process-local measures are not inferred from durable task state. View the existing Grafana Workflow Hub runtime dashboard for those series.</p>
+          <p className="font-semibold">Gateway delivery and process telemetry</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {data.processMetrics.available ? "Prometheus connected. Process metrics are global across business hubs." :
+              "Prometheus unavailable or unconfigured. Set WORKFLOW_PROMETHEUS_URL on the monitor server; metrics will show N/A rather than fake zeros."}
+            {" "}Detailed worker/process trends, HTTP routes and SSE counters remain in Grafana.
+          </p>
         </Card>
       </>}
       {section === "concurrency" && <>
@@ -298,6 +317,7 @@ export function OperationsDashboard() {
         <div className="grid gap-3 sm:grid-cols-3">
           <Kpi label="Active lease owners" value={data.workers.length} caption="Only workers with in-flight tasks" />
           <Kpi label="Tasks in flight" value={tasks!.leased} caption="Active leases across the Hub" />
+          <Kpi label="Worker inflight (OTel)" value={data.processMetrics.values.workerInflight ?? "N/A"} caption="Live process gauge, global" />
           <Kpi label="Lease duration P95" value={formatAge(data.latency.leaseP95Seconds)} caption="Claim-to-finish span; not CPU time" />
         </div>
         <WorkerRows data={data} />

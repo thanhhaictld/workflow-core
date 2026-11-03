@@ -3,6 +3,16 @@ export interface OperationsSnapshot {
   observedAt: string;
   windowMinutes: OperationsWindow;
   database: { connections: number; activeConnections: number };
+  processMetrics: {
+    available: boolean;
+    scope: "global";
+    values: Partial<Record<
+      "sseConnections" | "hubClaimP95Seconds" | "workerExecutionP95Seconds" |
+      "httpP95Seconds" | "timerLagP95Seconds" | "timerSchedulerErrors5m" |
+      "workerInflight" | "taskClaimsPerSecond" | "workflowFailures5m",
+      number | null
+    >>;
+  };
   workflows: {
     active: number; ready: number; running: number; waiting: number;
     scheduled: number; completed24h: number; failed24h: number;

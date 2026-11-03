@@ -94,3 +94,14 @@ PostgreSQL and applies migration 011 before those tests.
 **Suggested operational triage:** Runnable workflow backlog, oldest ready
 age, activity backlog, blocked resources, partition skew, active lease owners,
 first-claim latency and workflow execution history.
+
+
+## Process-local OpenTelemetry metrics (optional)
+
+Set \`WORKFLOW_PROMETHEUS_URL\` on the **Next.js server** to make the Hub
+and Workers panels show live SSE sessions, Hub task claim P95, worker
+execution P95, HTTP P95, timer fire lag P95, scheduler error counts and
+worker in-flight counts. The Next.js API queries Prometheus server-side;
+query names match the existing \`workflow-hub-runtime.json\` Grafana
+dashboard. Metrics are global, even if a business Hub filter is active.
+Missing or unavailable series are returned as null and rendered as N/A.

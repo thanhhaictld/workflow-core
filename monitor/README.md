@@ -341,3 +341,10 @@ existing OpenTelemetry/Grafana dashboards.
 
 Full metric catalog, caveats and deployment:
 [Operations dashboard design](../scaling/docs/operations-dashboard.md).
+
+
+For process-local telemetry, optionally set \`WORKFLOW_PROMETHEUS_URL\`
+to your internal Prometheus base URL (Compose uses
+\`http://prometheus:9090\`). Without it, SQL counters still work, while
+SSE/claim/HTTP/timer P95 show N/A. Do not expose Prometheus or the bearer
+secret in client-side environment variables.
