@@ -23,6 +23,14 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_workflows_failed", "{workflow}");
     public static readonly Histogram<double> WorkflowDuration =
         Meter.CreateHistogram<double>("workflow_hub_workflow_duration_seconds", "s");
+    public static readonly Counter<long> TimerFired =
+        Meter.CreateCounter<long>("workflow_hub_timer_fired", "{timer}");
+    public static readonly Histogram<double> TimerFireLag =
+        Meter.CreateHistogram<double>("workflow_hub_timer_fire_lag_seconds", "s");
+    public static readonly Histogram<double> TimerBatchDuration =
+        Meter.CreateHistogram<double>("workflow_hub_timer_batch_duration_seconds", "s");
+    public static readonly Counter<long> TimerSchedulerErrors =
+        Meter.CreateCounter<long>("workflow_hub_timer_scheduler_errors", "{error}");
     public static readonly Counter<long> TasksClaimed =
         Meter.CreateCounter<long>("workflow_hub_tasks_claimed", "{task}");
     public static readonly Counter<long> TasksCompleted =
