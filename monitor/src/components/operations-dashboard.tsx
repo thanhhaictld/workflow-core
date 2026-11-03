@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity, AlertTriangle, BarChart3, Clock3, GitBranch, History, Layers3,
+  AlertTriangle, BarChart3, GitBranch, History, Layers3,
   ListChecks, LockKeyhole, Network, RefreshCcw, Server
 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, EmptyState, Select, cn } from "./ui";
@@ -34,7 +34,7 @@ function Kpi({ label, value, caption, critical = false }: {
 }
 function ChartBars({ title, description, points, property, isNullable = false }: {
   title: string; description: string; points: OperationsSnapshot["trends"];
-  property: "runnable" | "ready" | "leased" | "started" | "completed" | "failed";
+  property: "runnable" | "ready" | "leased" | "started" | "completed" | "failed" | "activityCompleted";
   isNullable?: boolean;
 }) {
   const values = points.map(p => p[property]);
@@ -272,10 +272,12 @@ export function OperationsDashboard() {
           <Kpi label="Leased tasks" value={tasks!.leased} caption="Hub queue leases" />
           <Kpi label="Dead letters" value={tasks!.dead} caption="Exhausted tasks" />
           <Kpi label="Completed workflows (24h)" value={summary!.completed24h} caption="Hub-managed workflow completions" />
+          <Kpi label="PostgreSQL connections" value={data.database.connections} caption="Connections to Hub database" />
+          <Kpi label="Active SQL connections" value={data.database.activeConnections} caption="Currently executing queries" />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <ChartBars title="Activity completion events" description="Terminal tasks per bucket, based on updated_at"
-            points={data.trends} property="completed" />
+            points={data.trends} property="activityCompleted" />
           <ChartBars title="Active leases" description="Persisted queue samples" points={data.trends} property="leased" isNullable />
         </div>
         <Card className="p-5">

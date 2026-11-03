@@ -57,6 +57,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
@@ -241,6 +242,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
       - name: Build Hub, remote worker and performance harness
         run: |
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release

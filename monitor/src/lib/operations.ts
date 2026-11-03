@@ -2,6 +2,7 @@ export type OperationsWindow = 60 | 360 | 1440;
 export interface OperationsSnapshot {
   observedAt: string;
   windowMinutes: OperationsWindow;
+  database: { connections: number; activeConnections: number };
   workflows: {
     active: number; ready: number; running: number; waiting: number;
     scheduled: number; completed24h: number; failed24h: number;

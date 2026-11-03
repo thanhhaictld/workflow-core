@@ -37,7 +37,8 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/007_hub_gateway.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/008_hub_workflows.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/009_hub_task_attempts.sql
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
+        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
+        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/011_hub_monitor_sample.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.

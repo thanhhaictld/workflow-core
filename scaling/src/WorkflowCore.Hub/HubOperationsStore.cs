@@ -256,7 +256,14 @@ public sealed class HubOperationsStore(HubTaskStore tasks)
             LEFT JOIN done ON b.bucket=done.slot
             LEFT JOIN task_done ON b.bucket=task_done.slot
             """, hub, windowMinutes, ct);
-        return new { observedAt=DateTime.UtcNow, windowMinutes,
+        var database = await ReadAsync(db, """
+            SELECT jsonb_build_object(
+                'connections',count(*) FILTER (WHERE datname=current_database()),
+                'activeConnections',count(*) FILTER (
+                    WHERE datname=current_database() AND state='active')
+            )::text FROM pg_stat_activity
+            """, hub, windowMinutes, ct);
+        return new { observedAt=DateTime.UtcNow, windowMinutes, database,
             workflows, tasks=tasksSummary, contention, latency,
             partitions, activities, policies, workers, timers, trends };
     }

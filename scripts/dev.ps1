@@ -125,7 +125,7 @@ function Apply-DatabaseSchema {
     foreach ($migration in @('002_distributed_runtime.sql', '003_signal_delivery.sql',
         '004_request_dedupe.sql', '005_execution_history.sql', '006_definition_versions.sql',
         '007_hub_gateway.sql', '008_hub_workflows.sql', '009_hub_task_attempts.sql',
-        '010_hub_remote_scheduler.sql')) {
+        '010_hub_remote_scheduler.sql', '011_hub_monitor_sample.sql')) {
         Write-Host "Applying $migration..."
         Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
@@ -266,7 +266,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
-  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–010 migrations
+  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–011 migrations
   pwsh ./scripts/dev.ps1 db-down     Stop PostgreSQL (keep data)
   pwsh ./scripts/dev.ps1 db-logs     Tail PostgreSQL logs
   pwsh ./scripts/dev.ps1 db-reset -ConfirmReset    DELETE local DB volume

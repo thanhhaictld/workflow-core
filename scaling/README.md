@@ -121,6 +121,9 @@ A dedicated PostgreSQL schema is recommended for each performance benchmark.
 
 ## Monitoring dashboard
 
+[Operations dashboard architecture and metric definitions](docs/operations-dashboard.md).
+
+
 A new read-only [Next.js workflow monitor](../monitor/README.md) adapts the
 MIT-licensed Shadcn Studio AdminCN Free theme and provides filtered workflow
 runs, KPI summaries, a Temporal-style step-attempt waterfall, append-only event
