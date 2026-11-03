@@ -1,0 +1,116 @@
+name: Workflow Hub OTEL Observability Smoke
+
+on:
+  push:
+    branches:
+      - feat/workflow-hub-otel-observability
+    paths:
+      - 'scaling/observability/**'
+      - 'src/providers/WorkflowCore.Hub/**'
+      - 'src/providers/WorkflowCore.Hub.Gateway/**'
+      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
+      - 'src/samples/WorkflowCore.Hub.Host/**'
+      - 'src/samples/WorkflowCore.Scaling.Worker/**'
+      - '.github/workflows/workflow-hub-observability.yml'
+  pull_request:
+    paths:
+      - 'scaling/observability/**'
+      - 'src/providers/WorkflowCore.Hub/**'
+      - 'src/providers/WorkflowCore.Hub.Gateway/**'
+      - 'src/providers/WorkflowCore.Hub.Telemetry/**'
+      - 'src/samples/WorkflowCore.Hub.Host/**'
+      - 'src/samples/WorkflowCore.Scaling.Worker/**'
+      - '.github/workflows/workflow-hub-observability.yml'
+  workflow_dispatch:
+
+jobs:
+  compose-otel-k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate k6 syntax and provisioned dashboard JSON
+        run: |
+          node --input-type=module --check < scaling/observability/k6/hub-workflows.js
+          python3 - <<'PY'
+          import json
+          path='scaling/observability/grafana/dashboards/workflow-hub-runtime.json'
+          dashboard=json.load(open(path))
+          assert len(dashboard['panels']) >= 16
+          titles=[p['title'].lower() for p in dashboard['panels']]
+          assert any('memory' in title for title in titles)
+          assert any('throughput' in title for title in titles)
+          assert any('database' in title for title in titles)
+          assert any('k6' in title for title in titles)
+          print('Dashboard JSON parsed and required performance panels verified.')
+          PY
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+      - name: Build and launch local OTEL / Grafana / workflow stack
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale worker=2
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
+      - name: Verify collector, Hub and Grafana readiness
+        run: |
+          set -euo pipefail
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:3001/api/health >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
+          curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
+          curl --fail-with-body -fsS -u admin:local-grafana-change-this \
+            http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel >/tmp/grafana-dashboard.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/grafana-dashboard.json'))
+          assert len(x['dashboard']['panels']) >= 16
+          print('Grafana provisioned dashboard verified.')
+          PY
+      - name: Run real 20-workflow k6 E2E test and send data to Prometheus
+        run: |
+          chmod 0777 scaling/observability/results
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            run --rm -e K6_WORKFLOWS=20 -e K6_VUS=10 \
+            -e K6_MAX_WAIT_SECONDS=120 k6
+          test -s scaling/observability/results/k6-summary.json
+      - name: Verify OTLP Hub metrics and Prometheus remote-write samples
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            curl -fsSG --data-urlencode 'query=workflow_hub_workflows_completed_total' \
+              http://127.0.0.1:9090/api/v1/query > /tmp/hub-otel-metric.json
+            curl -fsSG --data-urlencode 'query=k6_hub_workflows_completed_total' \
+              http://127.0.0.1:9090/api/v1/query > /tmp/k6-metric.json
+            if python3 - <<'PY'
+          import json
+          hub=json.load(open('/tmp/hub-otel-metric.json'))
+          k6=json.load(open('/tmp/k6-metric.json'))
+          assert hub['status']=='success' and hub['data']['result']
+          assert k6['status']=='success' and k6['data']['result']
+          PY
+            then break; fi
+            sleep 3
+          done
+          python3 - <<'PY'
+          import json
+          hub=json.load(open('/tmp/hub-otel-metric.json'))
+          k6=json.load(open('/tmp/k6-metric.json'))
+          assert hub['data']['result'], 'Hub metric not exported to Prometheus'
+          assert k6['data']['result'], 'k6 remote write missing from Prometheus'
+          print('PASS: Hub OpenTelemetry and k6 Prometheus remote-write metrics arrived.')
+          PY
+      - name: Compose service logs on failure
+        if: failure()
+        run: docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=150
+      - name: Stop containers
+        if: always()
+        run: docker compose -f "$COMPOSE" --env-file "$ENVFILE" down --remove-orphans
