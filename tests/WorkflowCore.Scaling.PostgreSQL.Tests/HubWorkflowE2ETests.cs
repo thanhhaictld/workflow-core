@@ -60,7 +60,18 @@ public sealed class HubWorkflowE2ETests
             Assert.Equal("Ready", initial.State);
             Assert.Equal(2, initial.StepCount);
 
+            var initialTrace = await workflows.TraceAsync(started, CancellationToken.None);
+            Assert.Equal(2, initialTrace.Count);
+            Assert.NotNull(initialTrace[0].ReadyAt);
+            Assert.Null(initialTrace[1].ReadyAt);
+            Assert.All(initialTrace, step => Assert.Empty(step.Attempts));
+
             var first = await ClaimOne(tasks, hub, "worker-1");
+            var claimedTrace = await workflows.TraceAsync(started, CancellationToken.None);
+            Assert.Single(claimedTrace[0].Attempts);
+            Assert.Equal(first.Epoch, claimedTrace[0].Attempts[0].Epoch);
+            Assert.Null(claimedTrace[0].Attempts[0].FinishedAt);
+            Assert.Equal("Leased", claimedTrace[0].Attempts[0].Outcome);
             Assert.Equal(0, (await workflows.GetAsync(started, CancellationToken.None))!.NextStep);
             Assert.Equal("validate", first.TaskType);
             Assert.True(await workflows.CompleteAsync(first.Id, "worker-1", first.Epoch,
@@ -80,6 +91,18 @@ public sealed class HubWorkflowE2ETests
             Assert.Equal(2, done.NextStep);
             Assert.True(done.Results.GetProperty("0").GetProperty("validated").GetBoolean());
             Assert.True(done.Results.GetProperty("1").GetProperty("provisioned").GetBoolean());
+            var waterfall = await workflows.TraceAsync(started, CancellationToken.None);
+            Assert.Equal(new[] { "validate", "provision" },
+                waterfall.Select(step => step.ActivityType).ToArray());
+            Assert.All(waterfall, step =>
+            {
+                Assert.NotNull(step.ReadyAt);
+                var attempt = Assert.Single(step.Attempts);
+                Assert.Equal("Completed", attempt.Outcome);
+                Assert.NotNull(attempt.FinishedAt);
+                Assert.True(attempt.FinishedAt >= attempt.ClaimedAt);
+            });
+            Assert.True(waterfall[1].ReadyAt >= waterfall[0].ReadyAt);
             var history = await workflows.HistoryAsync(started, CancellationToken.None);
             Assert.Equal(new[] { 0, 1 }, history.Select(e => e.StepIndex).ToArray());
             Assert.All(history, e => Assert.Equal("StepCompleted", e.EventType));
@@ -182,6 +205,9 @@ public sealed class HubWorkflowE2ETests
                 "temporary", TimeSpan.Zero, CancellationToken.None));
             Assert.False(await workflows.CompleteAsync(first.Id, "worker-a", first.Epoch,
                 """{"stale":true}""", CancellationToken.None));
+            var afterFail = await workflows.TraceAsync(id, CancellationToken.None);
+            Assert.Equal("RetryScheduled", Assert.Single(afterFail[0].Attempts).Outcome);
+            Assert.NotNull(afterFail[0].Attempts[0].FinishedAt);
             var retry = await ClaimOne(tasks, hub, "worker-b");
             Assert.Equal(first.Id, retry.Id);
             Assert.True(retry.Epoch > first.Epoch);
@@ -191,6 +217,15 @@ public sealed class HubWorkflowE2ETests
             Assert.True(await workflows.CompleteAsync(second.Id, "worker-b", second.Epoch,
                 """{"ok":true}""", CancellationToken.None));
             Assert.Equal("Complete", (await workflows.GetAsync(id, CancellationToken.None))!.State);
+            var trace = await workflows.TraceAsync(id, CancellationToken.None);
+            Assert.Equal(2, trace[0].Attempts.Count);
+            Assert.Equal(new[] { "RetryScheduled", "Completed" },
+                trace[0].Attempts.Select(a => a.Outcome).ToArray());
+            Assert.Equal("worker-a", trace[0].Attempts[0].WorkerId);
+            Assert.Equal("worker-b", trace[0].Attempts[1].WorkerId);
+            Assert.True(trace[0].Attempts[1].Epoch > trace[0].Attempts[0].Epoch);
+            Assert.All(trace.SelectMany(step => step.Attempts),
+                attempt => Assert.NotNull(attempt.FinishedAt));
         }
     }
 }
