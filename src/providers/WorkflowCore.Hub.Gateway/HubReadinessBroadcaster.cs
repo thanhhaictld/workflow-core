@@ -11,7 +11,8 @@ namespace WorkflowCore.Hub.Gateway;
 /// Every Hub replica scans for ready hubs; missing a hint never loses work.
 /// </summary>
 public sealed class HubReadinessBroadcaster(
-    HubTaskStore store, ILogger<HubReadinessBroadcaster> logger) : BackgroundService
+    HubTaskStore store, HubWorkflowStore workflows,
+    ILogger<HubReadinessBroadcaster> logger) : BackgroundService
 {
     private sealed record Subscriber(HashSet<string> Hubs, Channel<string> Channel);
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
@@ -58,6 +59,7 @@ public sealed class HubReadinessBroadcaster(
             try
             {
                 await store.DeadLetterExpiredAsync(stoppingToken);
+                await workflows.ReconcileDeadAsync(stoppingToken);
                 foreach (var hub in await store.ReadyHubsAsync(stoppingToken))
                     Publish(hub);
                 // SSE comments keep intermediaries from closing truly idle streams.
