@@ -314,3 +314,30 @@ Enable authentication, per-tenant authorization and keyset pagination
 before exposing the monitor to external users.
 
 See ../scaling/observability/README.md for Docker Compose and k6 usage.
+
+
+## Hub Operations Dashboard
+
+The monitor now opens at \`/operations\` and has Overview, Activities,
+Partitions, Hub & scheduler, Concurrency, Workers and History pages.
+
+Apply migrations through \`011_hub_monitor_sample.sql\` and configure the
+monitor server with \`WORKFLOW_HUB_URL\` (Hub base URL) and
+\`WORKFLOW_HUB_TOKEN\` (equal to the Hub server's \`WFC_HUB_AUTH_TOKEN\`).
+Run the independent Hub Host with its PostgreSQL connection. The browser
+only talks to the Next.js API proxy and never sees the Hub token.
+
+The UI refreshes every 15 seconds, filters by business Hub, and offers
+1h/6h/24h ranges. One-minute aggregate backlog snapshots are kept for seven
+days. No generated demo metrics are ever returned by the API.
+
+**Definitions:** Active workflow count includes waits; runnable workflow
+backlog counts distinct workflow IDs with eligible tasks. Activity ready
+backlog includes tasks blocked by capacity/FIFO; delayed work is separate.
+Capacity-blocked is a snapshot estimate. First-claim P95 is based on durable
+attempt history only. Worker list shows active lease owners, not idle workers
+or actual partition ownership. For SSE, HTTP and process metrics, use the
+existing OpenTelemetry/Grafana dashboards.
+
+Full metric catalog, caveats and deployment:
+[Operations dashboard design](../scaling/docs/operations-dashboard.md).
