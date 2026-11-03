@@ -79,6 +79,31 @@ jobs:
           curl --fail-with-body -fsSL http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
           curl --fail-with-body -fsS http://127.0.0.1:3002/backend/monitor/overview >/tmp/legacy-monitor-overview.json
           curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
+
+          # Verify real PostgreSQL-backed dashboard through the Next.js
+          # server-side authenticated Hub proxy (no demo fixtures).
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/operations?windowMinutes=60' >/tmp/operations-global.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/operations?hub=onboarding&windowMinutes=360' >/tmp/operations-hub.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations' >/dev/null
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations/activities' >/dev/null
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations/partitions' >/dev/null
+          python3 - <<'PY'
+          import json
+          global_view=json.load(open('/tmp/operations-global.json'))
+          business_view=json.load(open('/tmp/operations-hub.json'))
+          for report in (global_view,business_view):
+              for name in ('workflows','tasks','contention','latency','database',
+                           'partitions','activities','policies','workers','timers','trends'):
+                  assert name in report, f'Operations report is missing {name}'
+              assert report['tasks']['ready'] >= 0
+              assert report['tasks']['leased'] >= 0
+              assert report['workflows']['active'] >= 0
+              assert len(report['trends']) >= 12
+              assert 'processMetrics' in report
+          assert global_view['windowMinutes'] == 60
+          assert business_view['windowMinutes'] == 360
+          print('PASS: authenticated operations dashboard responds with live Hub snapshots and trend buckets')
+          PY
           python3 - <<'PY'
           import json
           legacy=json.load(open('/tmp/legacy-monitor-overview.json'))
