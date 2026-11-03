@@ -9,7 +9,9 @@ using WorkflowCore.Scaling.Worker;
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WFC_HUB_URL")))
 {
     var remote = Host.CreateApplicationBuilder(args);
+    remote.Services.AddSingleton<IHubActivityHandler, ValidateTenantHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, ProvisionTenantHandler>();
+    remote.Services.AddSingleton<IHubActivityHandler, SendWelcomeHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, RestoreDatabaseHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, CapturePaymentHandler>();
     remote.Services.AddHostedService<HubRemoteWorker>();
