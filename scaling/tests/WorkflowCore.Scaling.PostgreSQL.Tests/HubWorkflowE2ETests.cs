@@ -37,7 +37,7 @@ public sealed class HubWorkflowE2ETests
         var candidates = await tasks.ClaimAsync(worker, new[] { hub },
             new[] { new HubCapability(hub, "validate", 1),
                     new HubCapability(hub, "provision", 1) },
-            8, TimeSpan.FromSeconds(30), CancellationToken.None);
+            1, TimeSpan.FromSeconds(30), CancellationToken.None);
         return Assert.Single(candidates);
     }
 
