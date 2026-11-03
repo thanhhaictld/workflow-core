@@ -13,6 +13,17 @@ https://github.com/danielgerlag/conductor
 
 ## Documentation
 
+### Standalone Workflow Hub Gateway and concurrency policies (experimental)
+
+The `feat/workflow-hub-gateway-concurrency` branch adds a standalone REST +
+SSE Hub Gateway, a bounded PostgreSQL connection pool, DB-free remote activity
+workers, and code-first concurrency policies (limited, exclusive, strict FIFO
+and cross-hub resource constraints).
+
+See the [Hub architecture and local runbook](scaling/docs/workflow-hub-gateway.md).
+**Scope:** this is a tested remote-*activity* slice; existing Workflow Core
+instance execution has not yet been migrated to Hub-hosted persistence.
+
 ### Experimental distributed PostgreSQL runtime (this fork branch)
 
 The `feat/distributed-postgres-runtime` branch includes a separate .NET 10
