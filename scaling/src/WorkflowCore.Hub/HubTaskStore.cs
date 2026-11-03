@@ -300,6 +300,23 @@ public sealed class HubTaskStore : IAsyncDisposable
                     attempt.Parameters.AddWithValue("worker", workerId);
                     await attempt.ExecuteNonQueryAsync(ct);
                 }
+                if (taskType == "__workflow__" && workflow is Guid processorWorkflow &&
+                    found is not null)
+                {
+                    await using var log = new NpgsqlCommand("""
+                        INSERT INTO wfc_scale.hub_workflow_event
+                        (workflow_id,step_index,task_id,activity_type,event_type,payload)
+                        SELECT w.id,w.next_step,@task,'__workflow__',
+                               'WorkflowTaskClaimed',
+                               jsonb_build_object('worker',@worker,'epoch',@epoch)
+                        FROM wfc_scale.hub_workflow w WHERE w.id=@workflow
+                        """, db, tx);
+                    log.Parameters.AddWithValue("task", id);
+                    log.Parameters.AddWithValue("workflow", processorWorkflow);
+                    log.Parameters.AddWithValue("worker", workerId);
+                    log.Parameters.AddWithValue("epoch", found.Epoch);
+                    await log.ExecuteNonQueryAsync(ct);
+                }
                 await tx.CommitAsync(ct);
                 break;
             }
