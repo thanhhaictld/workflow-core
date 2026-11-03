@@ -7,6 +7,7 @@ using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Api;
 using WorkflowCore.Hub.Gateway;
+using WorkflowCore.Hub.Telemetry;
 using WorkflowCore.Scaling.Samples;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,6 +24,7 @@ if (Environment.GetEnvironmentVariable("WFC_MIGRATE_ONLY") == "1")
     return;
 }
 
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-core-api", httpServer: true);
 builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 {
     options.Concurrency = int.TryParse(Environment.GetEnvironmentVariable("WORKERS"), out var workers)
