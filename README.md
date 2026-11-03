@@ -21,6 +21,9 @@ workers, and code-first concurrency policies (limited, exclusive, strict FIFO
 and cross-hub resource constraints).
 
 See the [Hub architecture and local runbook](scaling/docs/workflow-hub-gateway.md).
+The [1,000-concurrent-workflow benchmark](scaling/docs/workflow-hub-1000-performance.md)
+completed 1,000 three-step remote workflows with zero failures and a maximum
+of 12 observed PostgreSQL connections (two GitHub CI runs).
 **Scope:** this is a tested remote-*activity* slice; existing Workflow Core
 instance execution has not yet been migrated to Hub-hosted persistence.
 
