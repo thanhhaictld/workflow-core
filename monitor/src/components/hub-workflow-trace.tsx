@@ -7,7 +7,8 @@ import {
   Clock3, GitBranch, RefreshCw, Timer, Workflow,
 } from "lucide-react";
 import { durationMs, formatDate, formatDuration, shortId } from "@/lib/format";
-import { Badge, Button, Card, CardHeader, StatusBadge, cn } from "./ui";
+import { Badge, Button, Card, CardHeader, StatusBadge } from "./ui";
+import { HubTraceWaterfall, type HubTraceStep } from "./hub-trace-waterfall";
 
 type HubWorkflow = {
   id: string;
@@ -41,6 +42,7 @@ type HubDefinition = {
 type HubDetailResponse = {
   workflow: HubWorkflow;
   history: HubHistory[];
+  trace: HubTraceStep[];
   definition: HubDefinition | null;
 };
 type Tab = "trace" | "history" | "state";
@@ -85,6 +87,7 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
 
   const workflow = detail?.workflow;
   const history = detail?.history ?? [];
+  const trace = detail?.trace ?? [];
   const count = workflow?.stepCount ?? 0;
   const steps = useMemo(() => Array.from({ length: count }, (_, index) => {
     const events = history.filter(record => record.stepIndex === index);
@@ -167,29 +170,8 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
 
       {tab === "trace" && <>
         <Card className="overflow-hidden">
-          <CardHeader title="Activity execution path"
-            description="Code-first sequential activities; order and outcomes are read from Hub durable history."/>
-          <div className="p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              {steps.map((step, index) =>
-                <div className="flex items-center gap-2" key={step.index}>
-                  {index > 0 && <ChevronRight size={18} className="text-muted-foreground"/>}
-                  <button type="button" onClick={() => setSelectedStep(step.index)}
-                    aria-pressed={selectedStep === step.index}
-                    className={cn("flex min-w-32 flex-col gap-1 rounded-lg border px-4 py-3 text-left hover:bg-muted/50",
-                      selectedStep === step.index ? "border-primary bg-primary/5" : "border-border")}>
-                    <span className="text-xs font-semibold">{step.name}</span>
-                    <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className={cn("size-2 rounded-full",
-                        step.state === "Complete" ? "bg-emerald-500" :
-                        step.state === "Failed" ? "bg-rose-500" :
-                        step.state === "Running" ? "bg-blue-500" : "bg-slate-400")}/>
-                      {step.state}
-                    </span>
-                  </button>
-                </div>)}
-            </div>
-          </div>
+          <HubTraceWaterfall workflow={workflow} trace={trace} history={history}
+            selectedStep={selectedStep} onSelectStep={setSelectedStep}/>
         </Card>
 
         <Card className="overflow-hidden">
@@ -221,7 +203,7 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
 
       {tab === "history" && <Card className="overflow-hidden">
         <CardHeader title="Durable workflow event history"
-          description="Events persisted by Workflow Hub. Older lease heartbeats and individual task start times are not journaled."/>
+          description="Durable Hub completion, retry and failure journal. The waterfall separately displays persisted lease attempts."/>
         <div className="divide-y divide-border">
           {history.map((entry, index) =>
             <button key={entry.taskId + entry.eventType + index}
