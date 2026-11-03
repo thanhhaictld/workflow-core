@@ -163,7 +163,7 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             owner=reader.IsDBNull(1)?null:reader.GetString(1);
             lastOwner=reader.IsDBNull(2)?null:reader.GetString(2);
             epoch=reader.GetInt64(3);
-            lease=reader.IsDBNull(4)?null:reader.GetDateTime(4);
+            lease=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4);
             storedResult=reader.IsDBNull(5)?null:reader.GetString(5);
         }
         if (taskState==2 && epoch==request.Epoch && lastOwner==request.WorkerId &&
