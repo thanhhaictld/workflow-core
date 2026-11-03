@@ -405,14 +405,17 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
              payload,request_key)
             VALUES (@id,@hub,@partition,'__workflow__',1,@workflow,'{}'::jsonb,@key)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT DO NOTHING RETURNING id
             """,db,tx);
         q.Parameters.AddWithValue("id",Guid.NewGuid());
         q.Parameters.AddWithValue("hub",hub);
         q.Parameters.AddWithValue("partition",partition);
         q.Parameters.AddWithValue("workflow",workflow);
         q.Parameters.AddWithValue("key","wf:"+workflow.ToString("N")+":r:"+revision);
-        await q.ExecuteNonQueryAsync(ct);
+        var taskId=await q.ExecuteScalarAsync(ct);
+        if(taskId is Guid created)
+            await JournalAsync(db,tx,workflow,0,created,"__workflow__",
+                "WorkflowTaskScheduled",null,ct);
     }
 
     private static async Task InsertActivityAsync(NpgsqlConnection db,NpgsqlTransaction tx,
