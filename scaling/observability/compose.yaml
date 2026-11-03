@@ -100,6 +100,7 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       # Used only on Next.js server-side route handlers. Never NEXT_PUBLIC_*.
+      WORKFLOW_API_URL: http://monitor-api:5000
       WORKFLOW_HUB_URL: http://hub:5100
       WORKFLOW_HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
     ports:
