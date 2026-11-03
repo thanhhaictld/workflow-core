@@ -528,9 +528,9 @@ public sealed class HubWorkflowStore(
                    WHEN 'Ready' THEN 0 WHEN 'Running' THEN 1
                    WHEN 'Complete' THEN 2 WHEN 'Failed' THEN 3 ELSE -1 END)
               AND (@search IS NULL OR
-                   id::text ILIKE @pattern ESCAPE '\\' OR
-                   definition_id ILIKE @pattern ESCAPE '\\' OR
-                   coalesce(run_id, '') ILIKE @pattern ESCAPE '\\')
+                   id::text ILIKE @pattern ESCAPE '\' OR
+                   definition_id ILIKE @pattern ESCAPE '\' OR
+                   coalesce(run_id, '') ILIKE @pattern ESCAPE '\')
             """;
         await using var db = await DataSource.OpenConnectionAsync(ct);
         async Task<NpgsqlCommand> Command(string sql)
