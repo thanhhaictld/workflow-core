@@ -54,7 +54,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale worker=4
 ~~~
 
-The migrate container applies SQL migrations 002–008, followed by the
+The migrate container applies SQL migrations 002–009, followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
@@ -81,9 +81,17 @@ Grafana credentials: GRAFANA_USER and GRAFANA_PASSWORD from .env.
 
 **One workflow list:** /workflows lists legacy and Hub executions together,
 sorted newest-first with a Hub filter (All, Legacy, All Hubs, individual hub).
-Each Hub row opens /workflows/{id}?source=hub, showing its true durable
-StepCompleted/StepRetryScheduled/StepFailed events and step results; legacy
-rows retain their existing detailed Workflow Core execution trace.
+Each Hub row opens /workflows/{id}?source=hub, showing a zoomable
+**distributed-trace-style waterfall** with true Hub lease/attempt timings,
+worker identities, queue/scheduling waits, retries, failures and step results.
+Legacy rows retain the existing Workflow Core execution waterfall.
+
+New Hub claims are durably recorded in wfc_scale.hub_task_attempt
+(SQL migration 009_hub_task_attempts.sql). Claim/finish timestamps are
+transactional Hub lease boundaries rather than precise remote handler CPU
+time. For a handler-level distributed span, inspect the OpenTelemetry traces
+in Grafana Tempo. Old Hub runs without attempt records still show real
+completion/failure event markers, but no invented start times or durations.
 Hub-generated workflows are not invented or copied into legacy journals.
 The old /hub URL redirects to /workflows?hub=hub.
 
