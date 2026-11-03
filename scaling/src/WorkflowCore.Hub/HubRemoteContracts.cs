@@ -11,14 +11,14 @@ public sealed record HubActivityRegistration(string HubId, string ActivityType,
     string? ResourceName = null, string? ResourceField = null,
     int ResourceCapacity = 1, bool StrictFifo = false);
 public sealed record HubWorkflowRuntime(Guid Id, string HubId, string DefinitionId,
-    int Version, int PartitionId, int Revision, string State,
+    int Version, int PartitionId, long Revision, string State,
     int NextStep, int StepCount, string? WaitingFor, JsonElement Input,
     JsonElement Results, JsonElement ProcessorState);
 public sealed record HubTransitionRequest(string WorkerId, long Epoch,
     long ExpectedRevision, Guid TaskId, string Command,
     string? ActivityType = null, int ActivityVersion = 1,
     string? TimerKey = null, long? DelayMilliseconds = null,
-    JsonElement? ProcessorState = null);
+    JsonElement? ProcessorState = null, JsonElement? ActivityInput = null);
 public sealed record HubTransitionResult(Guid WorkflowId, long Revision,
     string State, bool Replayed);
 public sealed record HubRemoteTimerMetrics(long Pending, long Due, long Fired);
