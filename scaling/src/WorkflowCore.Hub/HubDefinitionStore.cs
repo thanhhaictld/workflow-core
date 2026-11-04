@@ -122,7 +122,24 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             """);
         BindActivity(check, policy);
         if (await check.ExecuteScalarAsync(ct) is null)
-            throw new InvalidOperationException("Immutable activity policy/version mismatch");
+        {
+            // Startup declaration may contain stale operational limits, but it must
+            // still match immutable routing/contract metadata. The operator is
+            // responsible for applying capacity changes through the CAS endpoint.
+            await using var immutable = Source.CreateCommand("""
+                SELECT 1 FROM wfc_scale.hub_activity_registration
+                WHERE hub_id=@hub AND activity_type=@type AND version=@version
+                  AND partitions=@partitions
+                  AND resource_name IS NOT DISTINCT FROM @resource
+                  AND resource_field IS NOT DISTINCT FROM @field
+                  AND resource_fifo=@fifo
+                  AND contract IS NOT DISTINCT FROM @contract
+                """);
+            BindActivity(immutable, policy);
+            if (await immutable.ExecuteScalarAsync(ct) is null)
+                throw new InvalidOperationException(
+                    $"Immutable activity routing/contract mismatch for {policy.HubId}/{policy.ActivityType}/v{policy.Version}");
+        }
         return false;
     }
 
