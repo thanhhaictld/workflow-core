@@ -165,4 +165,78 @@ public sealed class HubGatewayTests
             registry.Resolve(info.HubId, "demo-activity", 1,
                 JsonSerializer.SerializeToElement(new { other = 1 })));
     }
+    [Fact]
+    public async Task ActivityCapacityUpdate_ChangesExistingResourcesAndPreservesLease()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,4);
+        var definitions=new HubDefinitionStore(tasks);
+        var contract=JsonSerializer.SerializeToElement(new {schema="v1"});
+        var registration=new HubActivityRegistration(hub,"demo-activity",2,8,4,3,
+            "tenant","resourceId",3,false,contract);
+        Assert.True(await definitions.RegisterActivityAsync(registration,CancellationToken.None));
+        var first=await EnqueuePublished(tasks,definitions,hub,"same");
+        var second=await EnqueuePublished(tasks,definitions,hub,"same");
+        var third=await EnqueuePublished(tasks,definitions,hub,"same");
+        var active=Assert.Single(await tasks.ClaimAsync("worker-A",[hub],
+            [new(hub,"demo-activity",2)],1,Lease,CancellationToken.None));
+        Assert.Equal(first,active.Id);
+        var before=await definitions.GetActivityPolicyAsync(hub,"demo-activity",2,CancellationToken.None);
+        Assert.NotNull(before);
+        var revised=await definitions.UpdateActivityCapacityAsync(
+            new(hub,"demo-activity",2,before.Revision,1,1,1),CancellationToken.None);
+        Assert.Equal(before.Revision+1,revised);
+        Assert.Empty(await tasks.ClaimAsync("worker-B",[hub],
+            [new(hub,"demo-activity",2)],3,Lease,CancellationToken.None));
+        Assert.Equal("Leased",(await tasks.GetAsync(first,CancellationToken.None))!.State);
+        Assert.True(await tasks.CompleteAsync(first,"worker-A",active.Epoch,
+            "{\"ok\":true}",CancellationToken.None));
+        var next=Assert.Single(await tasks.ClaimAsync("worker-B",[hub],
+            [new(hub,"demo-activity",2)],3,Lease,CancellationToken.None));
+        Assert.Equal(second,next.Id);
+        var current=await definitions.GetActivityPolicyAsync(hub,"demo-activity",2,CancellationToken.None);
+        Assert.NotNull(current);
+        Assert.Equal(1,current.ActivityConcurrency);
+        Assert.Equal(1,current.ResourceCapacity);
+        Assert.Equal(revised,current.Revision);
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.UpdateActivityCapacityAsync(
+            new(hub,"demo-activity",2,before.Revision,3,3,3),CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            definitions.RegisterActivityAsync(registration,CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ActivityCapacityUpdate_ConcurrentExpectedRevisionsOnlyOneWins()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,4);
+        var definitions=new HubDefinitionStore(tasks);
+        var registration=new HubActivityRegistration(hub,"demo-activity",2,8,8,8);
+        Assert.True(await definitions.RegisterActivityAsync(registration,CancellationToken.None));
+        var requests=new[]
+        {
+            new HubActivityCapacityUpdate(hub,"demo-activity",2,1,7,7,1),
+            new HubActivityCapacityUpdate(hub,"demo-activity",2,1,6,6,1)
+        };
+        var outcomes=await Task.WhenAll(requests.Select(async request=>
+        {
+            try {await definitions.UpdateActivityCapacityAsync(request,CancellationToken.None);return true;}
+            catch(InvalidOperationException){return false;}
+        }));
+        Assert.Single(outcomes.Where(x=>x));
+        Assert.Equal(2,(await definitions.GetActivityPolicyAsync(
+            hub,"demo-activity",2,CancellationToken.None))!.Revision);
+    }
+
+    private static async Task<Guid> EnqueuePublished(HubTaskStore tasks,HubDefinitionStore definitions,
+        string hub,string resource)
+    {
+        var payload=Payload(resource);
+        var route=await definitions.ResolveAsync(hub,"demo-activity",2,payload,CancellationToken.None);
+        Assert.NotNull(route);
+        return await tasks.EnqueueAsync(route,payload.GetRawText(),null,null,CancellationToken.None);
+    }
+
 }
