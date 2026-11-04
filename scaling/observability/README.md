@@ -44,8 +44,8 @@ Requires Docker Desktop or Docker Engine + Compose v2.
 cp scaling/observability/.env.example scaling/observability/.env
 # Edit scaling/observability/.env to set strong local token/password.
 
-docker compose -f scaling/observability/compose.yaml \
-  --env-file scaling/observability/.env \
+docker compose -f scaling/observability/compose.yaml `
+  --env-file scaling/observability/.env `
   up -d --build --scale provisioner=4
 
 docker compose -f scaling/observability/compose.yaml \
@@ -56,7 +56,7 @@ PowerShell:
 
 ~~~powershell
 Copy-Item scaling/observability/.env.example scaling/observability/.env
-docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale worker=4
+docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
 The migrate container applies SQL migrations 002–011, followed by the
@@ -120,8 +120,8 @@ run the default `tenant-onboarding` definition.
 ## Run the 1,000-workflow k6 E2E stress test
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
-  --env-file scaling/observability/.env \
+docker compose -f scaling/observability/compose.yaml `
+  --env-file scaling/observability/.env `
   --profile load run --rm k6
 ~~~
 
@@ -133,10 +133,10 @@ It checks results and returns a failure when a workflow fails or times out.
 Override the load:
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
-  --env-file scaling/observability/.env \
-  --profile load run --rm \
-  -e K6_WORKFLOWS=2000 -e K6_VUS=200 \
+docker compose -f scaling/observability/compose.yaml `
+  --env-file scaling/observability/.env `
+  --profile load run --rm `
+  -e K6_WORKFLOWS=2000 -e K6_VUS=200 `
   -e K6_MAX_WAIT_SECONDS=300 k6
 ~~~
 
