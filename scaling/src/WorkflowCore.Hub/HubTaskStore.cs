@@ -280,13 +280,20 @@ public sealed class HubTaskStore : IAsyncDisposable
                 var eligible = true;
                 foreach (var constraint in constraints)
                 {
+                    // Fetch current values *under* the permit lock, never from a stale candidate snapshot.
+                    int currentCapacity;
+                    bool currentFifo;
                     await using (var resourceLock = new NpgsqlCommand("""
-                        SELECT 1 FROM wfc_scale.hub_resource
+                        SELECT capacity,strict_fifo FROM wfc_scale.hub_resource
                         WHERE resource_key = @key FOR UPDATE
                         """, db, tx))
                     {
                         resourceLock.Parameters.AddWithValue("key", constraint.Key);
-                        await resourceLock.ExecuteScalarAsync(ct);
+                        await using var resourceReader=await resourceLock.ExecuteReaderAsync(ct);
+                        if(!await resourceReader.ReadAsync(ct))
+                            throw new InvalidOperationException("Resource missing during claim");
+                        currentCapacity=resourceReader.GetInt32(0);
+                        currentFifo=resourceReader.GetBoolean(1);
                     }
 
                     await using var check = new NpgsqlCommand("""
@@ -302,7 +309,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Resource missing");
                     var active = reader.GetInt64(0);
                     var earlier = reader.GetInt64(1);
-                    if (active >= constraint.Limit || (constraint.Fifo && earlier > 0))
+                    if (active >= currentCapacity || (currentFifo && earlier > 0))
                     {
                         eligible = false;
                         break;
