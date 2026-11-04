@@ -14,7 +14,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'check-tools', 'bootstrap', 'setup', 'up', 'dev',
-        'api', 'worker', 'hub', 'remote-worker', 'processor', 'provisioner', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
+        'api', 'worker', 'hub', 'remote-worker', 'provisioner', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
         'db-logs', 'db-reset', 'seed', 'approve', 'test', 'build', 'check', 'clean')]
     [string] $Task = 'help',
     [ValidateRange(0, 65535)][int] $PgPort = 0,
@@ -39,7 +39,6 @@ $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
 $ApiProject = Join-Path $RepoRoot 'scaling/monitor/api/WorkflowCore.Scaling.Api.csproj'
 $WorkerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
 $HubProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
-$ProcessorProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj'
 $ProvisionerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj'
 $TestProject = Join-Path $RepoRoot 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
 $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
@@ -257,8 +256,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 worker      Run legacy PostgreSQL-backed worker
   pwsh ./scripts/dev.ps1 hub         Run standalone REST+SSE Hub gateway (set WFC_HUB_AUTH_TOKEN)
   pwsh ./scripts/dev.ps1 remote-worker  Run legacy Hub activity worker without PostgreSQL
-  pwsh ./scripts/dev.ps1 processor  Run optional v1 sequential processor (no DB)
-  pwsh ./scripts/dev.ps1 provisioner  Run combined workflow/activity Provisioner (no DB)
+  pwsh ./scripts/dev.ps1 provisioner  Run native workflow/activity Provisioner (no DB)
   pwsh ./scripts/dev.ps1 ui          Run Next.js dashboard only
   pwsh ./scripts/dev.ps1 seed        Create happy, retry, approval and parallel runs
   pwsh ./scripts/dev.ps1 approve -WorkflowId UUID   Signal onboarding approval
@@ -295,12 +293,6 @@ try {
         'worker'      { Start-Worker }
         'hub'         { Start-Hub }
         'remote-worker' { Start-RemoteWorker }
-        'processor'   {
-            if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
-            if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }
-            Remove-Item Env:WFC_PG -ErrorAction SilentlyContinue
-            Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $ProcessorProject)
-        }
         'provisioner' {
             if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
             if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }

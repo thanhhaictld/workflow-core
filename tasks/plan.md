@@ -2,6 +2,8 @@
 
 Status: planned; implementation has not started.
 
+Historical note: this plan's proposed structure predates the native combined Provisioner. Its `WorkflowCore.Processor.Host` entry below is removed tooling; current deployments use `WorkflowCore.Provisioner.Host`, while sequential v1 compatibility remains in `WorkflowCore.RemoteExecution`.
+
 ## Goal
 
 Make the monitoring backend a reusable building block under `scaling/src/`, with a thin standalone host. Remove the old PostgreSQL onboarding/benchmark demo and its UI and tooling dependencies. Keep monitoring independent of executable business workflows.
@@ -34,7 +36,7 @@ scaling/src/
 scaling/monitor/                    # Next.js UI and existing server-side adapters
 scaling/sample/onboarding/
   WorkflowCore.Provisioner.Host/    # retained native sample
-  WorkflowCore.Processor.Host/      # retained optional v1 processor
+  WorkflowCore.Processor.Host/      # historical entry; removed v1-only sample host
   WorkflowCore.Hub.Host/            # retained generic Hub host
   WorkflowCore.Hub.LoadTest/        # retained native workload
 ```

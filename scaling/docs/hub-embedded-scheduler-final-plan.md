@@ -1,6 +1,7 @@
 # Architecture decision and implementation plan — Hub-owned embedded scheduler
 
 Status: **native fluent runtime implemented with experimental verification coverage**. See the [implementation runbook](hub-remote-scheduler-implementation.md) and [native runtime guide](hub-native-fluent-runtime.md). The sections below retain the original architecture proposal; use those guides and source/tests for current behavior. Production hardening remains outstanding.
+The original proposal below included a standalone sequential `WorkflowCore.Processor.Host`; that sample host has since been removed. New deployments use native workflow and activity lanes in the combined `WorkflowCore.Provisioner.Host`. The sequential runtime library remains for existing v1 compatibility.
 Base branch: `refactor/scaling-project-layout`
 Scope: replace the current Hub-owned demo activity chain with an infrastructure-only REST/SSE Hub, an independent code-first Workflow Processor host, an Activity/Provisioner host, and a durable scheduler **in the Hub process**.
 Primary decision: schedule execution is a separate .NET module, but initially **not** a separate deployment.
@@ -79,7 +80,7 @@ scaling/
   sample/
     onboarding/
       WorkflowCore.Hub.Host/           # infrastructure-only composition root
-      WorkflowCore.Processor.Host/     # onboarding workflow definitions (new)
+      WorkflowCore.Processor.Host/     # historical proposal; removed (v1-only sample tooling)
       WorkflowCore.Provisioner.Host/   # onboarding business handlers (new)
       WorkflowCore.Scaling.Api/        # existing legacy monitoring/demo API
       WorkflowCore.Scaling.Samples/    # legacy sample definitions
@@ -294,7 +295,7 @@ Recommended implementation order: P0 → P1 → P2 → P3 → P4 → P5. P6 is *
 
 - Unit: polling options validation, due calculation, cancellation/rearming generations, retry idempotency and serialization of commands.
 - PostgreSQL integration: state/commands/timer atomic commit, `SKIP LOCKED` multi-scanner, event-vs-timeout race, duplicate HTTP commit replay, crash after commit before SSE, stale epoch, lost notification, migration forwards/repeated startup.
-- Cross-process E2E: Hub Host + Processor Host + Provisioner Host, a real C# workflow that schedules timer, sleeps (no held thread), resumes and completes, with persisted waterfall.
+- Cross-process E2E: Hub Host + combined native Provisioner Host, a real C# workflow that schedules a timer, waits without holding a thread, resumes and completes, with persisted waterfall. Existing v1 compatibility behavior remains covered through reusable runtime tests.
 - Chaos: kill Hub halfway through scanning and while waiting, restart processor/provisioner, disable/enable scheduler, two active schedulers, DB connection exhaustion.
 - Stress: 1,000 concurrently waiting timers, mixed HTTP start traffic, compare 1/2 Hub replicas, 12 connection pool, timer lag p50/p95/p99, CPU, queue depth, retries.
 - Deployment parity: run exactly the same E2E suite in embedded mode and dedicated scheduler host mode. Gateway and scheduler deployment topology must not change workflow definition or HTTP command schemas.

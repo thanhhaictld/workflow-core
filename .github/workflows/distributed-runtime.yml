@@ -255,7 +255,6 @@ jobs:
         run: |
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
-          dotnet build scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
       - name: Stage 1000 workflows, then execute all via DB-free workers
@@ -277,11 +276,11 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5100/health/ready
-          # Publish immutable workflow/activity metadata without starting the processors.
+          # Publish immutable workflow/activity metadata without starting the Provisioner lanes.
           env -u WFC_PG dotnet run --no-build -c Release \
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             -- --register-only
-          # No processors yet: all 1000 workflow instances must be durably pending.
+          # No workflow lanes yet: all 1000 workflow instances must be durably pending.
           if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
             --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
             tail -150 /tmp/perf-hub.log
@@ -322,5 +321,4 @@ jobs:
             /tmp/workflow-hub-1000.json
             /tmp/perf-hub.log
             /tmp/perf-worker-*.log
-            /tmp/perf-processor-*.log
           if-no-files-found: warn

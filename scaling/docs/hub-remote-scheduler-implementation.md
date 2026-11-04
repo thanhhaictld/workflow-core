@@ -11,7 +11,8 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 - `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/sample/onboarding/WorkflowCore.Hub.Host/Program.cs` registers it **inside the Hub process**.
 - `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` reuses native builders, executor, mappings, pointers, error handlers, and middleware. The sequential registry remains for v1 runs.
 - `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes registrations and runs separately bounded workflow/activity lanes using **REST/SSE only**.
-- `scaling/sample/onboarding/WorkflowCore.Processor.Host` is historical v1-only tooling and is not deployed by Compose.
+- `scaling/sample/onboarding/WorkflowCore.Processor.Host` was historical v1-only tooling; the project has been removed. New deployments use the combined native workflow/activity lanes in `WorkflowCore.Provisioner.Host`. The reusable sequential runtime remains in `WorkflowCore.RemoteExecution` for v1 compatibility.
+- Removing that sample host does not remove existing v1/v2 data. Unfinished runs pinned to those versions still require their matching historical processor binaries; the native Provisioner advertises v3 definitions and does not claim v1/v2 capability.
 - `scaling/sql/010_hub_remote_scheduler.sql` is forward-only: it does not discard prior Hub executions or legacy workflow history.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
@@ -44,7 +45,7 @@ docker compose -f scaling/observability/compose.yaml --env-file scaling/observab
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env --profile load run --rm -e K6_DEFINITION=tenant-onboarding-timer k6
 ```
 
-To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions while workers are running, use `scaling/sample/onboarding/WorkflowCore.Hub.LoadTest` with `WFC_LOAD_PHASE=submit`, start Processor/Provisioner afterward, and then `WFC_LOAD_PHASE=verify`. Provisioner accepts `--register-only` to publish metadata before staging.
+To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions while workers are running, use `scaling/sample/onboarding/WorkflowCore.Hub.LoadTest` with `WFC_LOAD_PHASE=submit`, start the combined `WorkflowCore.Provisioner.Host` afterward, and then run `WFC_LOAD_PHASE=verify`. Provisioner accepts `--register-only` to publish metadata before staging.
 
 ## Hub REST contract (dev bearer auth)
 

@@ -13,7 +13,6 @@
     <Project Path="sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj" />
-    <Project Path="sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Provisioner.Workflows/WorkflowCore.Provisioner.Workflows.csproj" />
   </Folder>
