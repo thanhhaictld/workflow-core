@@ -348,8 +348,11 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             FROM wfc_scale.hub_activity_registration
             WHERE hub_id=@hub AND activity_type=@type AND version=@version
             """;
+        // Remote/native workflow commits resolve inside their existing transaction.
+        // Hold a shared policy row lock until commit, so operator updates cannot
+        // invalidate a resolved route before resource rows are materialized.
         await using var cmd = connection is null ? Source.CreateCommand(sql) :
-            new NpgsqlCommand(sql, connection, transaction);
+            new NpgsqlCommand(sql + " FOR SHARE", connection, transaction);
         cmd.Parameters.AddWithValue("hub", hub);
         cmd.Parameters.AddWithValue("type", activity);
         cmd.Parameters.AddWithValue("version", version);
