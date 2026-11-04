@@ -192,9 +192,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             return revision;
         }
 
-        // A global hub capacity is shared by all activities in this hub, as is
-        // a named resource capacity shared by different activity registrations.
-        // Reject divergent configuration instead of silently changing other owners.
+        // Hub and resource capacities are shared keys; never let one activity
+        // silently modify another registration's published policy.
         await using (var conflict=new NpgsqlCommand("""
             SELECT 1 FROM wfc_scale.hub_activity_registration
             WHERE hub_id=@hub
@@ -209,6 +208,34 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             conflict.Parameters.AddWithValue("hubcap",request.HubConcurrency);
             if(await conflict.ExecuteScalarAsync(ct) is not null)
                 throw new InvalidOperationException("Shared hub capacity belongs to multiple activity registrations; update requires coordinated hub policy ownership");
+        }
+        if(resourceName is not null && oldResource!=request.ResourceCapacity)
+        {
+            await using var shared=new NpgsqlCommand("""
+                SELECT 1 FROM wfc_scale.hub_activity_registration
+                WHERE hub_id=@hub AND resource_name=@resource
+                  AND NOT (activity_type=@type AND version=@version)
+                LIMIT 1
+                """,db,tx);
+            shared.Parameters.AddWithValue("hub",request.HubId);
+            shared.Parameters.AddWithValue("resource",resourceName);
+            shared.Parameters.AddWithValue("type",request.ActivityType);
+            shared.Parameters.AddWithValue("version",request.Version);
+            if(await shared.ExecuteScalarAsync(ct) is not null)
+                throw new InvalidOperationException("Resource capacity is shared by multiple activities; coordinate the update");
+        }
+        if(oldActivity!=request.ActivityConcurrency)
+        {
+            await using var shared=new NpgsqlCommand("""
+                SELECT 1 FROM wfc_scale.hub_activity_registration
+                WHERE hub_id=@hub AND activity_type=@type AND version<>@version
+                LIMIT 1
+                """,db,tx);
+            shared.Parameters.AddWithValue("hub",request.HubId);
+            shared.Parameters.AddWithValue("type",request.ActivityType);
+            shared.Parameters.AddWithValue("version",request.Version);
+            if(await shared.ExecuteScalarAsync(ct) is not null)
+                throw new InvalidOperationException("Activity capacity is shared across versions; coordinate the update");
         }
         var hubKey="hub:"+request.HubId+":"+Digest(request.HubId);
         var activityKey="activity:"+request.HubId+":"+request.ActivityType+":"+Digest(request.ActivityType);
