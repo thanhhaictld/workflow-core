@@ -1,6 +1,6 @@
 # Bug: Activity policy changes prevent provisioners from starting
 
-**Status:** Open  
+**Status:** Fix proposed in [PR #5](https://github.com/thanhhaictld/workflow-core/pull/5), CI validation pending  
 **Affected area:** Hub activity registration and remote provisioner  
 **Observed:** 4 November 2026, local observability Compose stack
 
@@ -51,3 +51,9 @@ These are requirements for a fix, not descriptions of currently implemented beha
 ## Current recovery
 
 Use a provisioner whose registrations match the policies already stored in the Hub, or restore the matching policy in the provisioner configuration and rebuild it. Preserve the PostgreSQL volume and existing workflow data. Rebuilding alone does not resolve a genuine policy mismatch.
+
+## Proposed fix
+
+The draft fix separates startup registration from operator policy ownership. Operational capacities can be updated through the revision-checked API documented in [activity-policy-update.md](activity-policy-update.md), with a forward-only PostgreSQL migration. Existing task resource rows are updated in the same transaction as the policy and queued tasks continue using current admission settings. Active leases are not revoked. Immutable routing/contract compatibility still rejects incompatible startup declarations. Shared resource changes require coordinated ownership, and FIFO/partition/resource-key changes are intentionally not hot-swappable.
+
+The new PostgreSQL regression tests cover active lease retention, capacity decreases, stale enqueue routes, racing revision updates, and shared-key conflicts. CI verification is required before merge.
