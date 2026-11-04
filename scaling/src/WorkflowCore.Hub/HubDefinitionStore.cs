@@ -96,14 +96,15 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             policy.ActivityConcurrency is < 1 or > 100000 ||
             policy.ResourceCapacity is < 1 or > 100000 ||
             (policy.ResourceName is null) != (policy.ResourceField is null) ||
-            policy.ResourceName?.Length > 80 || policy.ResourceField?.Length > 80)
+            policy.ResourceName?.Length > 80 || policy.ResourceField?.Length > 80 ||
+            policy.Contract?.GetRawText().Length > 65536)
             throw new ArgumentException("Invalid activity registration");
 
         await using var cmd = Source.CreateCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
             (hub_id,activity_type,version,partitions,hub_concurrency,
-             activity_concurrency,resource_name,resource_field,resource_capacity,resource_fifo)
-            VALUES (@hub,@type,@version,@partitions,@hubcap,@cap,@resource,@field,@resourcecap,@fifo)
+             activity_concurrency,resource_name,resource_field,resource_capacity,resource_fifo,contract)
+            VALUES (@hub,@type,@version,@partitions,@hubcap,@cap,@resource,@field,@resourcecap,@fifo,@contract)
             ON CONFLICT DO NOTHING
             """);
         BindActivity(cmd, policy);
@@ -117,6 +118,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
               AND resource_name IS NOT DISTINCT FROM @resource
               AND resource_field IS NOT DISTINCT FROM @field
               AND resource_capacity=@resourcecap AND resource_fifo=@fifo
+              AND contract IS NOT DISTINCT FROM @contract
             """);
         BindActivity(check, policy);
         if (await check.ExecuteScalarAsync(ct) is null)
@@ -136,6 +138,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         cmd.Parameters.Add("field", NpgsqlDbType.Text).Value = (object?)p.ResourceField ?? DBNull.Value;
         cmd.Parameters.AddWithValue("resourcecap", p.ResourceCapacity);
         cmd.Parameters.AddWithValue("fifo", p.StrictFifo);
+        cmd.Parameters.Add("contract", NpgsqlDbType.Jsonb).Value =
+            (object?)p.Contract?.GetRawText() ?? DBNull.Value;
     }
 
     public async Task<IReadOnlyList<HubActivityRegistration>> ActivitiesAsync(CancellationToken ct)
@@ -143,7 +147,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         await using var cmd=Source.CreateCommand("""
             SELECT hub_id,activity_type,version,partitions,hub_concurrency,
                    activity_concurrency,resource_name,resource_field,
-                   resource_capacity,resource_fifo
+                   resource_capacity,resource_fifo,contract::text
             FROM wfc_scale.hub_activity_registration ORDER BY hub_id,activity_type,version
             """);
         var values=new List<HubActivityRegistration>();
@@ -152,7 +156,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             values.Add(new(r.GetString(0),r.GetString(1),r.GetInt32(2),r.GetInt32(3),
                 r.GetInt32(4),r.GetInt32(5),
                 r.IsDBNull(6)?null:r.GetString(6),r.IsDBNull(7)?null:r.GetString(7),
-                r.GetInt32(8),r.GetBoolean(9)));
+                r.GetInt32(8),r.GetBoolean(9),r.IsDBNull(10)?null:
+                    JsonDocument.Parse(r.GetString(10)).RootElement.Clone()));
         return values;
     }
 

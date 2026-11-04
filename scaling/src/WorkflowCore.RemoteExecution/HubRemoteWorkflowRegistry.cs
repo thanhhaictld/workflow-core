@@ -4,8 +4,8 @@ using WorkflowCore.Hub;
 namespace WorkflowCore.RemoteExecution;
 
 /// <summary>
-/// Code-first, externally executed workflow decisions. This is a first remote
-/// activity/timer slice; an IWorkflow<T> execution-pointer adapter remains future work.
+/// Sequential v1 compatibility definitions. New fluent workflows use
+/// AddHubWorkflowRuntime and the upstream IWorkflow interfaces.
 /// </summary>
 public sealed record RemoteWorkflowStep(
     string Kind,string ActivityType,int Version,long DelayMilliseconds);

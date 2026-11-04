@@ -5,6 +5,13 @@ commit `b475e877141f0d8626c0a2ca5281302227928d4a`, plus this
 documentation. A commit message is not proof a change survives in the branch
 head; inspect the final tree.
 
+The current Hub path also includes native fluent execution in
+`WorkflowCore.RemoteExecution`, atomic snapshot/inbox commits in
+`HubNativeWorkflowStore`, and migration `012_hub_native_runtime.sql`.
+The combined Provisioner retains sequential v1 and publishes native v2.
+See the [native runtime guide](hub-native-fluent-runtime.md) for current contracts,
+source/test coverage, and remaining limits.
+
 ## New runtime files
 
 | Path | Why it exists |

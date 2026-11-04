@@ -24,6 +24,8 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             throw new ArgumentException("Invalid workflow start request");
 
         var id = Guid.NewGuid();
+        var mode = definition.Metadata.TryGetProperty("executionMode", out var executionMode) &&
+            executionMode.GetString() == "native" ? "native" : "remote";
         var partition = HubPartitionRouter.ForWorkflow(id, definition.Partitions);
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
@@ -32,11 +34,12 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
               (id,hub_id,definition_id,definition_version,partition_id,
                input_json,step_count,run_id,idempotency_key,execution_mode)
             VALUES (@id,@hub,@definition,@version,@partition,
-                    @input,@steps,@run,@key,'remote')
+                    @input,@steps,@run,@key,@mode)
             ON CONFLICT DO NOTHING RETURNING id
             """, db, tx))
         {
             cmd.Parameters.AddWithValue("id", id);
+            cmd.Parameters.AddWithValue("mode", mode);
             cmd.Parameters.AddWithValue("hub", request.HubId);
             cmd.Parameters.AddWithValue("definition", request.DefinitionId);
             cmd.Parameters.AddWithValue("version", request.Version);
@@ -55,10 +58,11 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                     SELECT id FROM wfc_scale.hub_workflow
                     WHERE hub_id=@hub AND idempotency_key=@key
                       AND definition_id=@definition AND definition_version=@version
-                      AND execution_mode='remote' AND input_json=@input
+                      AND execution_mode=@mode AND input_json=@input
                       AND run_id IS NOT DISTINCT FROM @run
                     """, db, tx);
                 existing.Parameters.AddWithValue("hub", request.HubId);
+                existing.Parameters.AddWithValue("mode", mode);
                 existing.Parameters.AddWithValue("key", request.IdempotencyKey);
                 existing.Parameters.AddWithValue("definition", request.DefinitionId);
                 existing.Parameters.AddWithValue("version", request.Version);
@@ -72,7 +76,10 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 return (Guid)previous;
             }
         }
-        await WakeProcessorAsync(db, tx, id, request.HubId, partition, 0, ct);
+        if (mode == "native")
+            await HubNativeWorkflowStore.WakeAsync(db, tx, id, request.HubId, partition, ct);
+        else
+            await WakeProcessorAsync(db, tx, id, request.HubId, partition, 0, ct);
         await JournalAsync(db, tx, id, 0, null, "__workflow__",
             "WorkflowStarted", JsonSerializer.Serialize(new { definition.Version }), ct);
         await tx.CommitAsync(ct);
@@ -418,12 +425,48 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 "WorkflowTaskScheduled",null,ct);
     }
 
-    private static async Task InsertActivityAsync(NpgsqlConnection db,NpgsqlTransaction tx,
-        Guid taskId,Guid workflow,string hub,int partition,int step,HubTaskRoute route,
+    internal static async Task InsertActivityAsync(NpgsqlConnection db,NpgsqlTransaction tx,
+        Guid taskId,Guid workflow,string hub,int partition,int? step,HubTaskRoute route,
         string payload,CancellationToken ct)
     {
+        await LockActivityResourcesAsync(db,tx,route.Resources,ct);
+        await using(var insert=new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task
+            (id,hub_id,partition_id,task_type,task_version,workflow_id,
+             workflow_step,payload)
+            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload)
+            """,db,tx))
+        {
+            insert.Parameters.AddWithValue("id",taskId);
+            insert.Parameters.AddWithValue("hub",hub);
+            insert.Parameters.AddWithValue("partition",partition);
+            insert.Parameters.AddWithValue("type",route.TaskType);
+            insert.Parameters.AddWithValue("version",route.Version);
+            insert.Parameters.AddWithValue("workflow",workflow);
+            insert.Parameters.Add("step",NpgsqlDbType.Integer).Value=(object?)step??DBNull.Value;
+            insert.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
+            await insert.ExecuteNonQueryAsync(ct);
+        }
         foreach(var resource in route.Resources)
         {
+            await using var attach=new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
+                VALUES (@task,@key)
+                """,db,tx);
+            attach.Parameters.AddWithValue("task",taskId);
+            attach.Parameters.AddWithValue("key",resource.Key);
+            await attach.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    internal static async Task LockActivityResourcesAsync(NpgsqlConnection db,NpgsqlTransaction tx,
+        IEnumerable<HubResourceRule> resources,CancellationToken ct)
+    {
+        foreach(var group in resources.GroupBy(r=>r.Key,StringComparer.Ordinal).OrderBy(g=>g.Key,StringComparer.Ordinal))
+        {
+            var resource=group.First();
+            if(group.Any(r=>r.Capacity!=resource.Capacity || r.StrictFifo!=resource.StrictFifo))
+                throw new InvalidOperationException("Concurrency policy version conflict");
             await using(var upsert=new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
                 VALUES (@key,@capacity,@fifo) ON CONFLICT DO NOTHING
@@ -446,33 +489,6 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                    reader.GetBoolean(1)!=resource.StrictFifo)
                     throw new InvalidOperationException("Concurrency policy version conflict");
             }
-        }
-        await using(var insert=new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_task
-            (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             workflow_step,payload)
-            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload)
-            """,db,tx))
-        {
-            insert.Parameters.AddWithValue("id",taskId);
-            insert.Parameters.AddWithValue("hub",hub);
-            insert.Parameters.AddWithValue("partition",partition);
-            insert.Parameters.AddWithValue("type",route.TaskType);
-            insert.Parameters.AddWithValue("version",route.Version);
-            insert.Parameters.AddWithValue("workflow",workflow);
-            insert.Parameters.AddWithValue("step",step);
-            insert.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
-            await insert.ExecuteNonQueryAsync(ct);
-        }
-        foreach(var resource in route.Resources)
-        {
-            await using var attach=new NpgsqlCommand("""
-                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
-                VALUES (@task,@key)
-                """,db,tx);
-            attach.Parameters.AddWithValue("task",taskId);
-            attach.Parameters.AddWithValue("key",resource.Key);
-            await attach.ExecuteNonQueryAsync(ct);
         }
     }
 

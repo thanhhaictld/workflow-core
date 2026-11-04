@@ -101,3 +101,10 @@ ownership enforcement**. Do not expose it beyond a trusted test network.
 - All replicas must share compatible workflow definitions and serializer
   types. Default serialization uses Newtonsoft type metadata; do not trust
   arbitrary input types.
+
+## Native Hub Provisioner
+
+For `AddHubWorkflowRuntime`, typed activity contracts, Hub start/event/status
+operations, and separate workflow/activity concurrency settings, see the
+[native fluent runtime guide](hub-native-fluent-runtime.md). These REST/SSE
+operations are separate from the direct PostgreSQL engine APIs described above.

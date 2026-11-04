@@ -14,6 +14,7 @@ var runId = Environment.GetEnvironmentVariable("WFC_LOAD_RUN_ID")
 var reportFile = Environment.GetEnvironmentVariable("WFC_LOAD_REPORT")
     ?? "/tmp/workflow-hub-load.json";
 var phase = Environment.GetEnvironmentVariable("WFC_LOAD_PHASE") ?? "submit";
+var definitionVersion = ReadInt("WFC_LOAD_VERSION", 2, 1, 10000);
 var count = ReadInt("WFC_LOAD_COUNT", 1000, 1, 100000);
 var submitters = ReadInt("WFC_LOAD_SUBMISSION_CONCURRENCY", 200, 1, 2000);
 var timeoutSeconds = ReadInt("WFC_LOAD_TIMEOUT_SECONDS", 300, 15, 1800);
@@ -94,7 +95,7 @@ if (phase.Equals("submit", StringComparison.OrdinalIgnoreCase))
             {
                 hubId = "onboarding",
                 definitionId = "tenant-onboarding",
-                version = 1,
+                version = definitionVersion,
                 runId,
                 idempotencyKey = $"{runId}:{i}",
                 input = new
@@ -201,12 +202,21 @@ else if (phase.Equals("verify", StringComparison.OrdinalIgnoreCase))
         var steps = history.EnumerateArray()
             .Where(x => x.GetProperty("eventType").GetString() == "StepCompleted")
             .Select(x => x.GetProperty("stepIndex").GetInt32()).ToArray();
-        var results = status.GetProperty("results");
-        if (status.GetProperty("state").GetString() != "Complete" ||
-            !steps.SequenceEqual(new[] { 0, 1, 2 }) ||
-            !results.GetProperty("0").GetProperty("validated").GetBoolean() ||
-            !results.GetProperty("1").GetProperty("provisioned").GetBoolean() ||
-            !results.GetProperty("2").GetProperty("welcomeSent").GetBoolean())
+        var correct = status.GetProperty("state").GetString() == "Complete" && steps.SequenceEqual(new[] { 0, 1, 2 });
+        if (status.GetProperty("version").GetInt32()>=2)
+        {
+            var runtime=await GetJson($"api/hub/workflows/{id}/native-runtime",CancellationToken.None);
+            var data=runtime.GetProperty("snapshot").GetProperty("Data").GetProperty("value");
+            correct=correct && data.GetProperty("Validated").GetBoolean() && data.GetProperty("WelcomeSent").GetBoolean() &&
+                !string.IsNullOrEmpty(data.GetProperty("WorkspaceId").GetString());
+        }
+        else
+        {
+            var results=status.GetProperty("results");
+            correct=correct && results.GetProperty("0").GetProperty("validated").GetBoolean() &&
+                results.GetProperty("1").GetProperty("provisioned").GetBoolean() && results.GetProperty("2").GetProperty("welcomeSent").GetBoolean();
+        }
+        if (!correct)
             errors.Add("Unexpected workflow order/result for " + id);
         sampled++;
     }

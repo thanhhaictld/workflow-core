@@ -15,6 +15,7 @@ type HubPage = { items: HubItem[]; total: number; page: number; take: number };
 type HubOverview = {
   total: number; ready: number; running: number; completed: number; failed: number;
   created24h: number; completed24h: number;
+  suspended?: number; terminated?: number;
 };
 type FeedPage = WorkflowPage & { overview: WorkflowOverview; hubs: string[]; warnings: string[] };
 
@@ -53,7 +54,7 @@ function hubStatus(status: string): string | null | "skip" {
   switch (status) {
     case "All": return null;
     case "Runnable": return "Runnable"; // Ready OR Running in Hub store.
-    case "Ready": case "Running": case "Complete": case "Failed": return status;
+    case "Ready": case "Running": case "Complete": case "Failed": case "Suspended": case "Terminated": return status;
     default: return "skip";
   }
 }
@@ -172,6 +173,8 @@ export async function GET(request: NextRequest) {
         overview.total += stats.total;
         overview.running += stats.running + stats.ready;
         overview.completed += stats.completed;
+        overview.suspended += stats.suspended ?? 0;
+        overview.terminated += stats.terminated ?? 0;
         overview.withErrors += stats.failed;
         overview.created24h += stats.created24h;
         overview.completed24h += stats.completed24h;

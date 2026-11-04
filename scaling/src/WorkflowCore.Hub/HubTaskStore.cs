@@ -6,6 +6,7 @@ using NpgsqlTypes;
 namespace WorkflowCore.Hub;
 
 public sealed record HubCapability(string HubId, string TaskType, int Version);
+public sealed record HubWorkflowCapability(string HubId, string DefinitionId, int Version);
 public sealed record HubLeasedTask(
     Guid Id, string HubId, int PartitionId, string TaskType, int Version,
     Guid? WorkflowId, JsonElement Payload, long Epoch, int Attempts,
@@ -14,7 +15,7 @@ public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
 public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
-    HubCapability[] Capabilities, int MaxTasks = 8);
+    HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null);
 public sealed record HubEnqueueRequest(string HubId, string TaskType, int Version,
     JsonElement Payload, Guid? WorkflowId = null, string? IdempotencyKey = null);
 public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
@@ -139,17 +140,18 @@ public sealed class HubTaskStore : IAsyncDisposable
 
     public async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
-        int maxTasks, TimeSpan lease, CancellationToken ct)
+        int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(workerId) || workerId.Length > 128 ||
             hubs.Count is < 1 or > 32 || capabilities.Count is < 1 or > 128 ||
-            maxTasks is < 1 or > 32 || lease < TimeSpan.FromSeconds(10) ||
+            maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
             lease > TimeSpan.FromMinutes(5))
             throw new ArgumentException("Invalid worker claim parameters");
 
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
+        var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
         var results = new List<HubLeasedTask>(maxTasks);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         for (var batch = 0; batch < maxTasks; batch++)
@@ -158,7 +160,14 @@ public sealed class HubTaskStore : IAsyncDisposable
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
                 WHERE hub_id = ANY(@hubs)
+                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
+                      WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                   AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
+                  AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
+                    SELECT 1 FROM wfc_scale.hub_workflow w,
+                      jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                    WHERE w.id=workflow_id AND w.hub_id=p.hub
+                      AND w.definition_id=p.definition AND w.definition_version=p.version))
                   AND attempts < max_attempts
                   AND ((state = 0 AND due_at <= now()) OR
                        (state = 1 AND lease_until < now()))
@@ -167,6 +176,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
                 candidateQuery.Parameters.AddWithValue("types", supported);
+                candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
             }
@@ -180,8 +190,15 @@ public sealed class HubTaskStore : IAsyncDisposable
                 long sequence; Guid? workflow; string payload;
                 await using (var row = new NpgsqlCommand("""
                     SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,
-                           payload::text,sequence,attempts,workflow_step
+                           payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)
                     FROM wfc_scale.hub_task WHERE id = @id
+                      AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
+                        SELECT 1 FROM wfc_scale.hub_workflow w,
+                          jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                        WHERE w.id=workflow_id AND w.hub_id=p.hub
+                          AND w.definition_id=p.definition AND w.definition_version=p.version))
+                      AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
+                          WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                       AND attempts < max_attempts
                       AND ((state = 0 AND due_at <= now()) OR
                            (state = 1 AND lease_until < now()))
@@ -189,6 +206,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     """, db, tx))
                 {
                     row.Parameters.AddWithValue("id", taskId);
+                    row.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                     await using var reader = await row.ExecuteReaderAsync(ct);
                     if (!await reader.ReadAsync(ct)) continue;
                     id = reader.GetGuid(0);
@@ -300,18 +318,19 @@ public sealed class HubTaskStore : IAsyncDisposable
                     attempt.Parameters.AddWithValue("worker", workerId);
                     await attempt.ExecuteNonQueryAsync(ct);
                 }
-                if (taskType == "__workflow__" && workflow is Guid processorWorkflow &&
+                if (taskType is "__workflow__" or "__native_workflow__" && workflow is Guid processorWorkflow &&
                     found is not null)
                 {
                     await using var log = new NpgsqlCommand("""
                         INSERT INTO wfc_scale.hub_workflow_event
                         (workflow_id,step_index,task_id,activity_type,event_type,payload)
-                        SELECT w.id,w.next_step,@task,'__workflow__',
+                        SELECT w.id,w.next_step,@task,@type,
                                'WorkflowTaskClaimed',
                                jsonb_build_object('worker',@worker,'epoch',@epoch)
                         FROM wfc_scale.hub_workflow w WHERE w.id=@workflow
                         """, db, tx);
                     log.Parameters.AddWithValue("task", id);
+                    log.Parameters.AddWithValue("type", taskType);
                     log.Parameters.AddWithValue("workflow", processorWorkflow);
                     log.Parameters.AddWithValue("worker", workerId);
                     log.Parameters.AddWithValue("epoch", found.Epoch);
@@ -390,19 +409,25 @@ public sealed class HubTaskStore : IAsyncDisposable
         if (retryDelay < TimeSpan.Zero || retryDelay > TimeSpan.FromHours(1))
             return false;
         await using var cmd = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.hub_task
+            WITH failed AS (UPDATE wfc_scale.hub_task
             SET state=CASE WHEN attempts >= max_attempts THEN 3 ELSE 0 END,
                 owner=NULL, lease_until=NULL, due_at=now()+@delay,
                 last_error=@error, updated_at=now()
             WHERE id=@id AND state=1 AND owner=@owner AND epoch=@epoch
-              AND lease_until>now()
+              AND lease_until>now() RETURNING id,state),
+            closed AS (
+              UPDATE wfc_scale.hub_task_attempt a SET finished_at=clock_timestamp(),
+                outcome=CASE WHEN f.state=3 THEN 'Failed' ELSE 'RetryScheduled' END
+              FROM failed f WHERE a.task_id=f.id AND a.epoch=@epoch AND a.finished_at IS NULL
+              RETURNING a.task_id
+            ) SELECT count(*) FROM failed
             """);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("owner", worker);
         cmd.Parameters.AddWithValue("epoch", epoch);
         cmd.Parameters.AddWithValue("error", error.Length > 1000 ? error[..1000] : error);
         cmd.Parameters.Add("delay", NpgsqlDbType.Interval).Value = retryDelay;
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct)) == 1;
     }
 
     public async Task<HubTaskStatus?> GetAsync(Guid id, CancellationToken ct)
@@ -438,11 +463,15 @@ public sealed class HubTaskStore : IAsyncDisposable
     public async Task<int> DeadLetterExpiredAsync(CancellationToken ct)
     {
         await using var cmd = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.hub_task SET state=3, owner=NULL, lease_until=NULL,
+            WITH expired AS (UPDATE wfc_scale.hub_task SET state=3, owner=NULL, lease_until=NULL,
                 updated_at=now(), last_error=coalesce(last_error,'Lease expired after max attempts')
-            WHERE state=1 AND lease_until<now() AND attempts>=max_attempts
+            WHERE state=1 AND lease_until<now() AND attempts>=max_attempts RETURNING id),
+            closed AS (
+              UPDATE wfc_scale.hub_task_attempt a SET finished_at=clock_timestamp(),outcome='LeaseExpired'
+              FROM expired e WHERE a.task_id=e.id AND a.finished_at IS NULL RETURNING a.task_id
+            ) SELECT count(*) FROM expired
             """);
-        return await cmd.ExecuteNonQueryAsync(ct);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
     }
 
     public async Task<HubDatabaseDiagnostics> DiagnosticsAsync(CancellationToken ct)

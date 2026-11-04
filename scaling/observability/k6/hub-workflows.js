@@ -12,6 +12,7 @@ const VUS = Math.max(1, Number(__ENV.K6_VUS || 100));
 const TIMEOUT = Math.max(15, Number(__ENV.K6_MAX_WAIT_SECONDS || 180));
 const MODE = __ENV.K6_MODE || "e2e";
 const DEFINITION = __ENV.K6_DEFINITION || "tenant-onboarding";
+const VERSION = Number(__ENV.K6_VERSION || 2);
 
 const starts = new Counter("hub_workflows_started");
 const completed = new Counter("hub_workflows_completed");
@@ -62,7 +63,7 @@ export default function (data) {
   const body = JSON.stringify({
     hubId: "onboarding",
     definitionId: DEFINITION,
-    version: 1,
+    version: VERSION,
     runId: data.runId,
     idempotencyKey: data.runId + ":" + index,
     input: { tenantId: tenant, organizationName: "Load tenant " + index },
@@ -106,9 +107,18 @@ export default function (data) {
     try { result = status.json(); } catch (_) { continue; }
 
     if (result.state === "Complete") {
+      let nativeData = null;
+      if (VERSION >= 2) {
+        const runtime = http.get(BASE + "/api/hub/workflows/" + workflowId + "/native-runtime", {
+          headers: headers(), tags: { name: "hub_native_result" }, timeout: "15s",
+        });
+        if (runtime.status === 200) nativeData = runtime.json("snapshot.Data.value");
+      }
       const outcome = check(result, {
         "all workflow steps completed": r =>
-          DEFINITION === "tenant-onboarding-timer"
+          VERSION >= 2 ? nativeData !== null && nativeData.Validated === true &&
+            nativeData.WorkspaceId === "workspace-" + tenant && nativeData.WelcomeSent === true
+          : DEFINITION === "tenant-onboarding-timer"
             ? r.nextStep === 4 && r.stepCount === 4 &&
               r.results["0"].validated === true &&
               r.results["1"].timerFired === true &&

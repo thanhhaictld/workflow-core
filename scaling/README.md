@@ -29,6 +29,12 @@ are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 
 > **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
 
+For REST/SSE execution through a generic Hub, use the combined
+[native fluent Provisioner](docs/hub-native-fluent-runtime.md). It reuses upstream
+`IWorkflow<TData>` definitions, routes registered typed steps to durable activity
+work, and retains existing sequential runs. The direct PostgreSQL runtime below
+is a separate deployment option.
+
 This branch introduces a **new .NET 10-only execution runtime** for Workflow Core.
 It intentionally does not preserve compatibility with the legacy queue/lock
 contracts. The original engine, workflow definitions, and execution pointers

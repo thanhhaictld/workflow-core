@@ -23,6 +23,11 @@ endpoints. It remains a development host and is not a production-ready API.
 - **Real API only:** never substitutes demo fixtures or fake metrics when the
   backend is unreachable.
 
+Native Hub runs also expose persisted snapshots, pointer/predecessor/scope and
+retry identities in history. Activity waterfall rows use task/dispatch identities
+so repeated steps stay separate. Timer windows use timer IDs. See the
+[native Provisioner guide](../docs/hub-native-fluent-runtime.md).
+
 NexaCRM's workflows page is the **visual/interaction reference only**; this
 project does not include its paid source code.
 

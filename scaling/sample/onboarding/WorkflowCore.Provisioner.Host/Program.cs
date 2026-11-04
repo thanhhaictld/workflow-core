@@ -1,52 +1,46 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using WorkflowCore.Hub;
-using WorkflowCore.Hub.Client;
 using WorkflowCore.Hub.Telemetry;
-using WorkflowCore.Scaling.Worker;
+using WorkflowCore.Provisioner.Host;
+using WorkflowCore.RemoteExecution;
 
 var builder=Host.CreateApplicationBuilder(args);
 builder.Services.AddWorkflowHubOpenTelemetry("workflow-provisioner");
-builder.Services.AddSingleton<HubRestClient>();
-builder.Services.AddSingleton<IHubActivityHandler,ValidateTenantHandler>();
-builder.Services.AddSingleton<IHubActivityHandler,ProvisionTenantHandler>();
-builder.Services.AddSingleton<IHubActivityHandler,SendWelcomeHandler>();
-builder.Services.AddSingleton<IHubActivityHandler,RestoreDatabaseHandler>();
-builder.Services.AddSingleton<IHubActivityHandler,CapturePaymentHandler>();
-builder.Services.AddHostedService<ProvisionerRegistration>();
-if(!args.Contains("--register-only",StringComparer.Ordinal))
-    builder.Services.AddHostedService<HubRemoteWorker>();
-await builder.Build().RunAsync();
-
-/// <summary>
-/// Activity policies are registered through REST rather than linked into Hub.
-/// This host has no WFC_PG and can scale independently from workflow processors.
-/// </summary>
-public sealed class ProvisionerRegistration(HubRestClient client,
-    IHostApplicationLifetime lifetime, ILogger<ProvisionerRegistration> logger) : IHostedService
+var registerOnly=args.Contains("--register-only",StringComparer.Ordinal);
+builder.Services.AddHubWorkflowRuntime(options=>
 {
-    public async Task StartAsync(CancellationToken ct)
+    options.RegisterOnly=registerOnly;
+    options.SequentialVersionOneCompatibility=true;
+    options.WorkflowConcurrency=int.TryParse(Environment.GetEnvironmentVariable("WORKFLOW_WORKERS"),out var workflows)?workflows:8;
+    options.ActivityConcurrency=int.TryParse(Environment.GetEnvironmentVariable("ACTIVITY_WORKERS") ?? Environment.GetEnvironmentVariable("WORKERS"),out var activities)?activities:16;
+})
+    .AddWorkflow<OnboardingWorkflow,OnboardingData>("onboarding")
+    .AddWorkflow<OnboardingTimerWorkflow,OnboardingData>("onboarding")
+    .AddActivity<ValidateTenant>("onboarding","validate-tenant",2,o=>o.Input(s=>s.TenantId).Output(s=>s.Validated)
+        .SequentialOutput(s=>s.TenantId).SequentialOutput(s=>s.Validated))
+    .AddActivity<ProvisionTenant>("onboarding","provision-tenant",2,o=>
     {
-        HubActivityRegistration[] policies=
-        [
-            new("onboarding","validate-tenant",1,32,100,100),
-            new("onboarding","provision-tenant",1,32,100,20,
-                "tenant","tenantId",1,true),
-            new("onboarding","send-welcome",1,32,100,100),
-            new("backup","restore-database",1,16,16,16,
-                "database","databaseId",1,true),
-            new("billing","capture-payment",1,32,64,32,
-                "account","accountId",2,false)
-        ];
-        foreach(var policy in policies)
-        {
-            await client.RegisterAsync("api/hub/activity-registrations",policy,ct);
-            logger.LogInformation("Published activity policy {Hub}/{Activity}",
-                policy.HubId,policy.ActivityType);
-        }
-        if(Environment.GetCommandLineArgs().Contains("--register-only",StringComparer.Ordinal))
-            lifetime.StopApplication();
-    }
-    public Task StopAsync(CancellationToken ct)=>Task.CompletedTask;
-}
+        o.Concurrency=20;o.ResourceName="tenant";o.ResourceField="tenantId";o.ResourceCapacity=1;o.StrictFifo=true;
+        o.Input(s=>s.TenantId).Output(s=>s.Provisioned).Output(s=>s.WorkspaceId);
+        o.SequentialOutput(s=>s.TenantId).SequentialOutput(s=>s.Provisioned);
+    })
+    .AddActivity<SendWelcome>("onboarding","send-welcome",2,o=>o.Input(s=>s.TenantId).Output(s=>s.WelcomeSent)
+        .SequentialOutput(s=>s.TenantId).SequentialOutput(s=>s.WelcomeSent))
+    .AddActivity<RestoreDatabase>("backup","restore-database",2,o=>
+    {
+        o.Partitions=16;o.HubConcurrency=16;o.Concurrency=16;o.ResourceName="database";o.ResourceField="databaseId";
+        o.ResourceCapacity=1;o.StrictFifo=true;o.Input(s=>s.DatabaseId).Output(s=>s.Restored);
+        o.SequentialOutput(s=>s.DatabaseId).SequentialOutput(s=>s.Restored);
+    })
+    .AddActivity<CapturePayment>("billing","capture-payment",2,o=>
+    {
+        o.HubConcurrency=64;o.Concurrency=32;o.ResourceName="account";o.ResourceField="accountId";
+        o.ResourceCapacity=2;o.Input(s=>s.AccountId).Output(s=>s.Captured);
+        o.SequentialOutput(s=>s.AccountId).SequentialOutput(s=>s.Captured);
+    });
+// Keep immutable v1 definitions and their sequential processor for existing runs.
+builder.Services.AddSingleton(new RemoteWorkflowRegistry()
+    .Register("onboarding","tenant-onboarding",1,32,b=>b.Activity("validate-tenant").Activity("provision-tenant").Activity("send-welcome"))
+    .Register("onboarding","tenant-onboarding-timer",1,32,b=>b.Activity("validate-tenant").Delay("approval-timeout",TimeSpan.FromSeconds(2))
+        .Activity("provision-tenant").Activity("send-welcome")));
+await builder.Build().RunAsync();

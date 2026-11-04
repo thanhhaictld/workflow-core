@@ -1,6 +1,12 @@
 # Deployment, migration, and rollback
 
 **Status:** reference procedure; not a production-approved runbook.
+
+For Hub deployments, apply migrations through `012_hub_native_runtime.sql` and
+follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012
+preserves existing sequential runs. The procedure below describes the direct
+PostgreSQL runtime.
+
 The distributed runtime is incompatible with the old Workflow Core
 dispatch/control-plane path for the **same workflow rows**.
 

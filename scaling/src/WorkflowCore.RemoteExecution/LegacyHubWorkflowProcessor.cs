@@ -7,7 +7,7 @@ using WorkflowCore.Hub;
 using WorkflowCore.Hub.Client;
 using WorkflowCore.RemoteExecution;
 
-namespace WorkflowCore.Processor.Host;
+namespace WorkflowCore.RemoteExecution.Legacy;
 
 public sealed class DefinitionPublisher(HubRestClient client,
     RemoteWorkflowRegistry registry, IHostApplicationLifetime lifetime,

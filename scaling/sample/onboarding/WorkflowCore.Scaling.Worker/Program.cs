@@ -5,6 +5,7 @@ using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Samples;
 using WorkflowCore.Scaling.Worker;
 using WorkflowCore.Hub.Telemetry;
+using WorkflowCore.RemoteExecution.Legacy;
 
 // Remote mode uses REST+SSE and has no workflow-state database credentials.
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WFC_HUB_URL")))

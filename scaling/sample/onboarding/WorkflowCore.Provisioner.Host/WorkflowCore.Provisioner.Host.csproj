@@ -9,6 +9,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <ProjectReference Include="../../../src/WorkflowCore.Hub.Client/WorkflowCore.Hub.Client.csproj" />
     <ProjectReference Include="../../../src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj" />
-    <ProjectReference Include="../WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore.RemoteExecution/WorkflowCore.RemoteExecution.csproj" />
   </ItemGroup>
 </Project>

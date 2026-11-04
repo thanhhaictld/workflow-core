@@ -23,6 +23,8 @@ type HubWorkflow = {
   error: string | null;
   createdAt: string;
   completedAt: string | null;
+  executionMode?: string;
+  nativeStatus?: string | null;
 };
 type HubHistory = {
   stepIndex: number;
@@ -32,23 +34,28 @@ type HubHistory = {
   eventType: string;
   occurredAt: string;
   payload: unknown;
+  executionPointerId?: string | null;
+  parentPointerId?: string | null;
+  scope?: string[] | null;
+  attempt?: number | null;
 };
 type HubDefinition = {
   hubId: string;
   definitionId: string;
   version: number;
-  steps: { activityType: string; version: number }[];
+  steps: { activityType: string | null; version?: number; name?: string }[];
 };
 type HubDetailResponse = {
   workflow: HubWorkflow;
   history: HubHistory[];
   trace: HubTraceStep[];
   definition: HubDefinition | null;
+  nativeRuntime: { status: string; revision: number; snapshot: unknown } | null;
 };
 type Tab = "trace" | "history" | "state";
 
 const eventTone = (event: string) => event === "StepCompleted" || event === "TimerFired" || event === "WorkflowCompleted" ? "green" as const
-  : event === "StepFailed" ? "red" as const : "amber" as const;
+  : event === "StepFailed" || event === "WorkflowError" ? "red" as const : "amber" as const;
 
 export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
   const [detail, setDetail] = useState<HubDetailResponse | null>(null);
@@ -92,7 +99,7 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
   const steps = useMemo(() => Array.from({ length: count }, (_, index) => {
     const events = history.filter(record => record.stepIndex === index);
     const last = events[events.length - 1];
-    const declared = detail?.definition?.steps[index]?.activityType;
+    const declared = detail?.definition?.steps[index]?.activityType ?? detail?.definition?.steps[index]?.name;
     const completed = events.some(event => event.eventType === "StepCompleted" ||
       event.eventType === "TimerFired");
     const failed = events.some(event => event.eventType === "StepFailed");
@@ -147,7 +154,7 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { label: "Completed steps", value: `${workflow.nextStep} / ${workflow.stepCount}`, icon: CheckCircle2 },
+          { label: workflow.executionMode === "native" ? "Definition steps" : "Completed steps", value: workflow.executionMode === "native" ? String(workflow.stepCount) : `${workflow.nextStep} / ${workflow.stepCount}`, icon: CheckCircle2 },
           { label: "Elapsed", value: formatDuration(age), icon: Timer },
           { label: "Started", value: formatDate(workflow.createdAt), icon: Clock3 },
           { label: "Recorded events", value: String(history.length), icon: GitBranch },
@@ -215,6 +222,9 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
                 <span className="text-sm font-semibold">{entry.activityType}</span>
                 <Badge tone={eventTone(entry.eventType)}>{entry.eventType}</Badge>
                 <span className="text-xs text-muted-foreground">Step {entry.stepIndex + 1}</span>
+                {entry.executionPointerId && <span className="text-xs text-muted-foreground" title={entry.executionPointerId}>
+                  Pointer {shortId(entry.executionPointerId)}{entry.attempt != null ? ` · Attempt ${entry.attempt + 1}` : ""}
+                </span>}
               </div>
               <span className="text-xs text-muted-foreground">{formatDate(entry.occurredAt)}</span>
             </button>)}
@@ -240,6 +250,8 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
             partitionId: workflow.partitionId, status: workflow.state,
             nextStep: workflow.nextStep, stepCount: workflow.stepCount,
             results: workflow.results, error: workflow.error,
+            ...(detail?.nativeRuntime ? { nativeStatus: detail.nativeRuntime.status,
+              revision: detail.nativeRuntime.revision, snapshot: detail.nativeRuntime.snapshot } : {}),
           }, null, 2)}
         </pre>
       </Card>}

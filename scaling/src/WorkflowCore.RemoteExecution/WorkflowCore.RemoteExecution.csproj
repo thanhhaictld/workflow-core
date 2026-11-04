@@ -7,5 +7,6 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../WorkflowCore.Hub.Client/WorkflowCore.Hub.Client.csproj" />
+    <ProjectReference Include="../../../src/WorkflowCore/WorkflowCore.csproj" />
   </ItemGroup>
 </Project>

@@ -12,23 +12,31 @@ public sealed class HubRestClient : IDisposable
 {
     public HttpClient Http { get; }
 
-    public HubRestClient()
+    public HubRestClient() : this(
+        Environment.GetEnvironmentVariable("WFC_HUB_URL") ?? throw new InvalidOperationException("WFC_HUB_URL is required"),
+        Environment.GetEnvironmentVariable("WFC_HUB_AUTH_TOKEN") ?? throw new InvalidOperationException("WFC_HUB_AUTH_TOKEN is required"),
+        Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true") { }
+
+    public HubRestClient(string url, string token, bool allowInsecureHttp = false)
     {
-        var url=Environment.GetEnvironmentVariable("WFC_HUB_URL")
-            ?? throw new InvalidOperationException("WFC_HUB_URL is required");
-        var token=Environment.GetEnvironmentVariable("WFC_HUB_AUTH_TOKEN")
-            ?? throw new InvalidOperationException("WFC_HUB_AUTH_TOKEN is required");
         if(token.Length<24)throw new InvalidOperationException("Hub token must be at least 24 characters");
-        if(!(url.StartsWith("https://",StringComparison.OrdinalIgnoreCase) ||
-            url.StartsWith("http://127.0.0.1",StringComparison.OrdinalIgnoreCase) ||
-            url.StartsWith("http://localhost",StringComparison.OrdinalIgnoreCase) ||
-            (Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true" &&
-            url.StartsWith("http://",StringComparison.OrdinalIgnoreCase))))
+        if(!Uri.TryCreate(url,UriKind.Absolute,out var endpoint) ||
+            !(endpoint.Scheme==Uri.UriSchemeHttps || endpoint.Scheme==Uri.UriSchemeHttp &&
+                (endpoint.IsLoopback || allowInsecureHttp)))
             throw new InvalidOperationException("Remote Hub requires HTTPS outside local development");
         Http=new HttpClient{BaseAddress=new Uri(url.TrimEnd('/')+"/"),
             Timeout=TimeSpan.FromSeconds(30)};
         Http.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",token);
     }
+
+    public Task<JsonElement> StartWorkflowAsync(WorkflowCore.Hub.HubWorkflowStartRequest request, CancellationToken ct = default) =>
+        PostAsync<JsonElement>("api/hub/workflows", request, ct);
+
+    public Task PublishEventAsync(string hub, WorkflowCore.Hub.HubNativeEvent request, CancellationToken ct = default) =>
+        RegisterAsync($"api/hub/hubs/{Uri.EscapeDataString(hub)}/events", request, ct);
+
+    public Task ChangeStatusAsync(Guid id, WorkflowCore.Hub.HubNativeStatusChange request, CancellationToken ct = default) =>
+        RegisterAsync($"api/hub/workflows/{id}/status", request, ct);
 
     public async Task<T> GetAsync<T>(string path,CancellationToken ct)
     {

@@ -1,4 +1,5 @@
 using Npgsql;
+using System.Text.Json;
 
 namespace WorkflowCore.Hub;
 
@@ -20,6 +21,7 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
     {
         if(batchSize is < 1 or > 1000)
             throw new ArgumentOutOfRangeException(nameof(batchSize));
+        await HubNativeWorkflowStore.SweepInboxAsync(tasks,batchSize,ct);
         var candidates=new List<(Guid Id,Guid Workflow)>();
         await using(var cmd=Source.CreateCommand("""
             SELECT id,workflow_id FROM wfc_scale.hub_timer
@@ -46,14 +48,14 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
     {
         await using var db=await Source.OpenConnectionAsync(ct);
         await using var tx=await db.BeginTransactionAsync(ct);
-        string hub,waitingFor;int partition,step;long revision;short workflowState;
+        string hub,waitingFor,mode;int partition,step;long revision;short workflowState;
 
         // Skip a workflow claimed by another scanner or state transition.
         // Select workflow lock FIRST; timer commands/events take this same lock.
         await using(var q=new NpgsqlCommand("""
-            SELECT hub_id,partition_id,next_step,revision,state,waiting_for
+            SELECT hub_id,partition_id,next_step,revision,state,waiting_for,execution_mode
             FROM wfc_scale.hub_workflow
-            WHERE id=@id AND execution_mode='remote'
+            WHERE id=@id AND execution_mode IN ('remote','native')
             FOR UPDATE SKIP LOCKED
             """,db,tx))
         {
@@ -63,11 +65,12 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
             hub=r.GetString(0);partition=r.GetInt32(1);step=r.GetInt32(2);
             revision=r.GetInt64(3);workflowState=r.GetInt16(4);
             waitingFor=r.IsDBNull(5)?"":r.GetString(5);
+            mode=r.GetString(6);
         }
         int timerStep;long scheduledRevision;DateTime due;short timerState;
-        string timerKey;
+        string timerKey;string? pointerId;
         await using(var q=new NpgsqlCommand("""
-            SELECT step_index,scheduled_revision,due_at,state,timer_key
+            SELECT step_index,scheduled_revision,due_at,state,timer_key,execution_pointer_id,due_at<=clock_timestamp()
             FROM wfc_scale.hub_timer WHERE id=@id AND workflow_id=@workflow
             FOR UPDATE SKIP LOCKED
             """,db,tx))
@@ -79,10 +82,12 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
             timerStep=r.GetInt32(0);scheduledRevision=r.GetInt64(1);
             due=r.GetDateTime(2);timerState=r.GetInt16(3);
             timerKey=r.GetString(4);
+            pointerId=r.IsDBNull(5)?null:r.GetString(5);
+            if(!r.GetBoolean(6))return false;
         }
-        if(timerState!=0 || due>DateTime.UtcNow)return false;
-        if(workflowState>=2 || waitingFor!="timer:"+timerId.ToString("D") ||
-           revision!=scheduledRevision || step!=timerStep)
+        if(timerState!=0)return false;
+        if(workflowState>=2 || revision!=scheduledRevision || (mode=="remote" &&
+           (waitingFor!="timer:"+timerId.ToString("D") || step!=timerStep)))
         {
             await using var cancel=new NpgsqlCommand("""
                 UPDATE wfc_scale.hub_timer
@@ -92,7 +97,7 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
             cancel.Parameters.AddWithValue("id",timerId);
             if(await cancel.ExecuteNonQueryAsync(ct)==1)
                 await HubRemoteWorkflowStore.JournalAsync(db,tx,workflowId,timerStep,null,
-                    timerKey,"TimerCancelled",null,ct);
+                    timerKey,"TimerCancelled",JsonSerializer.Serialize(new{timerId}),ct);
             await tx.CommitAsync(ct);
             return false;
         }
@@ -104,6 +109,16 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
         {
             fire.Parameters.AddWithValue("id",timerId);
             if(await fire.ExecuteNonQueryAsync(ct)!=1)return false;
+        }
+        if(mode=="native")
+        {
+            await HubNativeWorkflowStore.Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_workflow_event(workflow_id,step_index,activity_type,event_type,execution_pointer_id,payload)
+                VALUES(@workflow,@step,'__native_workflow__','TimerFired',@pointer,jsonb_build_object('timerId',@timer))
+                """,ct,("workflow",workflowId),("step",timerStep),("pointer",pointerId),("timer",timerId));
+            await HubNativeWorkflowStore.WakeAsync(db,tx,workflowId,hub,partition,ct);
+            await tx.CommitAsync(ct);
+            return true;
         }
         await using(var update=new NpgsqlCommand("""
             UPDATE wfc_scale.hub_workflow
@@ -121,7 +136,7 @@ public sealed class HubTimerStore(HubTaskStore tasks) : IHubTimerStore
                 throw new InvalidOperationException("Workflow changed during timer firing");
         }
         await HubRemoteWorkflowStore.JournalAsync(db,tx,workflowId,step,null,timerKey,
-            "TimerFired",null,ct);
+            "TimerFired",JsonSerializer.Serialize(new{timerId}),ct);
         await HubRemoteWorkflowStore.WakeProcessorAsync(db,tx,workflowId,hub,
             partition,revision+1,ct);
         await tx.CommitAsync(ct);

@@ -30,10 +30,11 @@ export async function GET(
     const workflow = await get("workflows/" + id);
     if (!workflow)
       return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
-    const [history, trace, definitions] = await Promise.all([
+    const [history, trace, definitions, nativeRuntime] = await Promise.all([
       get("workflows/" + id + "/history"),
       get("workflows/" + id + "/trace"),
       get("definitions"),
+      workflow.executionMode === "native" ? get("workflows/" + id + "/native-runtime") : Promise.resolve(null),
     ]);
     const definition = Array.isArray(definitions) ? definitions.find(
       value => value.hubId === workflow.hubId &&
@@ -41,7 +42,7 @@ export async function GET(
         value.version === workflow.version,
     ) : null;
     return NextResponse.json(
-      { workflow, history: history ?? [], trace: trace ?? [], definition },
+      { workflow, history: history ?? [], trace: trace ?? [], definition, nativeRuntime },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {

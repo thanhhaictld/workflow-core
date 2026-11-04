@@ -10,7 +10,8 @@ public sealed record HubWorkflowStartRequest(string HubId, string DefinitionId,
     string? RunId = null);
 public sealed record HubWorkflowStatus(Guid Id, string HubId, string DefinitionId,
     int Version, int PartitionId, string State, int NextStep, int StepCount,
-    JsonElement Results, string? Error, DateTime CreatedAt, DateTime? CompletedAt);
+    JsonElement Results, string? Error, DateTime CreatedAt, DateTime? CompletedAt,
+    string ExecutionMode = "inline", string? NativeStatus = null);
 public sealed record HubWorkflowRunSummary(string RunId, long Total, long Ready,
     long Running, long Completed, long Failed, DateTime? FirstCreatedAt,
     DateTime? LastCompletedAt, double? P50CompletionMs,
@@ -22,7 +23,8 @@ public sealed record HubWorkflowListItem(Guid Id, string HubId, string Definitio
 public sealed record HubWorkflowListPage(IReadOnlyList<HubWorkflowListItem> Items,
     long Total, int Page, int Take);
 public sealed record HubWorkflowOverview(long Total, long Ready, long Running,
-    long Completed, long Failed, long Created24h, long Completed24h);
+    long Completed, long Failed, long Created24h, long Completed24h,
+    long Suspended = 0, long Terminated = 0);
 public sealed record HubRecentRun(string RunId, long Total, long Ready, long Running,
     long Completed, long Failed, DateTime LastCreatedAt);
 public sealed record HubWorkflowTraceAttempt(
@@ -31,10 +33,11 @@ public sealed record HubWorkflowTraceAttempt(
 public sealed record HubWorkflowTraceStep(
     int StepIndex, Guid TaskId, string ActivityType, int Version,
     string State, DateTime? ReadyAt,
-    IReadOnlyList<HubWorkflowTraceAttempt> Attempts);
+    IReadOnlyList<HubWorkflowTraceAttempt> Attempts, string? ExecutionPointerId = null, string? DispatchKey = null);
 public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
     string ActivityType, int Attempts, string EventType, DateTime OccurredAt,
-    JsonElement? Payload);
+    JsonElement? Payload, string? ExecutionPointerId = null, string? ParentPointerId = null,
+    JsonElement? Scope = null, int? Attempt = null);
 
 /// <summary>
 /// Hub-managed durable sequential workflow execution. The gateway alone
@@ -400,7 +403,7 @@ public sealed class HubWorkflowStore(
         await using var cmd = DataSource.CreateCommand("""
             SELECT id,hub_id,definition_id,definition_version,partition_id,
                    state,next_step,step_count,results_json::text,last_error,
-                   created_at,completed_at
+                   created_at,completed_at,execution_mode,native_status
             FROM wfc_scale.hub_workflow WHERE id=@id
             """);
         cmd.Parameters.AddWithValue("id", id);
@@ -408,11 +411,13 @@ public sealed class HubWorkflowStore(
         if (!await reader.ReadAsync(ct)) return null;
         var states = new[] { "Ready", "Running", "Complete", "Failed" };
         return new(reader.GetGuid(0),reader.GetString(1),reader.GetString(2),
-            reader.GetInt32(3),reader.GetInt32(4),states[reader.GetInt16(5)],
+            reader.GetInt32(3),reader.GetInt32(4),reader.GetString(12)=="native" && reader.GetString(13)!="Runnable"
+                ?reader.GetString(13):states[reader.GetInt16(5)],
             reader.GetInt32(6),reader.GetInt32(7),
             JsonDocument.Parse(reader.GetString(8)).RootElement.Clone(),
             reader.IsDBNull(9) ? null : reader.GetString(9),
-            reader.GetDateTime(10),reader.IsDBNull(11) ? null : reader.GetDateTime(11));
+            reader.GetDateTime(10),reader.IsDBNull(11) ? null : reader.GetDateTime(11),reader.GetString(12),
+            reader.GetString(12)=="native"?reader.GetString(13):null);
     }
 
     /// <summary>
@@ -425,20 +430,21 @@ public sealed class HubWorkflowStore(
         CancellationToken ct)
     {
         await using var cmd = DataSource.CreateCommand("""
-            SELECT t.workflow_step,t.id,t.task_type,t.task_version,t.state,
-                   CASE WHEN t.workflow_step=0 THEN w.created_at
+            SELECT COALESCE(t.workflow_step,t.native_step_id),t.id,t.task_type,t.task_version,t.state,
+                   CASE WHEN t.dispatch_key IS NOT NULL THEN t.created_at
+                     WHEN t.workflow_step=0 THEN w.created_at
                      ELSE (SELECT max(h.occurred_at)
                            FROM wfc_scale.hub_workflow_history h
                            WHERE h.workflow_id=t.workflow_id
                              AND h.step_index=t.workflow_step-1
                              AND h.event_type='StepCompleted') END AS ready_at,
                    a.epoch,a.attempt_number,a.worker_id,
-                   a.claimed_at,a.finished_at,a.outcome
+                   a.claimed_at,a.finished_at,a.outcome,t.execution_pointer_id,t.dispatch_key
             FROM wfc_scale.hub_task t
             JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
             LEFT JOIN wfc_scale.hub_task_attempt a ON a.task_id=t.id
-            WHERE t.workflow_id=@id AND t.workflow_step IS NOT NULL
-            ORDER BY t.workflow_step,a.epoch
+            WHERE t.workflow_id=@id AND (t.workflow_step IS NOT NULL OR t.native_step_id IS NOT NULL)
+            ORDER BY COALESCE(t.workflow_step,t.native_step_id),t.created_at,t.id,a.epoch
             """);
         cmd.Parameters.AddWithValue("id", id);
         var grouped = new List<HubWorkflowTraceStep>();
@@ -449,11 +455,12 @@ public sealed class HubWorkflowStore(
         int version = 0;
         string state = "";
         DateTime? readyAt = null;
+        string? pointerId=null,dispatchKey=null;
         void Flush()
         {
             if (previousIndex < 0) return;
             grouped.Add(new(previousIndex, taskId, activity, version,
-                state, readyAt, attempts.ToArray()));
+                state, readyAt, attempts.ToArray(),pointerId,dispatchKey));
             attempts.Clear();
         }
         string[] states = ["Ready", "Leased", "Completed", "Failed"];
@@ -461,7 +468,7 @@ public sealed class HubWorkflowStore(
         while (await reader.ReadAsync(ct))
         {
             int index = reader.GetInt32(0);
-            if (index != previousIndex)
+            if (reader.GetGuid(1) != taskId)
             {
                 Flush();
                 previousIndex = index;
@@ -470,6 +477,8 @@ public sealed class HubWorkflowStore(
                 version = reader.GetInt32(3);
                 state = states[reader.GetInt16(4)];
                 readyAt = reader.IsDBNull(5) ? null : reader.GetDateTime(5);
+                pointerId=reader.IsDBNull(12)?null:reader.GetString(12);
+                dispatchKey=reader.IsDBNull(13)?null:reader.GetString(13);
             }
             if (!reader.IsDBNull(6))
                 attempts.Add(new(reader.GetInt64(6),reader.GetInt32(7),
@@ -486,16 +495,18 @@ public sealed class HubWorkflowStore(
     {
         await using var cmd = DataSource.CreateCommand("""
             SELECT step_index,task_id,activity_type,attempts,event_type,
-                   occurred_at,payload
+                   occurred_at,payload,execution_pointer_id,parent_pointer_id,scope,attempt
             FROM (
                 SELECT h.step_index,h.task_id,t.task_type AS activity_type,t.attempts,
-                       h.event_type,h.occurred_at,h.payload::text AS payload
+                       h.event_type,h.occurred_at,h.payload::text AS payload,
+                       t.execution_pointer_id,NULL::text AS parent_pointer_id,NULL::text AS scope,NULL::integer AS attempt
                 FROM wfc_scale.hub_workflow_history h
                 JOIN wfc_scale.hub_task t ON t.id=h.task_id
                 WHERE h.workflow_id=@id
                 UNION ALL
                 SELECT e.step_index,COALESCE(e.task_id,'00000000-0000-0000-0000-000000000000'::uuid),
-                       e.activity_type,0,e.event_type,e.occurred_at,e.payload::text
+                       e.activity_type,0,e.event_type,e.occurred_at,e.payload::text,
+                       e.execution_pointer_id,e.parent_pointer_id,e.scope::text,e.attempt
                 FROM wfc_scale.hub_workflow_event e
                 WHERE e.workflow_id=@id
             ) h ORDER BY occurred_at,step_index,task_id
@@ -507,7 +518,10 @@ public sealed class HubWorkflowStore(
             items.Add(new(reader.GetInt32(0),reader.GetGuid(1),reader.GetString(2),
                 reader.GetInt32(3),reader.GetString(4),reader.GetDateTime(5),
                 reader.IsDBNull(6) ? null :
-                JsonDocument.Parse(reader.GetString(6)).RootElement.Clone()));
+                JsonDocument.Parse(reader.GetString(6)).RootElement.Clone(),
+                reader.IsDBNull(7)?null:reader.GetString(7),reader.IsDBNull(8)?null:reader.GetString(8),
+                reader.IsDBNull(9)?null:JsonDocument.Parse(reader.GetString(9)).RootElement.Clone(),
+                reader.IsDBNull(10)?null:reader.GetInt32(10)));
         return items;
     }
 
@@ -516,17 +530,18 @@ public sealed class HubWorkflowStore(
     {
         if (page is < 1 or > 10000 || take is < 1 or > 100 ||
             hubId?.Length > 80 || search?.Length > 200 ||
-            (status is not null && status is not ("Ready" or "Running" or "Runnable" or "Complete" or "Failed")))
+            (status is not null && status is not ("Ready" or "Running" or "Runnable" or "Complete" or "Failed" or "Suspended" or "Terminated")))
             throw new ArgumentException("Invalid Hub workflow list filter or paging");
         var pattern = "%" + (search ?? "").Replace("\\", "\\\\")
             .Replace("%", "\\%").Replace("_", "\\_") + "%";
         const string where = """
             WHERE (@hub IS NULL OR hub_id = @hub)
               AND (@status IS NULL OR
-                   (@status = 'Runnable' AND state IN (0,1)) OR
-                   state = CASE @status
+                   (execution_mode='native' AND native_status=@status AND @status IN ('Suspended','Terminated')) OR
+                   (@status = 'Runnable' AND state IN (0,1) AND (execution_mode<>'native' OR native_status='Runnable')) OR
+                   ((execution_mode<>'native' OR native_status NOT IN ('Suspended','Terminated')) AND state = CASE @status
                    WHEN 'Ready' THEN 0 WHEN 'Running' THEN 1
-                   WHEN 'Complete' THEN 2 WHEN 'Failed' THEN 3 ELSE -1 END)
+                   WHEN 'Complete' THEN 2 WHEN 'Failed' THEN 3 ELSE -1 END))
               AND (@search IS NULL OR
                    id::text ILIKE @pattern ESCAPE '\' OR
                    definition_id ILIKE @pattern ESCAPE '\' OR
@@ -551,7 +566,7 @@ public sealed class HubWorkflowStore(
 
         await using var listing = await Command("""
             SELECT id,hub_id,definition_id,definition_version,run_id,state,
-                   next_step,step_count,last_error,created_at,completed_at
+                   next_step,step_count,last_error,created_at,completed_at,execution_mode,native_status
             FROM wfc_scale.hub_workflow
             """ + " " + where + " ORDER BY created_at DESC, id DESC LIMIT @take OFFSET @offset");
         listing.Parameters.AddWithValue("take", take);
@@ -562,7 +577,7 @@ public sealed class HubWorkflowStore(
         while (await reader.ReadAsync(ct))
             records.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
                 reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4),
-                states[reader.GetInt16(5)], reader.GetInt32(6), reader.GetInt32(7),
+                reader.GetString(11)=="native" && reader.GetString(12)!="Runnable"?reader.GetString(12):states[reader.GetInt16(5)], reader.GetInt32(6), reader.GetInt32(7),
                 reader.IsDBNull(8) ? null : reader.GetString(8),
                 reader.GetDateTime(9), reader.IsDBNull(10) ? null : reader.GetDateTime(10)));
         return new(records, total, page, take);
@@ -572,18 +587,20 @@ public sealed class HubWorkflowStore(
     {
         await using var cmd = DataSource.CreateCommand("""
             SELECT count(*), count(*) FILTER (WHERE state=0),
-                   count(*) FILTER (WHERE state=1), count(*) FILTER (WHERE state=2),
-                   count(*) FILTER (WHERE state=3),
+                   count(*) FILTER (WHERE state=1 AND (execution_mode<>'native' OR native_status='Runnable')), count(*) FILTER (WHERE state=2),
+                   count(*) FILTER (WHERE state=3 AND (execution_mode<>'native' OR native_status<>'Terminated')),
                    count(*) FILTER (WHERE created_at>=now()-interval '24 hours'),
                    count(*) FILTER (WHERE state=2 AND
-                       completed_at>=now()-interval '24 hours')
+                       completed_at>=now()-interval '24 hours'),
+                   count(*) FILTER (WHERE execution_mode='native' AND native_status='Suspended'),
+                   count(*) FILTER (WHERE execution_mode='native' AND native_status='Terminated')
             FROM wfc_scale.hub_workflow WHERE (@hub IS NULL OR hub_id=@hub)
             """);
         cmd.Parameters.Add("hub", NpgsqlDbType.Text).Value = (object?)hubId ?? DBNull.Value;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Overview unavailable");
         return new(reader.GetInt64(0),reader.GetInt64(1),reader.GetInt64(2),
-            reader.GetInt64(3),reader.GetInt64(4),reader.GetInt64(5),reader.GetInt64(6));
+            reader.GetInt64(3),reader.GetInt64(4),reader.GetInt64(5),reader.GetInt64(6),reader.GetInt64(7),reader.GetInt64(8));
     }
 
     public async Task<IReadOnlyList<string>> HubIdsAsync(CancellationToken ct)

@@ -1,6 +1,6 @@
 # Embedded scheduler and remote Processor/Provisioner implementation
 
-Status: **experimental working slice / CI validation in progress**.
+Status: **experimental native fluent runtime and sequential compatibility path**.
 Branch: `feat/hub-remote-processor-scheduler`; based on `refactor/scaling-project-layout`.
 See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 
@@ -9,13 +9,13 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
 - `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted immutable workflow metadata, serializable concurrency policies), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
 - `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/sample/onboarding/WorkflowCore.Hub.Host/Program.cs` registers it **inside the Hub process**.
-- `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` provides a simple code-first Activity/Delay decision registry.
-- `scaling/sample/onboarding/WorkflowCore.Processor.Host` publishes definitions and executes workflow decisions using **REST/SSE only**.
-- `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes activity policies and executes handlers using **REST/SSE only**.
+- `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` reuses native builders, executor, mappings, pointers, error handlers, and middleware. The sequential registry remains for v1 runs.
+- `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes registrations and runs separately bounded workflow/activity lanes using **REST/SSE only**.
+- `scaling/sample/onboarding/WorkflowCore.Processor.Host` remains an optional v1-only processor.
 - `scaling/sql/010_hub_remote_scheduler.sql` is forward-only: it does not discard prior Hub executions or legacy workflow history.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
-**Contract note:** the new `WorkflowCore.RemoteExecution` supports a declarative sequential Activity/Delay workflow slice. It is **not yet** a full remote adapter for arbitrary legacy `IWorkflow<T>` steps, branches, parallel tasks, signals, subworkflows or compensation. The old Hub-inline chain store is retained for data compatibility but the generic Hub Host does not register any inline demo definitions.
+**Contract note:** native v2 runs use execution-pointer snapshots and durable inboxes. Tested scenarios include mappings, branches, loops, parallel joins, delays, schedules, recurrence, events, activities, retries, cancellation, and compensation. Upstream's unimplemented `SubWorkflowStepBody` is rejected. See the [native runtime guide](hub-native-fluent-runtime.md) for contracts and limits. Existing sequential and inline runs retain their execution modes.
 
 ## Local startup: Docker Compose
 
@@ -27,7 +27,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ```
 
-Services: `postgres`, `migrate`, `hub` (including scheduler), `processor`, `provisioner`, `monitor-api`, `monitor`, `otel-collector`, `prometheus`, `grafana`, `tempo`, `loki` and optional `k6`. Processor/Provisioner have no `WFC_PG` environment variable.
+Services include `hub` with its scheduler and the combined `provisioner`. The optional `processor` belongs to the `sequential-processor` profile. Application hosts have no `WFC_PG`. Set `WORKFLOW_WORKERS` and `ACTIVITY_WORKERS` independently.
 
 - Next.js unified workflow list: http://localhost:3002/workflows
 - Grafana performance and timer-lag panels: http://localhost:3001/d/workflow-hub-otel
@@ -56,6 +56,10 @@ To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions wh
 | `POST /api/hub/workflows` | Idempotently create a remote workflow and its first workflow task |
 | `GET /api/hub/workflows/{id}/runtime` | Processor retrieves revision, input, persisted results, state, definition identity |
 | `POST /api/hub/workflows/{id}/transitions` | Commit `ScheduleActivity`, `ScheduleTimer` or `CompleteWorkflow` with expected revision and fenced lease |
+| `GET /api/hub/workflows/{id}/native-runtime` | Protocol-v1 native snapshot, revision, status, and unread inbox |
+| `POST /api/hub/workflows/{id}/native-commits` | Atomic fenced native snapshot/effect/inbox/history commit and task acknowledgement |
+| `POST /api/hub/hubs/{hub}/events` | Idempotent native event publication, including future-effective events |
+| `POST /api/hub/workflows/{id}/status` | Idempotent native suspend/resume/terminate with revision fencing |
 | `POST /api/hub/workers/tasks:claim` | Claim activity or workflow task, filtered by capabilities |
 | `POST /api/hub/tasks/{id}/complete` | Fenced completion; schedules a subsequent processor task |
 | `GET /api/hub/workflows/{id}/history` | Unified persisted activity/processor/timer journal |
@@ -85,12 +89,14 @@ For a future dedicated host, reuse `WorkflowCore.Hub.Scheduling` and `IHubTimerS
 ## Validation
 
 - `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubRemoteSchedulerTests.cs` covers immutable registration, fenced workflow transitions and replay, remote activity completion, a two-scanner due-timer race, and persisted history.
+- `HubNativeExecutionTests`, `HubNativeRoutedTests`, `HubNativeRuntimeTests`, and `HubNativeTransportTests` cover native/upstream semantic comparisons, typed/scalar mappings, pointer recovery, durable races, cancellation, and completion transport outages.
+- `pwsh scripts/test-hub-native.ps1 -ManageHosts` force-restarts Hub and the combined Provisioner during a native wait and verifies v1/v2 coexistence.
 - `.github/workflows/workflow-hub-observability.yml` runs Compose, 20 real k6 workflows, a timer workflow, monitor history/waterfall assertions, metrics export.
 - `.github/workflows/distributed-runtime.yml` includes a two-phase 1000-workflow CI test and the PostgreSQL test suite.
 - Verify CI passes before reporting performance numbers. Relative to the earlier inline activity-chain benchmark, the remote path has additional processor task/REST overhead: remeasure rather than reusing historical throughput/latency.
 
 ## Remaining work before production
 
-Native `IWorkflow<T>` execution pointer adapter; arbitrary branches, loops, subworkflows, event signals and event/timeout arbitration; durable schedule cancellation API; task expiry and retry semantics for processor tasks; multi-tenant identity/scoped authorization; readiness integration with scheduler health; long-running workflow definition schema migrations; more robust definition/policy version rollout; a dedicated scheduler host (optional); and a full 1000-due-timer failover stress test.
+Production identity/scoped authorization, operator recovery workflows, live cross-version migration, scheduler-health readiness, a dedicated scheduler host (optional), and a full 1000-due-timer failover stress test remain. Native workflows use the upstream cancellation/error semantics. `SubWorkflowStepBody` remains unsupported because it is unimplemented upstream.
 
 The system currently uses a shared **development bearer token**, local unauthenticated OTel/Prometheus remote write, and business activity handlers that simulate side effects. Do not expose this Compose stack publicly or infer production readiness from the smoke test.

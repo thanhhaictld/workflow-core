@@ -3,7 +3,7 @@ using Microsoft.Extensions.Hosting;
 using WorkflowCore.Hub.Client;
 using WorkflowCore.Hub.Telemetry;
 using WorkflowCore.RemoteExecution;
-using WorkflowCore.Processor.Host;
+using WorkflowCore.RemoteExecution.Legacy;
 
 var builder=Host.CreateApplicationBuilder(args);
 builder.Services.AddWorkflowHubOpenTelemetry("workflow-processor");

@@ -25,6 +25,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton(new HubWorkflowRegistry());
         services.AddSingleton<HubDefinitionStore>();
         services.AddSingleton<HubRemoteWorkflowStore>();
+        services.AddSingleton<HubNativeWorkflowStore>();
         services.AddSingleton<HubWorkflowStore>();
         services.AddSingleton<HubOperationsStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
@@ -137,6 +138,47 @@ public static class HubGatewayEndpoints
             }
         });
 
+        routes.MapGet("/workflows/{id:guid}/native-runtime", async (Guid id,
+            HubNativeWorkflowStore native, CancellationToken ct) =>
+        {
+            var runtime = await native.GetRuntimeAsync(id,ct);
+            return runtime is null ? Results.NotFound() : Results.Ok(runtime);
+        });
+        routes.MapPost("/workflows/{id:guid}/native-commits", async (Guid id, HubNativeCommit request,
+            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+        {
+            try
+            {
+                var result = await native.CommitAsync(id,request,ct);
+                if(result is null)return Results.Conflict(new{error="Stale native lease or revision"});
+                var runtime = await native.GetRuntimeAsync(id,ct);
+                if(runtime is not null)readiness.Publish(runtime.HubId);
+                return Results.Ok(result);
+            }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(KeyNotFoundException ex){return Results.NotFound(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
+        routes.MapPost("/hubs/{hub}/events", async (string hub, HubNativeEvent request,
+            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+        {
+            try { await native.PublishEventAsync(hub,request,ct); readiness.Publish(hub); return Results.NoContent(); }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
+        routes.MapPost("/workflows/{id:guid}/status", async (Guid id, HubNativeStatusChange request,
+            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+        {
+            try
+            {
+                if(!await native.ChangeStatusAsync(id,request,ct))return Results.Conflict();
+                var runtime=await native.GetRuntimeAsync(id,ct);
+                if(runtime is not null)readiness.Publish(runtime.HubId);
+                return Results.NoContent();
+            }
+            catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
+        });
         routes.MapGet("/workflows/{id:guid}/runtime", async (Guid id,
             HubRemoteWorkflowStore remote, CancellationToken ct) =>
         {
@@ -276,7 +318,7 @@ public static class HubGatewayEndpoints
             {
                 var items = await store.ClaimAsync(request.WorkerId,
                     request.Hubs, request.Capabilities, request.MaxTasks,
-                    TimeSpan.FromSeconds(45), ct);
+                    TimeSpan.FromSeconds(45), ct, request.Workflows);
                 return Results.Ok(items);
             }
             catch (ArgumentException ex)
@@ -293,7 +335,7 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/complete", async (
             Guid id, HubTaskResultRequest request, HubTaskStore store,
-            HubWorkflowStore workflows, HubRemoteWorkflowStore remote,
+            HubWorkflowStore workflows, HubRemoteWorkflowStore remote, HubNativeWorkflowStore native,
             HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (request.Result.ValueKind is JsonValueKind.Undefined or
@@ -301,7 +343,10 @@ public static class HubGatewayEndpoints
                 return Results.BadRequest(new { error = "Invalid activity result" });
             var remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
             var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
-            var done = remoteActivity
+            var nativeActivity=await native.IsActivityAsync(id,ct);
+            var done = nativeActivity
+                ? await native.CompleteActivityAsync(id,request.WorkerId,request.Epoch,request.Result,ct)
+                : remoteActivity
                 ? await remote.CompleteActivityAsync(id,request.WorkerId,
                     request.Epoch,request.Result.GetRawText(),ct)
                 : managed

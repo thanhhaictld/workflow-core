@@ -172,7 +172,7 @@ jobs:
             with urllib.request.urlopen(req,timeout=10) as resp:
               return json.load(resp)
           body={
-            'hubId':'onboarding','definitionId':'tenant-onboarding-timer','version':1,
+            'hubId':'onboarding','definitionId':'tenant-onboarding-timer','version':2,
             'runId':'ci-durable-timer','idempotencyKey':'ci-timer-once',
             'input':{'tenantId':'ci-timer-tenant','organizationName':'Timer regression'}
           }
@@ -183,17 +183,18 @@ jobs:
             if state['state'] in ('Complete','Failed'):break
             time.sleep(.5)
           assert state['state']=='Complete',state
-          assert state['stepCount']==4 and state['nextStep']==4
-          assert state['results']['1']['timerFired'] is True
+          assert state['stepCount']==4 and state['executionMode']=='native'
+          native=call('GET','workflows/'+workflow+'/native-runtime')
+          assert native['snapshot']['Data']['value']['WelcomeSent'] is True
           history=call('GET','workflows/'+workflow+'/history')
           scheduled=[e for e in history if e['eventType']=='TimerScheduled']
           fired=[e for e in history if e['eventType']=='TimerFired']
           assert len(scheduled)==len(fired)==1, history
           assert scheduled[0]['stepIndex']==fired[0]['stepIndex']==1
           assert fired[0]['occurredAt']>=scheduled[0]['occurredAt']
-          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,2,3]
+          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2,3]
           assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
-          print('PASS: external processor + activity host + co-hosted scheduler + durable timer journal')
+          print('PASS: native combined Provisioner + embedded scheduler + durable timer journal')
           PY
       - name: Verify unified workflow list, Hub filtering and durable step history
         run: |
@@ -238,7 +239,8 @@ jobs:
           history=result['history']
           print('Selected workflow:',w['definitionId'],'nextStep:',w['nextStep'],'steps:',w['stepCount'])
           assert w['state']=='Complete'
-          assert w['nextStep']==3 and w['stepCount']==3
+          assert w['executionMode']=='native' and w['stepCount']==3
+          assert result['nativeRuntime']['snapshot']['Data']['value']['WelcomeSent'] is True
           assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2]
           assert [e['activityType'] for e in history if e['eventType']=='StepCompleted']==[
             'validate-tenant','provision-tenant','send-welcome']
@@ -258,6 +260,7 @@ jobs:
             for s in spans for a in s['attempts']
           )
           assert all(s['readyAt'] is not None for s in spans)
+          assert all(s['executionPointerId'] and s['dispatchKey'] for s in spans)
           print('PASS: Hub waterfall has real claim/finish durations across 3 activities')
           print('PASS: Hub workflow opens in existing detail route with named, ordered history')
           PY
