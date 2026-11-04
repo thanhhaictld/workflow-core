@@ -7,6 +7,7 @@ using WorkflowCore.Persistence.PostgreSQL;
 using WorkflowCore.Scaling.PostgreSQL;
 using WorkflowCore.Scaling.Api;
 using WorkflowCore.Hub.Gateway;
+using WorkflowCore.Hub.Management;
 using WorkflowCore.Hub.Telemetry;
 using WorkflowCore.Scaling.Samples;
 
@@ -37,9 +38,7 @@ builder.Services.AddBenchmarkProvisionDemo();
 builder.Services.AddTenantOnboardingDemo();
 if (Environment.GetEnvironmentVariable("WFC_HUB_ENABLED") == "true")
     builder.Services.AddHubGateway(connectionString);
-builder.Services.AddSingleton(new WorkflowMonitorReader(connectionString));
-builder.Services.AddSingleton(sp => new DefinitionCatalog(connectionString,
-    sp.GetRequiredService<ILogger<DefinitionCatalog>>()));
+builder.Services.AddHubManagement(connectionString);
 var app = builder.Build();
 if (Environment.GetEnvironmentVariable("WFC_HUB_ENABLED") == "true")
     app.MapHubGateway();

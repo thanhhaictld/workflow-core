@@ -13,7 +13,7 @@ flowchart LR
   W -->|"REST claim / heartbeat / complete"| H
 ~~~
 
-The standalone Hub host is under scaling/sample/onboarding/WorkflowCore.Hub.Host.
+The standalone Hub host is under scaling/src/WorkflowCore.Hub.Server.
 The API/broadcaster project is scaling/src/WorkflowCore.Hub.Gateway.
 The bounded Npgsql store and code-first policy registry are in
 scaling/src/WorkflowCore.Hub.

@@ -8,7 +8,7 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
 - `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted immutable workflow metadata, serializable concurrency policies), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
-- `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/sample/onboarding/WorkflowCore.Hub.Host/Program.cs` registers it **inside the Hub process**.
+- `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/src/WorkflowCore.Hub.Server/Program.cs` registers it **inside the Hub process**.
 - `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` reuses native builders, executor, mappings, pointers, error handlers, and middleware. The sequential registry remains for v1 runs.
 - `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes registrations and runs separately bounded workflow/activity lanes using **REST/SSE only**.
 - `scaling/sample/onboarding/WorkflowCore.Processor.Host` was historical v1-only tooling; the project has been removed. New deployments use the combined native workflow/activity lanes in `WorkflowCore.Provisioner.Host`. The reusable sequential runtime remains in `WorkflowCore.RemoteExecution` for v1 compatibility.

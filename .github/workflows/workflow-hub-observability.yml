@@ -13,7 +13,7 @@ on:
       - 'scaling/src/WorkflowCore.Hub/**'
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
+      - 'scaling/src/WorkflowCore.Hub.Server/**'
       - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - '.github/workflows/workflow-hub-observability.yml'
   pull_request:
@@ -22,7 +22,7 @@ on:
       - 'scaling/src/WorkflowCore.Hub/**'
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
+      - 'scaling/src/WorkflowCore.Hub.Server/**'
       - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - '.github/workflows/workflow-hub-observability.yml'
   workflow_dispatch:

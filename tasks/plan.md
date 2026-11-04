@@ -1,111 +1,255 @@
-# Plan: Reusable monitoring backend and legacy demo removal
+# Plan: Generic Hub Server and reusable Management module
 
-Status: planned; implementation has not started.
+Status: approved for autonomous implementation by the user; handed to GPT-6.1 Terra high in this worktree.
+Updated: 4 November 2026. This revises the existing monitoring extraction plan in place.
+Detailed implementation checklist: [todo.md](todo.md).
 
-Historical note: this plan's proposed structure predates the native combined Provisioner. Its `WorkflowCore.Processor.Host` entry below is removed tooling; current deployments use `WorkflowCore.Provisioner.Host`, while sequential v1 compatibility remains in `WorkflowCore.RemoteExecution`.
+## Goal and recommended shape
 
-## Goal
+Application developers should configure and deploy Hub infrastructure, then spend
+application work on workflow definitions, processor decisions, and activity handlers.
+They should not edit the Hub host or copy onboarding registrations into infrastructure.
 
-Make the monitoring backend a reusable building block under `scaling/src/`, with a thin standalone host. Remove the old PostgreSQL onboarding/benchmark demo and its UI and tooling dependencies. Keep monitoring independent of executable business workflows.
+Adopt the proposed project names, with one ownership distinction:
 
-Scope assumption: “legacy onboarding” means `WorkflowCore.Scaling.Samples` and the direct-PostgreSQL demo mode of `WorkflowCore.Scaling.Worker`. Retain the native combined Provisioner sample, its fluent workflows, and existing Hub v1 compatibility. A broader removal of all onboarding examples would require revising this scope.
+| Current location | Target | Responsibility |
+| --- | --- | --- |
+| `scaling/monitor/api` | `scaling/src/WorkflowCore.Hub.Management` | Reusable management/monitoring services, DTOs, and endpoint mapping; a library, not another executable |
+| `scaling/sample/onboarding/WorkflowCore.Hub.Host` | `scaling/src/WorkflowCore.Hub.Server` | Generic ASP.NET executable composing Gateway, Management, telemetry, and embedded scheduling |
+| `scaling/monitor` | unchanged | Next.js UI and server-side backend adapters |
+| `WorkflowCore.Provisioner.Host` and `WorkflowCore.Provisioner.Workflows` | remain under `scaling/sample/onboarding` | Application-owned runtime configuration, native workflows, and typed activities |
 
-## Requirements
+The Server becomes the default backend for both the UI and remote application
+hosts. A separate Management executable is unnecessary for this deployment; the
+library can be embedded elsewhere if a concrete deployment requires that later.
+The obsolete standalone `WorkflowCore.Processor.Host` has been removed from the
+solution and is not a target to recreate. Inspect current files before execution
+because another agent may be completing its source/reference cleanup.
 
-1. A host can register and map monitoring without referencing any sample assembly, registering workflow definitions, or starting execution consumers.
-2. Existing workflow lists, details, history, topology, definition versions/diffs, and Hub waterfalls continue to show real persisted data. Historical legacy runs remain readable after removing their executable sample code.
-3. The default monitor performs no workflow execution or business commands. Generic management remains an explicit optional feature, disabled by default, with existing fencing and write controls preserved.
-4. Remove legacy onboarding/benchmark creation and approval flows across backend, UI, development commands, and CI. Retain equivalent generic runtime verification through test-owned fixtures and native scenarios.
-5. Keep contracts, solution references, deployment paths, configuration, tests, and documentation consistent in each delivered increment. Successful compilation alone does not complete the change.
+## Grounding in the current implementation
 
-## Evidence from the current code
+- [`Hub.Host/Program.cs`](../scaling/sample/onboarding/WorkflowCore.Hub.Host/Program.cs)
+  already composes generic Gateway and Scheduling without business registrations.
+  This is primarily a host move, rename, and addition of management composition.
+- [`monitor/api/Program.cs`](../scaling/monitor/api/Program.cs) is not a generic
+  management module today. It registers `WorkflowCore.Scaling.Samples`, starts a
+  `DistributedWorkPump` by default unless disabled, reconciles metadata from an
+  executable registry, and exposes demo starts and approvals alongside reads.
+- [`WorkflowMonitorReader.cs`](../scaling/monitor/api/WorkflowMonitorReader.cs)
+  reads the separate PostgreSQL runtime's workflow state, work ledger, and history.
+  Moving it does not turn those records into Hub native runs.
+- [`DefinitionCatalog.cs`](../scaling/monitor/api/DefinitionCatalog.cs) mixes
+  metadata capture with persisted reads/diffs. Topology prefers stored metadata,
+  but the API currently falls back to locally registered executable definitions.
+- [`HubGatewayEndpoints.cs`](../scaling/src/WorkflowCore.Hub.Gateway/HubGatewayEndpoints.cs)
+  already owns `/api/hub` runtime APIs, including worker claims/commits, events,
+  status, history/trace, operational reads, and policy capacity updates. Do not
+  duplicate or transfer these transactional implementations during extraction.
+- The Next.js `/backend` rewrite and unified feed use `WORKFLOW_API_URL`, while
+  Hub adapters use `WORKFLOW_HUB_URL` and a server-only token. Both data sources
+  must continue working after they point to one Server origin.
+- Observability Compose currently launches `hub`, `monitor-api`, and an EF-only
+  `monitor-api-migrate` job. `scripts/dev.ps1`, `scripts/test-hub-native.ps1`, and
+  both scaling CI workflows encode old project paths or binary names.
 
-- `scaling/monitor/api/Program.cs` calls `AddDistributedWorkflowCore`, enables an embedded worker by default, registers onboarding and benchmark workflows, and mixes monitoring with business start/approval endpoints.
-- `WorkflowMonitorReader.cs` reads persisted workflow state, work ledger, and execution history; these queries can serve historical runs without executing workflow code.
-- `DefinitionCatalog.cs` contains metadata capture, persistence, and comparisons. Startup currently reconciles locally registered definitions. Topology prefers archived metadata but falls back to the executable registry.
-- `WorkflowCore.Scaling.Worker/Program.cs` has both direct-PostgreSQL demo execution and a REST/SSE activity-worker mode. Removing the project wholesale would also remove a caller used by Hub compatibility tooling.
-- The Next.js app contains onboarding creation and approval controls. Its server routes also aggregate Hub data; those routes are not the legacy demo.
-- `scripts/dev.ps1`, both runtime/observability workflows, and `scaling/observability/compose.yaml` reference the current API or legacy worker paths.
+These observations are a planning baseline, not a claim that the target exists.
 
-## Proposed structure
+## Architecture and boundaries
 
-```text
-scaling/src/
-  WorkflowCore.Monitoring/           # reusable services, read models, endpoints
-  WorkflowCore.Monitoring.Host/      # thin standalone executable
-scaling/monitor/                    # Next.js UI and existing server-side adapters
-scaling/sample/onboarding/
-  WorkflowCore.Provisioner.Host/    # retained native sample
-  WorkflowCore.Processor.Host/      # historical entry; removed v1-only sample host
-  WorkflowCore.Hub.Host/            # retained generic Hub host
-  WorkflowCore.Hub.LoadTest/        # retained native workload
+```mermaid
+flowchart LR
+  UI[Next.js monitor] -->|HTTP reads and explicit management| S[Hub.Server]
+  A[Application Provisioner: workflow and activity lanes] -->|REST / SSE| S
+  S --> G[Hub.Gateway]
+  S --> M[Hub.Management]
+  S --> T[Hub.Scheduling]
+  G --> H[Hub stores]
+  T --> H
+  M --> R[Persisted management readers]
+  H --> PG[(PostgreSQL)]
+  R --> PG
 ```
 
-Root upstream `src/` is unchanged. “src” here means the distributed-runtime source directory, `scaling/src/`, following repository guidance.
+- **Server** is a composition root: configuration, telemetry, module registration,
+  endpoint mapping, health/readiness, and an explicit migration entry point. It
+  has no reference to a business sample, remote executor, or Provisioner assembly.
+- **Gateway** retains the existing REST/SSE runtime protocol and authentication
+  behavior. Hub stores retain transactions, fencing, permits, durable journal,
+  policy revisions, and inbox/timer arbitration. Management commands for native
+  workflows use these existing services; they never edit native state directly.
+- **Management** supplies persisted read models and read endpoints plus explicit
+  optional legacy management commands where consumers still require them. Its
+  normal registration must not call `AddDistributedWorkflowCore`, register
+  `IWorkflowHost`, reconcile an executable registry, or add workflow consumers.
+- **Scheduling** stays Hub infrastructure with database access and the current
+  enable/disable configuration. Do not add a separate scheduler deployment here.
+- **Application hosts** own workflows, mappings, activities, versions and
+  application policy declarations; they access Hub through REST/SSE with no
+  PostgreSQL credentials. The combined Provisioner remains the default example.
+- Existing legacy read compatibility may reference persistence types from
+  `WorkflowCore.Scaling.PostgreSQL` or upstream persistence assemblies. Assembly
+  reuse must not register its execution services. Isolate optional legacy command
+  registration so the default management module cannot start that runtime.
 
-### Reusable backend
+Proposed public composition surface (names to implement, not existing APIs):
 
-Proposed public entry points are `AddWorkflowMonitoring(options)` and `MapWorkflowMonitoring()`. Validate connection/schema and error-disclosure options at registration. Keep process startup, environment-variable binding, telemetry configuration, health endpoint composition, and explicit migration mode in the host. The library must not call `Run`, register a workflow host, or add worker services.
+```csharp
+services.AddHubGateway(connectionString);
+services.AddHubManagement(options => options.ConnectionString = connectionString);
+services.AddHubScheduling(configuration.GetSection("WorkflowHub:Scheduler"));
 
-Move existing readers and metadata DTOs with their current wire shapes. Keep existing read route paths and pagination/error behavior, including `/api/monitor/*`, definition/version/diff routes, and instance/history reads. Do not add interface layers unless a concrete hosting or testing need requires them.
+app.MapHubGateway();
+app.MapHubManagement();
+```
 
-### Metadata ownership and historical data
+`AddHubManagement` registers readers/options only. `MapHubManagement` maps retained
+read contracts. Keep any required legacy command registration separate and
+explicit, with writes disabled by default and no worker started. Introduce further
+interfaces only when required for hosting or tests.
 
-Separate metadata capture/publication from monitoring reads. Runtime/business hosts may explicitly publish their definitions; the monitor reads immutable stored versions and never needs their executable assemblies. Remove the registry fallback from topology. When a snapshot is absent, return an explicit unavailable response and show that state in the UI.
+## Contract and data decisions
 
-Before removing old registrations, inventory historical definitions and archive metadata through an explicit one-time tool or deployment preparation using the old definitions. Do not reconstruct missing metadata from guessed steps. Preserve stored hashes, versions, history, schemas, and rows. No destructive migration or database reset is part of this work.
+1. Keep `/api/hub/*` worker and native workflow contracts unchanged. Native
+   start/event/status APIs and capacity updates continue to use their existing
+   stores; preserve revision and epoch checks, retry behavior, and history.
+2. Preserve useful read contracts: `/api/monitor/*`, workflow instance/history,
+   `/api/definitions` versions/diffs, and topology. Preserve JSON casing, IDs,
+   filtering, pagination, not-found/error behavior, and native/legacy source
+   identity. Two namespaces on one origin must not collapse two persistence models.
+3. Remove business endpoints such as `/api/demo/onboardings`, approval,
+   `/api/demo/versioned-onboardings`, and benchmark-specific `POST /api/workflows`
+   only with their UI, script, and CI callers migrated. Inventory generic
+   `/api/events` and `/api/manage/*` individually; retain used legacy commands
+   explicitly or document intentional retirement. Do not silently redirect
+   legacy requests into the native runtime with different semantics.
+4. Read metadata from persisted snapshots. Remove startup capture and executable
+   registry fallback from management. Before deleting legacy definitions, run an
+   explicit archive preparation with their matching old code. Missing topology
+   stays visibly unavailable; do not invent metadata or make all runs unreadable.
+5. Preserve database schemas, ordered migrations through 013, rows, workflow and
+   activity versions, implementation fingerprints, policy revisions, history,
+   and named Compose volumes. This is not a database migration between runtimes.
+6. Native v3 workflow/step code remains in `WorkflowCore.Provisioner.Workflows`.
+   Moving infrastructure must not rebuild/change or republish those implementations
+   unnecessarily. No new sample version is required solely for a Server rename.
+7. Old v1/v2 runs still require matching old binaries if unfinished. The current
+   combined sample does not advertise those versions. Keep reusable compatibility
+   code where needed; do not claim automatic coexistence or add sample aliases
+   just to make old tests pass.
+8. Preserve existing credential handling and inspect route authorization when
+   mounting management on the Server. Keep tokens server-side in Next.js and
+   verify unauthorized Hub access still fails. This refactor does not claim
+   production authentication or tenant isolation.
 
-### Commands and boundaries
+## Deployment and migration design
 
-Remove `/api/demo/onboardings`, its approval endpoint, `/api/demo/versioned-onboardings`, and the benchmark-specific `POST /api/workflows`.
+Target observability topology: `hub` runs `WorkflowCore.Hub.Server.dll`; `monitor`
+uses that backend for both origins; `provisioner` remains application-owned. Keep
+service name `hub`, existing Hub port, environment names and scheduler settings
+where possible. Rename the project/assembly and update its callers together.
 
-Inventory callers of generic `/api/events` and `/api/manage/*`. Preserve needed legacy command routes through explicit optional registration separate from monitoring reads, with workers disabled and writes off by default. Document any unused command route intentionally retired. Hub start/event/status operations remain Hub client operations. Do not move business workflow registration into the monitoring library to retain an endpoint.
+1. Extract the Management library while the current API still hosts it. Prove
+   readers and default registration first, with no business dependency.
+2. Move/rename the existing Hub host to `scaling/src/WorkflowCore.Hub.Server` and
+   update solution, build and startup callers in the same verifiable slice.
+3. Add Management to Server and test both API families from one origin before
+   redirecting the monitor or removing its old backend.
+4. Keep the existing `monitor-api-migrate` responsibility during transition. Add
+   an explicit Server migration-only invocation for required legacy EF schemas,
+   preserving the existing schema and migration history. It must exit before
+   opening HTTP listeners, starting hosted services, or running business code.
+   The existing ordered Hub SQL job stays authoritative for Hub SQL; do not
+   introduce a second automatic startup migration loop.
+5. Switch `WORKFLOW_API_URL` and `WORKFLOW_HUB_URL` to Server in Compose and local
+   scripts. Keep `/backend` proxy URLs used by the browser stable. Audit the
+   Next.js rewrite/build configuration to verify the new origin actually reaches
+   the running application; do not assume an environment change alone is enough.
+6. Remove `monitor-api` and its obsolete image/build path after UI parity is
+   verified. Rename or replace the explicit EF migration job once its new
+   invocation is proven. Preserve PostgreSQL/observability volume and project names.
+7. Remove `scaling/monitor/api` and the old Hub host directory after all active
+   callers have moved. No permanent forwarding project or duplicate host remains.
 
-Keep Next.js Hub/Prometheus adapters and server-only credentials in place for this change. Consolidating every frontend server route into .NET is outside this extraction. Monitoring infrastructure may read PostgreSQL; remote Provisioner/Processor hosts remain PostgreSQL-free.
+Configure DB pools explicitly when cohosting readers with Gateway/scheduler.
+Validate concurrent management reads and timer/activity progress; do not silently
+combine previous pool limits into an assumed capacity budget.
 
-### Legacy sample removal
+Rollback retains previous deployable artifacts and restores previous process/origin
+configuration without restoring or deleting data. Never run an old Hub binary
+against unsupported schema/protocol versions. Host-only rollback does not require
+changing application workflow identities.
 
-Remove the `WorkflowCore.Scaling.Samples` project after its production callers are migrated. Remove direct-PostgreSQL demo execution from `WorkflowCore.Scaling.Worker` and retire that executable after auditing its REST/SSE mode. Repoint v1 smoke tools to the retained combined Provisioner where capabilities match; otherwise retain a small compatibility host with the required handlers. Stable activity identities, capability declarations, resource policy, and v1 result shapes must survive this move. Reusable v1 infrastructure already in `WorkflowCore.RemoteExecution` remains.
+## Legacy demo cleanup retained from the previous plan
 
-Remove UI demo controls, including the creation panel in `workflow-list.tsx` and approval behavior in `workflow-trace.tsx`. Preserve generic workflow details, opt-in status management, historical legacy filtering, and real failure states.
+Remove onboarding/benchmark creation and approval controls from the monitor so
+infrastructure does not depend on one business domain. Preserve generic workflow
+lists, details, definitions, status controls where supported, and real error states.
 
-## Delivery order
+Retire `WorkflowCore.Scaling.Samples`, direct-PostgreSQL demo execution, and
+`WorkflowCore.Scaling.Worker` only after auditing their remaining readers, CI,
+benchmark, and REST/SSE activity callers. Replace verification with test-owned
+fixtures or retained native tools before deleting callers. Do not assume the
+current Provisioner provides old worker capabilities or exact v1 result shapes.
+Reusable upstream and scaling runtime libraries remain out of deletion scope.
 
-Detailed acceptance criteria and dependencies are in [todo.md](todo.md).
+## Ordered delivery
 
-1. Inventory endpoint/deployment consumers and establish generic monitoring fixtures.
-2. Extract reader services and metadata contracts into the reusable library.
-3. Add reusable endpoint mapping and the thin host; preserve current read contracts.
-4. Remove executable-registry dependence and verify archived topology recovery.
-5. Update the UI to remove business demo flows and show unavailable metadata.
-6. Switch local startup, Compose, migration invocation, and solution references.
-7. Move any remaining v1 worker responsibilities to a retained host.
-8. Replace legacy-demo CI and benchmark coupling with generic/native verification.
-9. Delete unused legacy sample projects and business demo scripts after their callers have migrated.
-10. Align documentation and run the complete acceptance checks.
+The checklist gives observable acceptance and verification for each slice:
 
-Checkpoints follow tasks 3, 6, and 10. The checklist retains stable task IDs: execute 9a/9b before deletion tasks 8a/8b. Each slice must build and pass its focused behavioral checks before the next dependent slice. Remove temporary compatibility wiring before completion.
+1. Inventory routes, references, schemas, consumers, and current response fixtures.
+2. Separate persisted metadata reads from executable capture; prepare old archives.
+3. Extract reusable Management services and endpoint mapping into the current API.
+4. Move the generic Hub executable to Hub.Server and update its direct callers.
+5. Compose Management into Server; prove API parity and explicit migration-only mode.
+6. Migrate/remove business UI controls and display unavailable metadata explicitly.
+7. Switch Compose and local development to the Server backend.
+8. Repoint runtime and observability CI/smokes/benchmarks to generic/native fixtures.
+9. Delete old API/host directories and unused sample executables after caller audits.
+10. Update guidance and prove the final architecture and deployment.
 
-## Verification and completion gate
+Each slice ends in a buildable state with its focused checks passing. Checkpoints
+follow extraction, combined hosting, and deployment. This document does not ask
+for an implementation checkpoint beyond the user's current request for a plan.
 
-- Host the library from a test-owned ASP.NET application with no sample reference; query real PostgreSQL fixtures for overview, list, detail, history, versions/diffs, and topology.
-- Assert monitoring registration adds neither `DistributedWorkPump` nor legacy Workflow Core consumers. Starting only the monitor must leave pending work unclaimed and workflow revisions unchanged.
-- Archive fixture metadata, restart without its executable workflow registration, and verify historical topology and definition comparison. Missing metadata must be visible and backend failures must remain errors.
-- Verify removed demo routes/controls are absent and generic management is disabled by default. If enabled, verify expected-status fencing and current error semantics.
-- Run `dotnet build scaling/WorkflowCore.Scaling.slnx -c Release` and PostgreSQL tests with a real `WFC_TEST_PG`; unset-variable skips do not satisfy acceptance.
-- From `scaling/monitor`, run `npm run check-types`, `npm run test:topology`, and `npm run build`. Exercise the workflow list, legacy/native details, definitions, and backend failure states in a real browser.
-- Run `pwsh -NoProfile -File scripts/dev.ps1 help`, validate PowerShell syntax, and resolve Compose configuration. On an existing local database, verify startup, migration mode, and shutdown without deleting data.
-- Run `scripts/test-hub-native.ps1 -ManageHosts` and the retained v1 gateway smoke with their prerequisites. Verify native Provisioner and Hub scheduling remain independent of the monitoring host.
-- Search active source/configuration for deleted project paths, demo endpoint callers, and workflow registration in monitoring. Historical documentation may mention retired paths only when clearly identified as historical.
+## Completion evidence required during implementation
 
-## Risks and limits
+- Release scaling solution build and PostgreSQL tests with `WFC_TEST_PG` pointing
+  at a configured database. Unset-variable early returns do not count as coverage.
+- HTTP contract checks for retained read routes, metadata snapshots/diffs, missing
+  metadata and backend failures. No executable sample assembly in Server/Management.
+- Start Management alone against queued test work; verify no work is claimed and
+  no workflow revision changes. Inspect DI for execution consumer registrations.
+- Start Server with Management enabled/disabled and Scheduler enabled/disabled;
+  verify advertised readiness, route inventory, and retained Gateway behavior.
+- Native workflows and durable timer recovery pass through renamed Server and
+  existing Provisioner using `scripts/test-hub-native.ps1 -ManageHosts`.
+- Capacity update/stale revision/lease preservation tests remain green. Run
+  retained v1 protocol checks with test fixtures where applicable, without
+  pretending the default native Provisioner can execute old pinned versions.
+- Next.js typecheck, topology tests, build, and browser verification of the unified
+  list, native/legacy details, definitions, generic management and failure states.
+- Compose config, PowerShell syntax/help and existing-volume deployment smoke:
+  migrations apply, both data sources remain readable, new native runs complete,
+  restarts recover timers and no data is reset.
+- Reference search finds no active callers of old project paths/DLL names;
+  historical mentions are marked. Review the final dependency graph and diff.
 
-| Risk | Mitigation |
+Windows/Docker clock skew previously affected five separate-runtime immediate-claim
+tests. Use a synchronized runner/database environment and report actual results;
+do not weaken tests to hide this constraint.
+
+## Risks and scope limits
+
+| Risk | Required mitigation |
 | --- | --- |
-| Removing sample code hides old topology | Archive known metadata before removal; explicit unavailable state where metadata was never archived. |
-| Deleting the worker breaks Hub v1 smoke/capabilities | Audit its remote branch and migrate callers before deleting the executable. |
-| Existing performance jobs depend on benchmark business endpoints | Move their workloads to test-owned fixtures or retained native load tools; preserve what the measurements assert. |
-| API moves break Docker and bootstrap migration paths | Change project arguments, migration invocation, readiness checks, and CI together. |
-| Extraction silently starts work consumers | Verify service registration and actual pending-work behavior in an isolated test host. |
+| Folder move preserves business execution accidentally | DI and pending-work behavioral checks; no sample project references |
+| Cohosted routes overlap or expose writes differently | Freeze route/method inventory and compare authorization/default-write behavior |
+| Removing registrations hides historical topology | Archive with old binaries, then verify reads without executable definitions |
+| Server rename breaks smoke or migration process discovery | Update path and DLL resolution together; run real process restart smoke |
+| Combined queries starve scheduler or Gateway | Explicit pool budget and concurrent read/activity/timer verification |
+| Deletion removes a required old worker capability | Audit and replace callers before removal; retain supported reusable runtime code |
 
-This plan does not change execution modes, lease/commit contracts, resource policies, scheduler ownership, authentication design, or durable storage layout. It does not remove historical runs or promise production readiness. No implementation or verification run is claimed by this planning document.
+No new workflow engine, storage redesign, live definition migration, scheduler
+extraction, public API renumbering, or production identity redesign is included.
+No application code, project paths, deployments, or databases are changed by
+writing this plan.

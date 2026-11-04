@@ -117,8 +117,8 @@ services:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.app
       args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj
-    command: ["WorkflowCore.Hub.Host.dll"]
+        PROJECT: scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj
+    command: ["WorkflowCore.Hub.Server.dll"]
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -14,7 +14,8 @@ $runId = 'native-smoke-' + [guid]::NewGuid().ToString('N')
 $managed = [Collections.Generic.List[object]]::new()
 
 function Start-ManagedHost([string]$Project, [switch]$RegisterOnly) {
-    $binary = Join-Path $root "scaling/sample/onboarding/$Project/bin/Release/net10.0/$Project.dll"
+    $projectDir = if ($Project -eq 'WorkflowCore.Hub.Server') { "scaling/src/$Project" } else { "scaling/sample/onboarding/$Project" }
+    $binary = Join-Path $root "$projectDir/bin/Release/net10.0/$Project.dll"
     if (-not (Test-Path -LiteralPath $binary)) { throw "Build the Release scaling solution first: $binary" }
     $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute = $false
@@ -29,7 +30,7 @@ function Start-ManagedHost([string]$Project, [switch]$RegisterOnly) {
     $start.Environment['OTEL_SDK_DISABLED'] = 'true'
     $start.Environment.Remove('WFC_PG') | Out-Null
     $start.Environment.Remove('WFC_TEST_PG') | Out-Null
-    if ($Project -eq 'WorkflowCore.Hub.Host') {
+    if ($Project -eq 'WorkflowCore.Hub.Server') {
         $start.Environment['WFC_PG'] = $ConnectionString
         $start.ArgumentList.Add('--urls')
         $start.ArgumentList.Add($ApiUrl)
@@ -97,7 +98,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($HubToken)) { throw 'Set WFC_HUB_AUTH_TOKEN or pass -HubToken' }
     if ($ManageHosts) {
         if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 013 applied' }
-        $hub = Start-ManagedHost WorkflowCore.Hub.Host
+        $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'Hub readiness'
         $publisher = Start-ManagedHost WorkflowCore.Provisioner.Host -RegisterOnly
         if (-not $publisher.Process.WaitForExit(30000) -or $publisher.Process.ExitCode -ne 0) { throw 'Register-only publication failed' }
@@ -111,7 +112,7 @@ try {
     if ($ManageHosts) {
         Stop-ManagedHost $provisioner
         Stop-ManagedHost $hub
-        $hub = Start-ManagedHost WorkflowCore.Hub.Host
+        $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'restarted Hub readiness'
         $provisioner = Start-ManagedHost WorkflowCore.Provisioner.Host
     }
