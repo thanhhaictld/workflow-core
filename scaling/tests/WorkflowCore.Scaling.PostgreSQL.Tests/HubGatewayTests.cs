@@ -202,8 +202,7 @@ public sealed class HubGatewayTests
         Assert.Equal(revised,current.Revision);
         await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.UpdateActivityCapacityAsync(
             new(hub,"demo-activity",2,before.Revision,3,3,3),CancellationToken.None));
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            definitions.RegisterActivityAsync(registration,CancellationToken.None));
+        Assert.False(await definitions.RegisterActivityAsync(registration,CancellationToken.None));
     }
 
     [Fact]
