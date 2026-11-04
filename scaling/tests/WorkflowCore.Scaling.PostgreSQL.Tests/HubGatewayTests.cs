@@ -229,6 +229,53 @@ public sealed class HubGatewayTests
             hub,"demo-activity",2,CancellationToken.None))!.Revision);
     }
 
+    [Fact]
+    public async Task ActivityCapacityUpdate_NewTaskUsesLatestCapacity_AndRejectsStaleEnqueue()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,4);
+        var definitions=new HubDefinitionStore(tasks);
+        var registration=new HubActivityRegistration(hub,"demo-activity",2,8,4,3,
+            "tenant","resourceId",3,false);
+        await definitions.RegisterActivityAsync(registration,CancellationToken.None);
+        var payload=Payload("same");
+        var stale=await definitions.ResolveAsync(hub,"demo-activity",2,payload,CancellationToken.None);
+        Assert.NotNull(stale);
+        await EnqueuePublished(tasks,definitions,hub,"same");
+        await definitions.UpdateActivityCapacityAsync(new(hub,"demo-activity",2,1,2,2,2),CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>
+            tasks.EnqueueAsync(stale,payload.GetRawText(),null,null,CancellationToken.None));
+        await EnqueuePublished(tasks,definitions,hub,"same");
+        await using var db=new NpgsqlConnection(Database);
+        await db.OpenAsync();
+        await using var command=new NpgsqlCommand("""
+            SELECT capacity FROM wfc_scale.hub_resource
+            WHERE resource_key LIKE @prefix
+            """,db);
+        command.Parameters.AddWithValue("prefix","resource:"+hub+":tenant:%");
+        Assert.Equal(2,Convert.ToInt32(await command.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task ActivityCapacityUpdate_RejectsSharedHubCapacityWithoutCoordinatedOwnership()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,3);
+        var definitions=new HubDefinitionStore(tasks);
+        await definitions.RegisterActivityAsync(
+            new(hub,"activity-a",2,8,8,3),CancellationToken.None);
+        await definitions.RegisterActivityAsync(
+            new(hub,"activity-b",2,8,8,3),CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>
+            definitions.UpdateActivityCapacityAsync(new(hub,"activity-a",2,1,4,3,1),
+                CancellationToken.None));
+        var current=await definitions.GetActivityPolicyAsync(hub,"activity-a",2,CancellationToken.None);
+        Assert.Equal(1,current!.Revision);
+        Assert.Equal(8,current.HubConcurrency);
+    }
+
     private static async Task<Guid> EnqueuePublished(HubTaskStore tasks,HubDefinitionStore definitions,
         string hub,string resource)
     {
