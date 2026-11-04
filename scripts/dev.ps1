@@ -34,9 +34,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$MonitorDir = Join-Path $RepoRoot 'monitor'
+$MonitorDir = Join-Path $RepoRoot 'scaling/monitor'
 $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
-$ApiProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj'
+$ApiProject = Join-Path $RepoRoot 'scaling/monitor/api/WorkflowCore.Scaling.Api.csproj'
 $WorkerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
 $HubProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
 $ProcessorProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj'
@@ -64,7 +64,7 @@ $LocalConnection = "Host=127.0.0.1;Port=$PgPort;Database=$PgDatabase;Username=$P
 
 function Assert-Executable([string] $Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "Missing required tool '$Name'. See monitor/README.md."
+        throw "Missing required tool '$Name'. See scaling/monitor/README.md."
     }
 }
 
@@ -142,7 +142,7 @@ function Install-Monitor {
     $localEnv = Join-Path $MonitorDir '.env.local'
     if (-not (Test-Path $localEnv)) {
         Copy-Item -LiteralPath (Join-Path $MonitorDir '.env.example') -Destination $localEnv
-        Write-Host 'Created monitor/.env.local'
+        Write-Host 'Created scaling/monitor/.env.local'
     }
 }
 

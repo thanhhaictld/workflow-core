@@ -48,7 +48,7 @@ services:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.app
       args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj
+        PROJECT: scaling/monitor/api/WorkflowCore.Scaling.Api.csproj
     command: ["WorkflowCore.Scaling.Api.dll"]
     depends_on:
       migrate:
@@ -63,7 +63,7 @@ services:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.app
       args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj
+        PROJECT: scaling/monitor/api/WorkflowCore.Scaling.Api.csproj
     command: ["WorkflowCore.Scaling.Api.dll"]
     depends_on:
       monitor-api-migrate:

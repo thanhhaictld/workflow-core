@@ -16,7 +16,7 @@ head; inspect the final tree.
 | `DistributedWorkflowServiceCollection.cs` | Registers new runtime and disables legacy background consumers |
 | `DeferredWorkException.cs` | Signal/ownership contention deferral |
 | `WorkQueueAdministration.cs` | Queue statistics and manual dead-letter replay |
-| `scaling/sample/onboarding/WorkflowCore.Scaling.Api/` | Unauthenticated development HTTP benchmark |
+| `scaling/monitor/api/` | Unauthenticated development HTTP benchmark |
 | `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/` | PostgreSQL integration suite |
 | `.github/workflows/distributed-runtime.yml` | PostgreSQL 17 + .NET 10 CI |
 

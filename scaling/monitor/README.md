@@ -2,6 +2,10 @@
 
 Read-only monitoring UI for the distributed PostgreSQL Workflow Core runtime.
 
+The monitor and its .NET API host live under `scaling/monitor/`. The API host
+also registers the onboarding and benchmark sample workflows and exposes demo
+endpoints. It remains a development host and is not a production-ready API.
+
 - **Admin shell:** Next.js 16, React 19, Tailwind CSS v4, Lucide, and
   a focused adaptation of the MIT-licensed [Shadcn Studio AdminCN Free](
   https://github.com/shadcnstudio/shadcn-nextjs-admincn-admin-template-free)
@@ -27,7 +31,7 @@ project does not include its paid source code.
 - PostgreSQL with the upstream Workflow Core EF schema and
   `scaling/sql/002_distributed_runtime.sql` through
   `scaling/sql/005_execution_history.sql` applied in order
-- .NET SDK 10 for `scaling/sample/onboarding/WorkflowCore.Scaling.Api`
+- .NET SDK 10 for `scaling/monitor/api`
 - Node.js 22+ with npm
 - PowerShell 7+ (`pwsh`) on Windows, macOS or Linux
 - Docker Compose v2 (Docker Desktop on Windows/macOS) for local PostgreSQL
@@ -54,8 +58,8 @@ make dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
 make seed
 ```
 
-The root [Makefile](../Makefile) only delegates to
-[the PowerShell script](../scripts/dev.ps1); there are no Unix-only shell
+The root [Makefile](../../Makefile) only delegates to
+[the PowerShell script](../../scripts/dev.ps1); there are no Unix-only shell
 recipes. Commands include `make help`, `make up`, `make test`, `make build`,
 `make api`, `make ui`,
 `make db-down`, and `make db-reset CONFIRM=reset` (deletes local data).
@@ -75,13 +79,13 @@ From the repository root, first run the sample .NET API:
 
 ```bash
 export WFC_PG='Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=...'
-dotnet run --project scaling/sample/onboarding/WorkflowCore.Scaling.Api --urls http://localhost:5000
+dotnet run --project scaling/monitor/api --urls http://localhost:5000
 ```
 
 In a separate shell:
 
 ```bash
-cd monitor
+cd scaling/monitor
 cp .env.example .env.local
 npm install
 npm run dev
@@ -113,7 +117,7 @@ gated by `WFC_ENABLE_MANAGEMENT_WRITES=true` in the private lab. This
 environment flag is not production authentication or authorization.
 
 See [code-first metadata review design](
-../scaling/docs/definition-version-management.md).
+../docs/definition-version-management.md).
 
 ## Onboarding sample lab (real workflow history)
 
@@ -128,7 +132,7 @@ The launcher starts **three distinct processes**: the .NET API
 Next.js monitor. The API is responsible for workflow starts and approval events;
 the worker claims fenced PostgreSQL work and executes the steps. Both register
 the same workflow definitions from
-[`WorkflowCore.Scaling.Samples`](../scaling/sample/onboarding/WorkflowCore.Scaling.Samples/TenantOnboarding.cs).
+[`WorkflowCore.Scaling.Samples`](../sample/onboarding/WorkflowCore.Scaling.Samples/TenantOnboarding.cs).
 
 Open [the monitoring dashboard](http://127.0.0.1:3000/workflows)
 and use **Onboarding workflow playground** to create three types of instances:
@@ -269,7 +273,7 @@ mutate workflow execution from this dashboard.
 ## Build
 
 ```bash
-cd monitor
+cd scaling/monitor
 npm run check-types
 npm run build
 ```
@@ -313,7 +317,7 @@ this is intended for the local lab, not unbounded production history.
 Enable authentication, per-tenant authorization and keyset pagination
 before exposing the monitor to external users.
 
-See ../scaling/observability/README.md for Docker Compose and k6 usage.
+See ../observability/README.md for Docker Compose and k6 usage.
 
 
 ## Hub Operations Dashboard
@@ -340,7 +344,7 @@ or actual partition ownership. For SSE, HTTP and process metrics, use the
 existing OpenTelemetry/Grafana dashboards.
 
 Full metric catalog, caveats and deployment:
-[Operations dashboard design](../scaling/docs/operations-dashboard.md).
+[Operations dashboard design](../docs/operations-dashboard.md).
 
 
 For process-local telemetry, optionally set \`WORKFLOW_PROMETHEUS_URL\`

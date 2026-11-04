@@ -11,11 +11,13 @@
   <Folder Name="/sample/onboarding/">
     <Project Path="sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj" />
-    <Project Path="sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Samples/WorkflowCore.Scaling.Samples.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj" />
+  </Folder>
+  <Folder Name="/monitor/">
+    <Project Path="monitor/api/WorkflowCore.Scaling.Api.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj" />

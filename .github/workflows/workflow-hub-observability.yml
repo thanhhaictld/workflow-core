@@ -8,8 +8,8 @@ on:
       - feat/hub-remote-processor-scheduler
     paths:
       - 'scaling/**'
-      - 'monitor/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/**'
+      - 'scaling/monitor/**'
+      - 'scaling/monitor/api/**'
       - 'scaling/src/WorkflowCore.Hub/**'
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'

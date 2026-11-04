@@ -252,7 +252,7 @@ riderModule.iml
 test-results/
 
 # Local Next.js monitor secrets and generated artifacts
-monitor/.env.local
-monitor/.env.*.local
-monitor/.next/
-monitor/*.tsbuildinfo
+scaling/monitor/.env.local
+scaling/monitor/.env.*.local
+scaling/monitor/.next/
+scaling/monitor/*.tsbuildinfo

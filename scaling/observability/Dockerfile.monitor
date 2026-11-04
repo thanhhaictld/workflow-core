@@ -1,9 +1,9 @@
 # Next.js workflow monitor, with its existing .NET monitor API reverse proxy.
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY monitor/package*.json ./
+COPY scaling/monitor/package*.json ./
 RUN npm install --no-audit --no-fund
-COPY monitor/ ./
+COPY scaling/monitor/ ./
 # Next.js rewrites are resolved at build time: use Compose-internal DNS.
 ENV WORKFLOW_API_URL=http://monitor-api:5000
 ENV NEXT_TELEMETRY_DISABLED=1

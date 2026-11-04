@@ -16,7 +16,7 @@
 | [1,000-workflow Hub performance](workflow-hub-1000-performance.md) | Performance engineers / SREs | Two measured passing CI simulations, throughput, p95, DB sessions, reproduction |
 | [Execution and event semantics](execution-semantics.md) | Runtime developers | Sequence diagrams, transaction boundaries, retries, `WaitFor` |
 | [Execution history](execution-history.md) | Runtime developers and SREs | Durable step attempts, append-only events, audit guarantees, query API |
-| [Workflow monitoring UI](../../monitor/README.md) | Operators / UI developers | Free AdminCN-inspired monitoring dashboard and Temporal-style step trace |
+| [Workflow monitoring UI](../monitor/README.md) | Operators / UI developers | Free AdminCN-inspired monitoring dashboard and Temporal-style step trace |
 | [Onboarding demo](onboarding-sample.md) | Testers and developers | Independent worker, synthetic tenant onboarding, retries, approval signals and trace review |
 | [PostgreSQL data model](persistence.md) | Database engineers | Schema, indexes, queries, retention, reconciliation |
 | [Public API and configuration](api-and-configuration.md) | Application developers | DI setup, APIs, runtime knobs, endpoint contract |
@@ -49,7 +49,7 @@ crash consistency under all failure points.
 - [Database migrations](../sql/)
 - [Runtime integration tests](../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
 - [CI job](../../.github/workflows/distributed-runtime.yml)
-- [Control-plane sample](../sample/onboarding/WorkflowCore.Scaling.Api/)
+- [Control-plane sample](../monitor/api/)
 - [Standalone worker](../sample/onboarding/WorkflowCore.Scaling.Worker/)
 - [Sample workflows](../sample/onboarding/WorkflowCore.Scaling.Samples/)
 - [k6 script](../benchmarks/k6-start-workflows.js)

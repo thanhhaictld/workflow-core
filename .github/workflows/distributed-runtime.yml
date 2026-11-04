@@ -10,11 +10,11 @@ on:
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
       - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
       - 'src/WorkflowCore/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Api/**'
+      - 'scaling/monitor/api/**'
       - 'scaling/sample/onboarding/WorkflowCore.Scaling.Samples/**'
       - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
       - 'scaling/**'
-      - 'monitor/**'
+      - 'scaling/monitor/**'
       - 'Makefile'
       - 'scripts/**'
       - 'scaling/compose.monitor.yaml'
@@ -65,7 +65,7 @@ jobs:
       - name: Build standalone Hub gateway
         run: dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
       - name: Build benchmark API
-        run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
+        run: dotnet build scaling/monitor/api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Build standalone sample worker
         run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
       - name: Restore and test
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: monitor
+        working-directory: scaling/monitor
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

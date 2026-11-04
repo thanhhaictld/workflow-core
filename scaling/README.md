@@ -10,6 +10,7 @@ scaling/
 ├── WorkflowCore.Scaling.slnx       # scaling projects
 ├── src/                            # Hub, Gateway, Telemetry, PostgreSQL runtime
 ├── tests/                          # PostgreSQL integration tests
+├── monitor/                        # Monitoring UI and development API host
 └── sample/
     └── onboarding/                 # Gateway host, Processor and Provisioner, API, samples, load test
 ```
@@ -53,7 +54,7 @@ flowchart TD
 For a complete cross-platform local database + API + monitoring UI bootstrap,
 run `pwsh -NoProfile -File ./scripts/dev.ps1 up` from the repository root.
 GNU Make remains an optional shortcut (`make up`). See the
-[monitor setup guide](../monitor/README.md) and `pwsh ./scripts/dev.ps1 help`.
+[monitor setup guide](monitor/README.md) and `pwsh ./scripts/dev.ps1 help`.
 
 1. Provide PostgreSQL 17 or newer. Apply EF migrations from the original
    `WorkflowCore.Persistence.PostgreSQL` provider and the new SQL files in order:
@@ -124,7 +125,7 @@ A dedicated PostgreSQL schema is recommended for each performance benchmark.
 [Operations dashboard architecture and metric definitions](docs/operations-dashboard.md).
 
 
-A new read-only [Next.js workflow monitor](../monitor/README.md) adapts the
+A new read-only [Next.js workflow monitor](monitor/README.md) adapts the
 MIT-licensed Shadcn Studio AdminCN Free theme and provides filtered workflow
 runs, KPI summaries, a Temporal-style step-attempt waterfall, append-only event
 history, current pointer state, persisted errors and work-queue diagnostics.

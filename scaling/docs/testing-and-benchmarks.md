@@ -34,7 +34,7 @@ long-running stress test, DR validation or proof of remote activity exactly-once
 5. Run:
 
 ```bash
-dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Api/WorkflowCore.Scaling.Api.csproj -c Release
+dotnet build scaling/monitor/api/WorkflowCore.Scaling.Api.csproj -c Release
 dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release
 ```
 

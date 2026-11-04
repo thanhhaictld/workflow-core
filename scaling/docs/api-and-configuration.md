@@ -74,7 +74,7 @@ implemented.
 
 ## Sample HTTP API (development only)
 
-File: `scaling/sample/onboarding/WorkflowCore.Scaling.Api/Program.cs`.
+File: `scaling/monitor/api/Program.cs`.
 
 | Route | Behavior |
 |---|---|
