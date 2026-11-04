@@ -72,7 +72,7 @@ jobs:
         run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
       - name: Restore and test
         run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
-      - name: Native combined-host crash recovery and sequential coexistence
+      - name: Native combined-host crash recovery
         env:
           WFC_HUB_AUTH_TOKEN: ci-native-hub-secret-please-change-2026
         run: pwsh -NoProfile -File scripts/test-hub-native.ps1 -ManageHosts -ApiUrl http://127.0.0.1:5102

@@ -60,6 +60,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         if (route.Resources.Any(r => r.Key.StartsWith("hub:" + route.HubId + ":", StringComparison.Ordinal) &&
                                      r.Key.EndsWith(":" + HubPolicyDigest(route.HubId), StringComparison.Ordinal)))
         {
+            await HubDefinitionStore.LockPolicyHub(db,tx,route.HubId,ct,shared:true);
             await using var lockRegistration=new NpgsqlCommand("""
                 SELECT 1 FROM wfc_scale.hub_activity_registration
                 WHERE hub_id=@hub AND activity_type=@type AND version=@version

@@ -117,18 +117,30 @@ Cancellation cannot undo an external effect that already happened.
 
 ## Deploy without changing existing runs
 
-Apply migrations in order through `012_hub_native_runtime.sql`. Migration 012 adds
+Apply migrations in order through `013_activity_policy_revision.sql`. Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.
 Deploy the updated Hub code before starting native hosts or submitting native runs.
 Older Gateway binaries do not understand native task completion and inbox delivery.
 
-The sample publishes native workflows and typed activities as **v2**. It retains
-immutable v1 definitions and derives v1 activity aliases from the same registrations.
-The combined workflow lane handles both versions. V1 aliases require one target
-implementation per activity name. The optional standalone processor runs v1 only.
-The sample declares `SequentialOutput` projections to retain the exact v1 result
-fields, including tenant identifiers, while v2 exposes the new typed outputs.
+The sample now publishes native workflows and typed activities as **v3** and
+runs both lanes in `WorkflowCore.Provisioner.Host`. Compose no longer deploys the
+standalone sequential Processor. Sequential adapters remain in the library for
+explicit compatibility deployments, but the sample does not publish or claim v1.
+
+Workflow definitions and step bodies live in the separate
+`WorkflowCore.Provisioner.Workflows` assembly. Keep operational policy and worker
+configuration in the Host: editing those settings no longer changes the assembly
+fingerprint of executable workflow code. Workflow/step implementation changes
+still require a new version. Capacity declarations are initial defaults; use the
+[revision-checked operator API](activity-policy-update.md) for live limits.
+
+V3 is necessary because the previously published v2 implementation fingerprint
+already differs from the current binary. Existing v1/v2 registrations, snapshots,
+and history are preserved, not overwritten or migrated. Unfinished old runs need
+the exact matching old binary in a separate compatibility deployment; the v3
+sample does not advertise those capabilities. Drain those runs before retiring
+that binary. Do not reset the PostgreSQL volume to resolve registration conflicts.
 
 Registrations contain application assembly fingerprints and property contracts.
 Workflow claims advertise definition/version capabilities, so a host cannot claim
@@ -138,7 +150,7 @@ workflow code or activity contract changes. Publishing a different registration
 under an existing version fails. Live definition migration is not implemented.
 
 Compose starts `provisioner` with `WORKFLOW_WORKERS` and `ACTIVITY_WORKERS`.
-`processor` belongs to the optional `sequential-processor` profile.
+The Provisioner is the workflow processor and the activity worker.
 `--register-only` publishes metadata and exits before claiming work.
 `WFC_HUB_URL`, `WFC_HUB_AUTH_TOKEN`, and the local-development
 `WFC_HUB_ALLOW_INSECURE_HTTP` configure transport. Only Hub receives `WFC_PG`.
@@ -151,7 +163,7 @@ and status and pairs timer windows by timer identity.
 ## Verify behavior
 
 Build the scaling solution and run the PostgreSQL tests with `WFC_TEST_PG` and
-migrations through 012. Tests compare identical definitions under the adapter and
+migrations through 013. Tests compare identical definitions under the adapter and
 upstream executor: mappings, inline steps, branches, loops, `ForEach`, parallel
 joins, delays, schedules, recurrence, events, retries, cancellation, and saga
 compensation. Routed tests cover typed and scalar inputs/results, boxed values,
@@ -175,7 +187,7 @@ $env:WFC_HUB_AUTH_TOKEN = 'a-development-token-with-at-least-24-characters'
 pwsh -NoProfile -File scripts/test-hub-native.ps1 -ManageHosts -ApiUrl http://127.0.0.1:5102
 ```
 
-The script publishes metadata, verifies v1/v2 coexistence and mapped data,
+The script publishes metadata, verifies native v3 mapped data,
 force-kills both processes during a durable wait, restarts them, and checks step
 and attempt history. It never resets the database. Omit `-ManageHosts` to check
 an existing combined deployment without restarting it.

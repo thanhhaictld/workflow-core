@@ -11,7 +11,7 @@ The operator owns subsequent capacity updates through `PUT /api/hub/activity-reg
 Example (use your existing bearer token; never put it in committed scripts):
 
 ```http
-GET /api/hub/activity-registrations/onboarding/provision-tenant/2
+GET /api/hub/activity-registrations/onboarding/provision-tenant/3
 
 PUT /api/hub/activity-registrations/capacity
 Content-Type: application/json
@@ -19,17 +19,28 @@ Content-Type: application/json
 {
   "hubId": "onboarding",
   "activityType": "provision-tenant",
-  "version": 2,
+  "version": 3,
   "expectedRevision": 1,
   "hubConcurrency": 8,
   "activityConcurrency": 3,
-  "resourceCapacity": 1
+  "resourceCapacity": 1,
+  "coordinateSharedResources": true
 }
 ```
 
 The update transaction writes the registration and already-materialized `hub_resource` capacities together. Newly enqueued tasks use the current values. Claims consult current `hub_resource` rows. When reducing capacity below the current active lease count, outstanding leases continue until completion or expiry; further claims wait. Enqueue transactions that resolved stale policy before an update fail with a retryable 409 rather than reintroducing old capacities.
 
-**Shared keys:** the Hub capacity key is common to all activities in the hub, activity capacity is common across versions of a type, and resource capacity may be common across activities by resource name. Uncoordinated changes to a shared key are rejected. Use a coordinated policy update/migration when multiple registrations own the same key. This interface changes capacity only and intentionally does not retrofit queued tasks for changed partition counts, resource keys, or FIFO semantics.
+**Shared keys:** the Hub capacity key is common to all activities in the hub, activity capacity is common across versions of a type, and resource capacity may be common across activities by resource name. Uncoordinated changes to a shared key are rejected. Set
+`coordinateSharedResources: true` on the same PUT request to explicitly update
+all registrations owning each changed key: hub capacity across the hub, activity
+capacity across versions of that activity, and resource capacity across activities
+and versions with that resource name. This also updates their revisions, fencing
+stale operators on every affected owner. Unchanged keys retain their limits.
+Registration, coordinated updates, and transactional route resolution share a
+Hub-scoped database lock; new versions inherit existing shared capacities rather
+than restoring stale startup defaults. Existing leases keep their epochs and
+queued tasks keep their keys. The request's expected revision refers to the target
+registration; the coordinated flag authorizes the documented shared impact. This interface changes capacity only and intentionally does not retrofit queued tasks for changed partition counts, resource keys, or FIFO semantics.
 
 ## Deployment
 
@@ -43,4 +54,4 @@ The update endpoint currently uses the existing Hub bearer-token scope. Restrict
 
 ## Limitations
 
-This fix does **not** support live FIFO changes, resource selector changes, partition rehashing or shared resource policy rewrites. Those require a separate, transactional migration and explicit queue semantics. It does not change workflow definitions, retry accounting or durable execution history.
+This fix does **not** support live FIFO changes, resource selector changes, partition rehashing or shared resource identity/FIFO rewrites. Those require a separate, transactional migration and explicit queue semantics. It does not change workflow definitions, retry accounting or durable execution history.

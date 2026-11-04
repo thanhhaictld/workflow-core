@@ -100,33 +100,27 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             policy.Contract?.GetRawText().Length > 65536)
             throw new ArgumentException("Invalid activity registration");
 
-        await using var cmd = Source.CreateCommand("""
+        await using var db = await Source.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        await LockPolicyHub(db,tx,policy.HubId,ct);
+        // Existing shared keys are authoritative even for a newly deployed version.
+        await using var cmd = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
             (hub_id,activity_type,version,partitions,hub_concurrency,
              activity_concurrency,resource_name,resource_field,resource_capacity,resource_fifo,contract)
-            VALUES (@hub,@type,@version,@partitions,@hubcap,@cap,@resource,@field,@resourcecap,@fifo,@contract)
+            VALUES (@hub,@type,@version,@partitions,
+              COALESCE((SELECT hub_concurrency FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub LIMIT 1),@hubcap),
+              COALESCE((SELECT activity_concurrency FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub AND activity_type=@type LIMIT 1),@cap),
+              @resource,@field,
+              COALESCE((SELECT resource_capacity FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub AND resource_name=@resource LIMIT 1),@resourcecap),
+              @fifo,@contract)
             ON CONFLICT DO NOTHING
-            """);
+            """,db,tx);
         BindActivity(cmd, policy);
         var inserted = await cmd.ExecuteNonQueryAsync(ct);
-        if (inserted == 1) return true;
-        await using var check = Source.CreateCommand("""
-            SELECT 1 FROM wfc_scale.hub_activity_registration
-            WHERE hub_id=@hub AND activity_type=@type AND version=@version
-              AND partitions=@partitions AND hub_concurrency=@hubcap
-              AND activity_concurrency=@cap
-              AND resource_name IS NOT DISTINCT FROM @resource
-              AND resource_field IS NOT DISTINCT FROM @field
-              AND resource_capacity=@resourcecap AND resource_fifo=@fifo
-              AND contract IS NOT DISTINCT FROM @contract
-            """);
-        BindActivity(check, policy);
-        if (await check.ExecuteScalarAsync(ct) is null)
+        if (inserted == 0)
         {
-            // Startup declaration may contain stale operational limits, but it must
-            // still match immutable routing/contract metadata. The operator is
-            // responsible for applying capacity changes through the CAS endpoint.
-            await using var immutable = Source.CreateCommand("""
+            await using var immutable = new NpgsqlCommand("""
                 SELECT 1 FROM wfc_scale.hub_activity_registration
                 WHERE hub_id=@hub AND activity_type=@type AND version=@version
                   AND partitions=@partitions
@@ -134,13 +128,23 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
                   AND resource_field IS NOT DISTINCT FROM @field
                   AND resource_fifo=@fifo
                   AND contract IS NOT DISTINCT FROM @contract
-                """);
+                """,db,tx);
             BindActivity(immutable, policy);
             if (await immutable.ExecuteScalarAsync(ct) is null)
                 throw new InvalidOperationException(
                     $"Immutable activity routing/contract mismatch for {policy.HubId}/{policy.ActivityType}/v{policy.Version}");
         }
-        return false;
+        await tx.CommitAsync(ct);
+        return inserted == 1;
+    }
+
+    internal static async Task LockPolicyHub(NpgsqlConnection db,NpgsqlTransaction tx,string hub,CancellationToken ct,bool shared=false)
+    {
+        await using var gate=new NpgsqlCommand(
+            shared ? "SELECT pg_advisory_xact_lock_shared(hashtextextended('hub-policy:' || @hub,0))" :
+                "SELECT pg_advisory_xact_lock(hashtextextended('hub-policy:' || @hub,0))",db,tx);
+        gate.Parameters.AddWithValue("hub",hub);
+        await gate.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>CAS update for operational capacities. Activity contract, key selection,
@@ -157,6 +161,17 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
 
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
+
+        await LockPolicyHub(db,tx,request.HubId,ct);
+        // Lock all shared owners before resources, matching enqueue lock order.
+        await using(var owners=new NpgsqlCommand("""
+            SELECT 1 FROM wfc_scale.hub_activity_registration
+            WHERE hub_id=@hub ORDER BY activity_type,version FOR UPDATE
+            """,db,tx))
+        {
+            owners.Parameters.AddWithValue("hub",request.HubId);
+            await owners.ExecuteNonQueryAsync(ct);
+        }
 
         // Enqueues take a shared registration lock; updates take an exclusive lock.
         // All resource upserts and updates therefore observe one consistent policy.
@@ -206,7 +221,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             conflict.Parameters.AddWithValue("type",request.ActivityType);
             conflict.Parameters.AddWithValue("version",request.Version);
             conflict.Parameters.AddWithValue("hubcap",request.HubConcurrency);
-            if(await conflict.ExecuteScalarAsync(ct) is not null)
+            if(await conflict.ExecuteScalarAsync(ct) is not null && !request.CoordinateSharedResources)
                 throw new InvalidOperationException("Shared hub capacity belongs to multiple activity registrations; update requires coordinated hub policy ownership");
         }
         if(resourceName is not null && oldResource!=request.ResourceCapacity)
@@ -221,7 +236,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             shared.Parameters.AddWithValue("resource",resourceName);
             shared.Parameters.AddWithValue("type",request.ActivityType);
             shared.Parameters.AddWithValue("version",request.Version);
-            if(await shared.ExecuteScalarAsync(ct) is not null)
+            if(await shared.ExecuteScalarAsync(ct) is not null && !request.CoordinateSharedResources)
                 throw new InvalidOperationException("Resource capacity is shared by multiple activities; coordinate the update");
         }
         if(oldActivity!=request.ActivityConcurrency)
@@ -234,7 +249,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             shared.Parameters.AddWithValue("hub",request.HubId);
             shared.Parameters.AddWithValue("type",request.ActivityType);
             shared.Parameters.AddWithValue("version",request.Version);
-            if(await shared.ExecuteScalarAsync(ct) is not null)
+            if(await shared.ExecuteScalarAsync(ct) is not null && !request.CoordinateSharedResources)
                 throw new InvalidOperationException("Activity capacity is shared across versions; coordinate the update");
         }
         var hubKey="hub:"+request.HubId+":"+Digest(request.HubId);
@@ -268,14 +283,24 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         }
         await using(var update=new NpgsqlCommand("""
             UPDATE wfc_scale.hub_activity_registration
-            SET hub_concurrency=@hubcap,activity_concurrency=@activitycap,
-                resource_capacity=@resourcecap,revision=revision+1
-            WHERE hub_id=@hub AND activity_type=@type AND version=@version
+            SET hub_concurrency=CASE WHEN @hubchanged THEN @hubcap ELSE hub_concurrency END,
+                activity_concurrency=CASE WHEN activity_type=@type AND @activitychanged THEN @activitycap ELSE activity_concurrency END,
+                resource_capacity=CASE WHEN (resource_name=@resource OR (activity_type=@type AND version=@version))
+                    AND @resourcechanged THEN @resourcecap ELSE resource_capacity END,
+                revision=revision+1
+            WHERE hub_id=@hub AND (
+                (activity_type=@type AND version=@version) OR @hubchanged
+                OR (activity_type=@type AND @activitychanged)
+                OR (resource_name=@resource AND @resourcechanged))
             """,db,tx))
         {
             update.Parameters.AddWithValue("hub",request.HubId);
             update.Parameters.AddWithValue("type",request.ActivityType);
             update.Parameters.AddWithValue("version",request.Version);
+            update.Parameters.AddWithValue("hubchanged",oldHub!=request.HubConcurrency);
+            update.Parameters.AddWithValue("activitychanged",oldActivity!=request.ActivityConcurrency);
+            update.Parameters.AddWithValue("resourcechanged",oldResource!=request.ResourceCapacity);
+            update.Parameters.Add("resource",NpgsqlDbType.Text).Value=(object?)resourceName??DBNull.Value;
             update.Parameters.AddWithValue("hubcap",request.HubConcurrency);
             update.Parameters.AddWithValue("activitycap",request.ActivityConcurrency);
             update.Parameters.AddWithValue("resourcecap",request.ResourceCapacity);
@@ -342,6 +367,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         string hub, string activity, int version, JsonElement input, CancellationToken ct,
         NpgsqlConnection? connection = null, NpgsqlTransaction? transaction = null)
     {
+        if(connection is not null && transaction is not null)
+            await LockPolicyHub(connection,transaction,hub,ct,shared:true);
         const string sql = """
             SELECT partitions,hub_concurrency,activity_concurrency,resource_name,
                    resource_field,resource_capacity,resource_fifo

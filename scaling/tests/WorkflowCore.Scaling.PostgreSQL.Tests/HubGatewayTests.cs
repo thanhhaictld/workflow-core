@@ -285,4 +285,81 @@ public sealed class HubGatewayTests
         return await tasks.EnqueueAsync(route,payload.GetRawText(),null,null,CancellationToken.None);
     }
 
+    [Fact]
+    public async Task CoordinatedCapacityUpdate_UpdatesSharedVersions_AndFencesStaleOwners()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,4);
+        var definitions=new HubDefinitionStore(tasks);
+        var registration=new HubActivityRegistration(hub,"demo-activity",2,8,4,3,
+            "tenant","resourceId",3,false);
+        await definitions.RegisterActivityAsync(registration,CancellationToken.None);
+        await definitions.RegisterActivityAsync(registration with {Version=3},CancellationToken.None);
+        await definitions.RegisterActivityAsync(registration with {ActivityType="other"},CancellationToken.None);
+        await EnqueuePublished(tasks,definitions,hub,"same");
+        var active=Assert.Single(await tasks.ClaimAsync("worker-A",[hub],
+            [new(hub,"demo-activity",2)],1,Lease,CancellationToken.None));
+        Assert.Equal(2,await definitions.UpdateActivityCapacityAsync(
+            new(hub,"demo-activity",3,1,1,1,1,CoordinateSharedResources:true),CancellationToken.None));
+        foreach(var identity in new[]{("demo-activity",2),("demo-activity",3),("other",2)})
+        {
+            var current=await definitions.GetActivityPolicyAsync(hub,identity.Item1,identity.Item2,CancellationToken.None);
+            Assert.Equal(2,current!.Revision);
+            Assert.Equal(1,current.HubConcurrency);
+            Assert.Equal(identity.Item1=="other"?3:1,current.ActivityConcurrency);
+            Assert.Equal(1,current.ResourceCapacity);
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.UpdateActivityCapacityAsync(
+            new(hub,"demo-activity",2,1,4,3,3,true),CancellationToken.None));
+        Assert.False(await definitions.RegisterActivityAsync(registration,CancellationToken.None));
+        await definitions.RegisterActivityAsync(registration with {Version=4},CancellationToken.None);
+        var added=await definitions.GetActivityPolicyAsync(hub,"demo-activity",4,CancellationToken.None);
+        Assert.Equal(1,added!.HubConcurrency);
+        Assert.Equal(1,added.ActivityConcurrency);
+        Assert.Equal(1,added.ResourceCapacity);
+        await EnqueuePublished(tasks,definitions,hub,"same");
+        Assert.Empty(await tasks.ClaimAsync("worker-B",[hub],[new(hub,"demo-activity",2)],1,Lease,CancellationToken.None));
+        Assert.True(await tasks.CompleteAsync(active.Id,"worker-A",active.Epoch,"{}",CancellationToken.None));
+        Assert.Single(await tasks.ClaimAsync("worker-B",[hub],[new(hub,"demo-activity",2)],1,Lease,CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CoordinatedCapacityUpdate_RacesOtherOwnerAndNewVersion_WithoutRestoringDefaults()
+    {
+        if(Database is null)return;
+        var hub=Key();
+        await using var tasks=new HubTaskStore(Database,6);
+        var definitions=new HubDefinitionStore(tasks);
+        var registration=new HubActivityRegistration(hub,"demo-activity",2,8,4,3);
+        await definitions.RegisterActivityAsync(registration,CancellationToken.None);
+        await definitions.RegisterActivityAsync(registration with {Version=3},CancellationToken.None);
+        async Task<bool> Update(int version,int capacity)
+        {
+            try
+            {
+                await definitions.UpdateActivityCapacityAsync(new(hub,"demo-activity",version,1,
+                    capacity,capacity,1,true),CancellationToken.None);
+                return true;
+            }
+            catch(InvalidOperationException){return false;}
+        }
+        var first=Update(2,1);
+        var second=Update(3,2);
+        await Task.WhenAll(first,second,
+            definitions.RegisterActivityAsync(registration with {Version=4},CancellationToken.None));
+        Assert.NotEqual(await first,await second);
+        var winner=await first?1:2;
+        foreach(var version in new[]{2,3,4})
+        {
+            var current=await definitions.GetActivityPolicyAsync(hub,"demo-activity",version,CancellationToken.None);
+            Assert.Equal(winner,current!.HubConcurrency);
+            Assert.Equal(winner,current.ActivityConcurrency);
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.RegisterActivityAsync(
+            registration with {StrictFifo=true},CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.RegisterActivityAsync(
+            registration with {Contract=JsonSerializer.SerializeToElement(new {changed=true})},CancellationToken.None));
+    }
+
 }

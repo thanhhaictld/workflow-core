@@ -37,10 +37,10 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/007_hub_gateway.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/008_hub_workflows.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/009_hub_task_attempts.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/011_hub_monitor_sample.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/012_hub_native_runtime.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/013_activity_policy_revision.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/010_hub_remote_scheduler.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/011_hub_monitor_sample.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/012_hub_native_runtime.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/013_activity_policy_revision.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.
@@ -168,28 +168,6 @@ services:
       WFC_OTEL_LOGS_ENABLED: "true"
     restart: unless-stopped
 
-  processor:
-    profiles: ["sequential-processor"]
-    build:
-      context: ../..
-      dockerfile: scaling/observability/Dockerfile.app
-      args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj
-    command: ["WorkflowCore.Processor.Host.dll"]
-    depends_on:
-      hub:
-        condition: service_healthy
-      provisioner:
-        condition: service_started
-    environment:
-      WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
-      WORKERS: "${PROCESSOR_WORKERS:-16}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      WFC_OTEL_LOGS_ENABLED: "true"
-    restart: unless-stopped
-
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
@@ -260,7 +238,7 @@ services:
       HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
       K6_WORKFLOWS: ${K6_WORKFLOWS:-1000}
       K6_DEFINITION: ${K6_DEFINITION:-tenant-onboarding}
-      K6_VERSION: ${K6_VERSION:-2}
+      K6_VERSION: ${K6_VERSION:-3}
       K6_VUS: ${K6_VUS:-100}
       K6_MAX_WAIT_SECONDS: ${K6_MAX_WAIT_SECONDS:-180}
       K6_RUN_ID: ${K6_RUN_ID:-}
