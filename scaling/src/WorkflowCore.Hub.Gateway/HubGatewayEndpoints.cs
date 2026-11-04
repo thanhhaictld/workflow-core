@@ -102,6 +102,20 @@ public static class HubGatewayEndpoints
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
+        routes.MapGet("/activity-registrations/{hub}/{activity}/{version:int}",async (
+            string hub,string activity,int version,HubDefinitionStore store,CancellationToken ct) =>
+        {
+            var current=await store.GetActivityPolicyAsync(hub,activity,version,ct);
+            return current is null?Results.NotFound():Results.Ok(current);
+        });
+        routes.MapPut("/activity-registrations/capacity",async (
+            HubActivityCapacityUpdate request,HubDefinitionStore store,CancellationToken ct) =>
+        {
+            try{return Results.Ok(new {revision=await store.UpdateActivityCapacityAsync(request,ct)});}
+            catch(ArgumentException ex){return Results.BadRequest(new {error=ex.Message});}
+            catch(KeyNotFoundException ex){return Results.NotFound(new {error=ex.Message});}
+            catch(InvalidOperationException ex){return Results.Conflict(new {error=ex.Message});}
+        });
         routes.MapGet("/operations", async (string? hub, int? windowMinutes,
             HubOperationsStore operations, CancellationToken ct) =>
         {

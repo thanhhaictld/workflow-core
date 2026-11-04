@@ -126,6 +126,139 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         return false;
     }
 
+    /// <summary>CAS update for operational capacities. Activity contract, key selection,
+    /// partition count, and FIFO semantics remain immutable within an activity version.</summary>
+    public async Task<long> UpdateActivityCapacityAsync(HubActivityCapacityUpdate request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.HubId) || request.HubId.Length > 80 ||
+            string.IsNullOrWhiteSpace(request.ActivityType) || request.ActivityType.Length > 80 ||
+            request.Version < 1 || request.ExpectedRevision < 1 ||
+            request.HubConcurrency is < 1 or > 100000 ||
+            request.ActivityConcurrency is < 1 or > 100000 ||
+            request.ResourceCapacity is < 1 or > 100000)
+            throw new ArgumentException("Invalid activity capacity update");
+
+        await using var db = await Source.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+
+        // Enqueues take a shared registration lock; updates take an exclusive lock.
+        // All resource upserts and updates therefore observe one consistent policy.
+        await using var query = new NpgsqlCommand("""
+            SELECT hub_concurrency,activity_concurrency,resource_capacity,resource_name,revision
+            FROM wfc_scale.hub_activity_registration
+            WHERE hub_id=@hub AND activity_type=@type AND version=@version
+            FOR UPDATE
+            """, db, tx);
+        query.Parameters.AddWithValue("hub",request.HubId);
+        query.Parameters.AddWithValue("type",request.ActivityType);
+        query.Parameters.AddWithValue("version",request.Version);
+        int oldHub,oldActivity,oldResource;
+        string? resourceName;
+        long revision;
+        await using (var reader=await query.ExecuteReaderAsync(ct))
+        {
+            if(!await reader.ReadAsync(ct))
+                throw new KeyNotFoundException("Activity registration not found");
+            oldHub=reader.GetInt32(0);
+            oldActivity=reader.GetInt32(1);
+            oldResource=reader.GetInt32(2);
+            resourceName=reader.IsDBNull(3)?null:reader.GetString(3);
+            revision=reader.GetInt64(4);
+        }
+        if(revision!=request.ExpectedRevision)
+            throw new InvalidOperationException(
+                $"Stale activity policy revision for {request.HubId}/{request.ActivityType}/v{request.Version}: expected {request.ExpectedRevision}, current {revision}");
+        if(oldHub==request.HubConcurrency && oldActivity==request.ActivityConcurrency &&
+            oldResource==request.ResourceCapacity)
+        {
+            await tx.CommitAsync(ct);
+            return revision;
+        }
+
+        // A global hub capacity is shared by all activities in this hub, as is
+        // a named resource capacity shared by different activity registrations.
+        // Reject divergent configuration instead of silently changing other owners.
+        await using (var conflict=new NpgsqlCommand("""
+            SELECT 1 FROM wfc_scale.hub_activity_registration
+            WHERE hub_id=@hub
+              AND NOT (activity_type=@type AND version=@version)
+              AND hub_concurrency<>@hubcap
+            LIMIT 1
+            """,db,tx))
+        {
+            conflict.Parameters.AddWithValue("hub",request.HubId);
+            conflict.Parameters.AddWithValue("type",request.ActivityType);
+            conflict.Parameters.AddWithValue("version",request.Version);
+            conflict.Parameters.AddWithValue("hubcap",request.HubConcurrency);
+            if(await conflict.ExecuteScalarAsync(ct) is not null)
+                throw new InvalidOperationException("Shared hub capacity belongs to multiple activity registrations; update requires coordinated hub policy ownership");
+        }
+        var hubKey="hub:"+request.HubId+":"+Digest(request.HubId);
+        var activityKey="activity:"+request.HubId+":"+request.ActivityType+":"+Digest(request.ActivityType);
+        var resourcePrefix="resource:"+request.HubId+":"+resourceName+":";
+        await using (var keys=new NpgsqlCommand("""
+            SELECT resource_key FROM wfc_scale.hub_resource
+            WHERE resource_key=@hubkey OR resource_key=@activitykey
+              OR (@resource IS NOT NULL AND starts_with(resource_key,@prefix))
+            ORDER BY resource_key
+            """,db,tx))
+        {
+            keys.Parameters.AddWithValue("hubkey",hubKey);
+            keys.Parameters.AddWithValue("activitykey",activityKey);
+            keys.Parameters.Add("resource",NpgsqlDbType.Text).Value=(object?)resourceName??DBNull.Value;
+            keys.Parameters.AddWithValue("prefix",resourcePrefix);
+            var resourceKeys=new List<string>();
+            await using(var reader=await keys.ExecuteReaderAsync(ct))
+                while(await reader.ReadAsync(ct))resourceKeys.Add(reader.GetString(0));
+            foreach(var key in resourceKeys)
+            {
+                await using var update=new NpgsqlCommand("""
+                    UPDATE wfc_scale.hub_resource SET capacity=@capacity WHERE resource_key=@key
+                    """,db,tx);
+                update.Parameters.AddWithValue("key",key);
+                update.Parameters.AddWithValue("capacity",
+                    key==hubKey?request.HubConcurrency:
+                    key==activityKey?request.ActivityConcurrency:request.ResourceCapacity);
+                await update.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await using(var update=new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_activity_registration
+            SET hub_concurrency=@hubcap,activity_concurrency=@activitycap,
+                resource_capacity=@resourcecap,revision=revision+1
+            WHERE hub_id=@hub AND activity_type=@type AND version=@version
+            """,db,tx))
+        {
+            update.Parameters.AddWithValue("hub",request.HubId);
+            update.Parameters.AddWithValue("type",request.ActivityType);
+            update.Parameters.AddWithValue("version",request.Version);
+            update.Parameters.AddWithValue("hubcap",request.HubConcurrency);
+            update.Parameters.AddWithValue("activitycap",request.ActivityConcurrency);
+            update.Parameters.AddWithValue("resourcecap",request.ResourceCapacity);
+            await update.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return revision+1;
+    }
+
+    public async Task<HubActivityPolicySnapshot?> GetActivityPolicyAsync(
+        string hub,string activity,int version,CancellationToken ct)
+    {
+        await using var cmd=Source.CreateCommand("""
+            SELECT hub_concurrency,activity_concurrency,resource_capacity,revision
+            FROM wfc_scale.hub_activity_registration
+            WHERE hub_id=@hub AND activity_type=@type AND version=@version
+            """);
+        cmd.Parameters.AddWithValue("hub",hub);
+        cmd.Parameters.AddWithValue("type",activity);
+        cmd.Parameters.AddWithValue("version",version);
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? new HubActivityPolicySnapshot(hub,activity,version,reader.GetInt32(0),
+                reader.GetInt32(1),reader.GetInt32(2),reader.GetInt64(3))
+            : null;
+    }
+
     private static void BindActivity(NpgsqlCommand cmd, HubActivityRegistration p)
     {
         cmd.Parameters.AddWithValue("hub", p.HubId);

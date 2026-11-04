@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Diagnostics;
 using Npgsql;
 using NpgsqlTypes;
@@ -52,6 +54,43 @@ public sealed class HubTaskStore : IAsyncDisposable
         var partition = HubPartitionRouter.ForWorkflow(workflowId ?? id, route.PartitionCount);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
+
+        // Serialize against operator policy changes. Re-resolve declarative routes
+        // inside the transaction after acquiring the registration lock.
+        if (route.Resources.Any(r => r.Key.StartsWith("hub:" + route.HubId + ":", StringComparison.Ordinal) &&
+                                     r.Key.EndsWith(":" + HubPolicyDigest(route.HubId), StringComparison.Ordinal)))
+        {
+            await using var lockRegistration=new NpgsqlCommand("""
+                SELECT 1 FROM wfc_scale.hub_activity_registration
+                WHERE hub_id=@hub AND activity_type=@type AND version=@version
+                FOR SHARE
+                """,db,tx);
+            lockRegistration.Parameters.AddWithValue("hub",route.HubId);
+            lockRegistration.Parameters.AddWithValue("type",route.TaskType);
+            lockRegistration.Parameters.AddWithValue("version",route.Version);
+            if(await lockRegistration.ExecuteScalarAsync(ct) is not null)
+            {
+                await using var checkPolicy=new NpgsqlCommand("""
+                    SELECT hub_concurrency,activity_concurrency,resource_capacity
+                    FROM wfc_scale.hub_activity_registration
+                    WHERE hub_id=@hub AND activity_type=@type AND version=@version
+                    """,db,tx);
+                checkPolicy.Parameters.AddWithValue("hub",route.HubId);
+                checkPolicy.Parameters.AddWithValue("type",route.TaskType);
+                checkPolicy.Parameters.AddWithValue("version",route.Version);
+                await using var reader=await checkPolicy.ExecuteReaderAsync(ct);
+                if(await reader.ReadAsync(ct))
+                {
+                    var hubCapacity=reader.GetInt32(0);
+                    var activityCapacity=reader.GetInt32(1);
+                    var resourceCapacity=reader.GetInt32(2);
+                    if(route.Resources.Any(r=>r.Key.StartsWith("hub:",StringComparison.Ordinal) && r.Capacity!=hubCapacity
+                        || r.Key.StartsWith("activity:",StringComparison.Ordinal) && r.Capacity!=activityCapacity
+                        || r.Key.StartsWith("resource:",StringComparison.Ordinal) && r.Capacity!=resourceCapacity))
+                        throw new InvalidOperationException("Activity policy changed while enqueue was preparing; retry with the current policy");
+                }
+            }
+        }
 
         // Also serialize enqueues for the same FIFO resource. Thus sequence
         // order is consistent with commit order for each ordering key.
@@ -496,6 +535,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         await using var cmd = _dataSource.CreateCommand("SELECT 1");
         await cmd.ExecuteScalarAsync(ct);
     }
+
+    private static string HubPolicyDigest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
 }
