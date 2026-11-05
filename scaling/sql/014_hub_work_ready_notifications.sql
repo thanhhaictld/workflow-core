@@ -5,6 +5,12 @@
 CREATE OR REPLACE FUNCTION wfc_scale.notify_hub_work_ready()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    -- A malformed/oversized hub must never turn an otherwise valid durable
+    -- write into a pg_notify payload error. The sweep remains the fallback.
+    IF octet_length(NEW.hub_id) > 80 THEN
+        RETURN NEW;
+    END IF;
+
     IF TG_OP = 'INSERT' THEN
         -- A newly created immediately eligible task warrants a wake-up.
         IF NEW.state = 0 AND NEW.due_at <= statement_timestamp() THEN
