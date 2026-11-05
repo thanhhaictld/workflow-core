@@ -132,7 +132,7 @@ Capture the following in both 1- and 8-replica runs:
 | Workflow | Completed workflows/s; completion age p95/p99 |
 | Hub | Claim p95/p99, queue age, empty claims, task scans |
 | PostgreSQL | Connection pool, active sessions, transaction throughput, WAL |
-| Locks | `pg_stat_activity` wait_event_type = `Lock`, wait_event = `advisory` |
+| Locks | `workflow_hub_native_event_lane_lock_wait_seconds` p95/p99 and `pg_stat_activity` advisory waits |
 | Processor | Inflight workers, CPU, throttling, memory |
 | Transport | LISTEN/NOTIFY hints, SSE connection count, reconnects |
 
