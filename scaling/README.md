@@ -68,6 +68,10 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/003_signal_delivery.sql`,
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
+   Hub Gateway deployments additionally require migrations 006 through
+   `scaling/sql/014_hub_work_ready_notifications.sql` in numeric order.
+   Migration 014 enables transaction-committed cross-pod work-ready hints;
+   2-second PostgreSQL reconciliation continues to recover missed hints.
 2. Add project reference to `scaling/src/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 
