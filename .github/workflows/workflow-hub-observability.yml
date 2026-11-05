@@ -163,17 +163,19 @@ jobs:
         run: |
           set -euo pipefail
           # The processor profile does not auto-run the offboarding k6 service.
+          # Build/start ONLY the new processor. Rebuilding the whole
+          # observability stack here restarts the Hub/monitor mid-test and
+          # races the very next registration check.
           OFFBOARD_PROCESSOR_WORKERS=4 docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-load up -d --build \
-            --scale processor=8 --scale provisioner=2
+            --profile offboarding-load up -d --build --no-deps \
+            --scale processor=8 processor
           replicas="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
           test "$replicas" -eq 8
           # The offboarding processor publishes through Hub REST. The Definitions
           # page must use that persisted catalog, not only the legacy archive.
           for i in {1..30}; do
-            curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json
-            if python3 - <<'PY'
+            if curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json && python3 - <<'PY'
           import json
           defs=json.load(open('/tmp/monitor-hub-definitions.json'))
           assert any(d['hubId']=='offboarding' and
@@ -238,7 +240,7 @@ jobs:
           PY
           echo 'PASS: eight offboarding processor containers completed 40 native-only workflows, zero resource constraints'
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-load up -d --scale processor=0 --scale provisioner=2
+            --profile offboarding-load up -d --no-deps --scale processor=0 processor
       - name: Verify embedded timer scheduler and durable wait history
         run: |
           python3 - <<'PY'
