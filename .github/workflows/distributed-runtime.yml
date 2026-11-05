@@ -1,0 +1,324 @@
+name: Distributed PostgreSQL Runtime
+on:
+  push:
+    branches: [feat/distributed-postgres-runtime, feat/distributed-postgres-execution-journal, feat/workflow-monitor-dashboard, feat/workflow-definition-version-management, feat/workflow-hub-gateway-concurrency, feat/workflow-hub-otel-observability, refactor/scaling-project-layout, feat/hub-remote-processor-scheduler]
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Scaling.PostgreSQL/**'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
+      - 'scaling/src/WorkflowCore.Hub.Server/**'
+      - 'src/WorkflowCore/**'
+      - 'scaling/monitor/api/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Samples/**'
+      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
+      - 'scaling/**'
+      - 'scaling/monitor/**'
+      - 'Makefile'
+      - 'scripts/**'
+      - 'scaling/compose.monitor.yaml'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
+      - '.github/workflows/distributed-runtime.yml'
+  workflow_dispatch:
+
+jobs:
+  distributed-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      WFC_TEST_PG: Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only
+      PGPASSWORD: workflow_dev_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Apply distributed runtime schema
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+      - name: Build dedicated scaling solution
+        run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
+      - name: Build OTEL library
+        run: dotnet build scaling/src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
+      - name: Build standalone Hub gateway
+        run: dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
+      - name: Build benchmark API
+        run: dotnet build scaling/monitor/api/WorkflowCore.Scaling.Api.csproj -c Release
+      - name: Build standalone sample worker
+        run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+      - name: Restore and test
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
+      - name: Native combined-host crash recovery
+        env:
+          WFC_HUB_AUTH_TOKEN: ci-native-hub-secret-please-change-2026
+        run: pwsh -NoProfile -File scripts/test-hub-native.ps1 -ManageHosts -ApiUrl http://127.0.0.1:5102
+
+  monitor-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scaling/monitor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Check TypeScript
+        run: npm run check-types
+      - name: Build monitoring dashboard
+        run: npm run build
+      - name: Test parallel trace layout and nested joins
+        run: npm run test:topology
+
+  bootstrap-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate PowerShell and Make wrappers
+        run: |
+          pwsh -NoProfile -File scripts/dev.ps1 help
+          pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
+          make help
+          make -n bootstrap
+          make -n dev
+          docker compose -f scaling/compose.monitor.yaml config --quiet
+      - name: Bootstrap complete local stack
+        run: pwsh -NoProfile -File scripts/dev.ps1 bootstrap
+      - name: Run dedicated worker and test sample onboarding end-to-end
+        shell: bash
+        env:
+          WFC_ENABLE_MANAGEMENT_WRITES: 'true'
+          WFC_HUB_AUTH_TOKEN: 'ci-local-hub-secret-please-change-2026'
+        run: |
+          set -euo pipefail
+          pwsh -NoProfile -File scripts/dev.ps1 api > /tmp/onboarding-api.log 2>&1 &
+          api_pid=$!
+          worker_pid=''
+          remote_pid=''
+          hub_pid=''
+          trap 'kill "$api_pid" "$worker_pid" "$remote_pid" "$hub_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:5000/health/ready > /dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -sS http://127.0.0.1:5000/health/ready
+          curl --fail-with-body -sS http://127.0.0.1:5000/api/monitor/overview
+          pwsh -NoProfile -File scripts/dev.ps1 worker > /tmp/onboarding-worker.log 2>&1 &
+          worker_pid=$!
+          if ! pwsh -NoProfile -File scripts/test-onboarding.ps1 -TimeoutSeconds 90 || ! pwsh -NoProfile -File scripts/test-definition-management.ps1 -TimeoutSeconds 90; then
+            echo 'API output:'
+            tail -150 /tmp/onboarding-api.log
+            echo 'Worker output:'
+            tail -150 /tmp/onboarding-worker.log
+            exit 1
+          fi
+          # Hub runs as a separate deployable process with its own bounded pool.
+          WFC_PG="Host=127.0.0.1;Port=55432;Database=workflow;Username=workflow;Password=workflow_dev_only" \
+            dotnet run --no-launch-profile --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
+            --urls http://127.0.0.1:5100 > /tmp/hub-standalone.log 2>&1 &
+          hub_pid=$!
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready > /dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -sS http://127.0.0.1:5100/health/ready
+          # Publish registered activity policies through REST before the
+          # existing standalone worker starts; the Gateway stays business-agnostic.
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 \
+            dotnet run --no-launch-profile \
+            --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+            -- --register-only
+          # Combined Provisioner receives no workflow PostgreSQL credentials.
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WORKFLOW_WORKERS=4 ACTIVITY_WORKERS=4 \
+            dotnet run --no-launch-profile \
+            --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+            > /tmp/hub-remote-worker.log 2>&1 &
+          remote_pid=$!
+          if ! pwsh -NoProfile -File scripts/test-hub-gateway.ps1 -ApiUrl http://127.0.0.1:5100 -TimeoutSeconds 90; then
+            echo 'Standalone Hub output:'
+            tail -150 /tmp/hub-standalone.log
+            echo 'Remote worker output:'
+            tail -150 /tmp/hub-remote-worker.log
+            exit 1
+          fi
+      - name: Stop local PostgreSQL
+        if: always()
+        run: make db-down
+
+  powershell-platform-check:
+    name: PowerShell 7 cross-platform (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate PowerShell script and prerequisites
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path (Get-Location) 'scripts/dev.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/dev.ps1 help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  hub-load-1000:
+    name: Hub — 1000 concurrent 3-step workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      WFC_PG: Host=127.0.0.1;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only;Timeout=45
+      WFC_HUB_URL: http://127.0.0.1:5100
+      WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
+      WFC_HUB_DB_POOL: '12'
+      WFC_LOAD_COUNT: '1000'
+      WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
+      WFC_LOAD_RUN_ID: ci-hub-1000-perf
+      WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
+      WFC_LOAD_TIMEOUT_SECONDS: '360'
+      PGPASSWORD: workflow_dev_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare isolated Hub database
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+      - name: Build Hub, remote worker and performance harness
+        run: |
+          dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj -c Release
+          dotnet build scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
+      - name: Stage 1000 workflows, then execute all via DB-free workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --no-build -c Release \
+            --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
+            --urls http://127.0.0.1:5100 > /tmp/perf-hub.log 2>&1 &
+          hub_pid=$!
+          worker_pids=''
+          cleanup() {
+            kill "$hub_pid" 2>/dev/null || true
+            for p in $worker_pids; do kill "$p" 2>/dev/null || true; done
+          }
+          trap cleanup EXIT
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5100/health/ready
+          # Publish immutable workflow/activity metadata without starting the Provisioner lanes.
+          env -u WFC_PG dotnet run --no-build -c Release \
+            --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+            -- --register-only
+          # No workflow lanes yet: all 1000 workflow instances must be durably pending.
+          if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
+            --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            tail -150 /tmp/perf-hub.log
+            exit 1
+          fi
+          for i in 1 2 3 4; do
+            # No PostgreSQL credential is available to application hosts.
+            env -u WFC_PG WORKFLOW_WORKERS=16 ACTIVITY_WORKERS=32 dotnet run --no-build -c Release \
+              --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
+              > "/tmp/perf-worker-$i.log" 2>&1 &
+            worker_pids="$worker_pids $!"
+          done
+          if ! WFC_LOAD_PHASE=verify dotnet run --no-build -c Release \
+            --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
+            tail -150 /tmp/perf-hub.log
+            for i in 1 2 3 4; do tail -100 "/tmp/perf-worker-$i.log"; done
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          report = json.load(open('/tmp/workflow-hub-1000.json'))
+          assert report['valid'] and report['completedWorkflows'] == 1000
+          assert report['peakSimultaneousPending'] == 1000
+          assert report['verifiedWorkflowHistories'] >= 10
+          # A 12-connection Hub pool plus diagnostic and PostgreSQL service overhead.
+          assert report['peakDatabaseConnections'] <= 24, report
+          print('PASS: 1000 complete code-first remote workflows; 3000 steps; bounded DB pool')
+          print('Throughput:', report['processingThroughputWorkflowsPerSecond'])
+          print('Workflow p95 (ms):', report['completionLatencyP95Ms'])
+          print('Peak DB sessions:', report['peakDatabaseConnections'])
+          PY
+      - name: Upload reproducible benchmark result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workflow-hub-1000-performance
+          path: |
+            /tmp/workflow-hub-1000.json
+            /tmp/perf-hub.log
+            /tmp/perf-worker-*.log
+          if-no-files-found: warn

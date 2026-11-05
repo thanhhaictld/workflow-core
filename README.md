@@ -13,6 +13,42 @@ https://github.com/danielgerlag/conductor
 
 ## Documentation
 
+### OpenTelemetry + Grafana + k6 local stress lab
+
+The experimental [Workflow Hub observability stack](scaling/observability/README.md)
+adds OTLP metrics/traces/logs for Hub and workers, a Docker Compose
+Prometheus/Grafana/Tempo/Loki stack, provisioned resource/throughput dashboards,
+and a k6 script for 1,000 code-first three-step remote workflows.
+A separate CI job starts the Compose stack and verifies exported telemetry.
+
+### Standalone Workflow Hub Gateway and concurrency policies (experimental)
+
+The `feat/workflow-hub-gateway-concurrency` branch adds a standalone REST +
+SSE Hub Gateway, a bounded PostgreSQL connection pool, DB-free remote activity
+workers, and code-first concurrency policies (limited, exclusive, strict FIFO
+and cross-hub resource constraints).
+
+See the [Hub architecture and local runbook](scaling/docs/workflow-hub-gateway.md).
+The [1,000-concurrent-workflow benchmark](scaling/docs/workflow-hub-1000-performance.md)
+completed 1,000 three-step remote workflows with zero failures and a maximum
+of 12 observed PostgreSQL connections (two GitHub CI runs).
+**Scope:** this is a tested remote-*activity* slice; existing Workflow Core
+instance execution has not yet been migrated to Hub-hosted persistence.
+
+### Experimental distributed PostgreSQL runtime (this fork branch)
+
+The `feat/distributed-postgres-runtime` branch includes a separate .NET 10
+distributed runtime with PostgreSQL leased work, fenced workflow commits and
+a hosted worker pool. It intentionally does **not** preserve the original
+scheduler/queue API and is **not yet production-certified**.
+
+Start with the **[distributed runtime documentation index](scaling/docs/README.md)**,
+then read the [architecture](scaling/docs/architecture.md),
+[execution semantics](scaling/docs/execution-semantics.md),
+[deployment guide](scaling/docs/deployment.md), and
+[production-readiness gaps](scaling/docs/production-readiness.md).
+The original Workflow Core documentation below describes the legacy engine.
+
 See [Tutorial here.](https://workflow-core.readthedocs.io)
 
 ## Fluent API

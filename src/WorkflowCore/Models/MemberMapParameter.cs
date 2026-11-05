@@ -10,6 +10,22 @@ namespace WorkflowCore.Models
         private readonly LambdaExpression _source;
         private readonly LambdaExpression _target;
         private readonly Delegate _compiledSource;
+
+        // Diagnostic-only metadata. Never serialize captured expression values:
+        // arbitrary lambdas can contain secrets or application state.
+        public string TargetMemberName =>
+            (_target.Body as MemberExpression)?.Member.Name ?? "unknown";
+
+        public string SourceMemberName
+        {
+            get
+            {
+                if (!(_source.Body is MemberExpression member)) return null;
+                Expression root = member.Expression;
+                while (root is MemberExpression parent) root = parent.Expression;
+                return root is ParameterExpression ? member.Member.Name : null;
+            }
+        }
      
         public MemberMapParameter(LambdaExpression source, LambdaExpression target)
         {

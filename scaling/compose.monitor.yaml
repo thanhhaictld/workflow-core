@@ -1,0 +1,23 @@
+# Local development database only. Bind to loopback; never expose public credentials.
+name: workflow-core-monitor
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-workflow}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
+      POSTGRES_DB: ${PG_DATABASE:-workflow}
+    ports:
+      - "127.0.0.1:${PG_PORT:-55432}:5432"
+    volumes:
+      - monitor_postgres_data:/var/lib/postgresql/data
+      - ./sql:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+volumes:
+  monitor_postgres_data:

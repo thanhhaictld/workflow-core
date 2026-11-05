@@ -250,3 +250,9 @@ ModelManifest.xml
 riderModule.iml
 .DS_Store
 test-results/
+
+# Local Next.js monitor secrets and generated artifacts
+scaling/monitor/.env.local
+scaling/monitor/.env.*.local
+scaling/monitor/.next/
+scaling/monitor/*.tsbuildinfo

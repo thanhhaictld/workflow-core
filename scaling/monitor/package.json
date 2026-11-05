@@ -1,0 +1,28 @@
+{
+  "name": "workflow-core-monitor",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "check-types": "tsc --noEmit",
+    "test:topology": "node --experimental-strip-types --test src/lib/*.test.mjs"
+  },
+  "dependencies": {
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "lucide-react": "0.468.0",
+    "clsx": "2.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.14",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "4.1.14",
+    "typescript": "^5.9.3"
+  }
+}
