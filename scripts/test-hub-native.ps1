@@ -90,7 +90,8 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
     }
     $trace = @(Call-Hub GET "workflows/$Id/trace")
     if ($trace.Count -ne 3 -or @($trace | Where-Object { -not $_.executionPointerId -or -not $_.dispatchKey }).Count) {
-        throw 'Activity trace is missing native pointer/dispatch identities'
+        $lanes = @($trace | ForEach-Object { "step=$($_.stepIndex),type=$($_.activityType),pointer=$($_.executionPointerId),dispatch=$($_.dispatchKey),attempts=$(@($_.attempts).Count)" })
+        throw "Activity trace expected three routed lanes with pointer/dispatch identity; got $($trace.Count): $($lanes -join '; ')"
     }
 }
 
