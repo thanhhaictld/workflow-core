@@ -232,6 +232,7 @@ jobs:
       WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
       WFC_HUB_DB_POOL: '12'
       WFC_LOAD_COUNT: '1000'
+      WFC_LOAD_VERSION: '3'
       WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
       WFC_LOAD_RUN_ID: ci-hub-1000-perf
       WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
