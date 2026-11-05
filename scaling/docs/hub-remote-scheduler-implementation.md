@@ -28,11 +28,19 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ```
 
-Services include `hub` with its scheduler and the combined `provisioner`. The Provisioner runs native v3 workflow and activity lanes; no separate processor is deployed. Application hosts have no `WFC_PG`. Set `WORKFLOW_WORKERS` and `ACTIVITY_WORKERS` independently.
+Services include `hub` with its scheduler and the combined `provisioner`. The Provisioner runs native workflow and activity lanes (including onboarding v3 and v4); no separate processor is deployed. Application hosts have no `WFC_PG`. Set `WORKFLOW_WORKERS` and `ACTIVITY_WORKERS` independently.
 
 - Next.js unified workflow list: http://localhost:3002/workflows
 - Grafana performance and timer-lag panels: http://localhost:3001/d/workflow-hub-otel
 - Hub readiness: http://localhost:5100/health/ready
+
+The provisioner also registers `tenant-onboarding` v4 alongside v3. V4 adds
+`configure-tenant-access` between provisioning and the welcome activity; this
+sample activity simulates configuration and does not change real access. V3
+remains available for existing runs. Select v4 explicitly when starting a Hub
+workflow to exercise it. The monitor's `/definitions` YAML viewer currently
+reads the separate legacy definition archive, not Hub provisioner registrations,
+so these Hub versions are not available there for comparison.
 
 ## Workload and timer smoke
 
