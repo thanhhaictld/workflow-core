@@ -42,6 +42,7 @@ jobs:
       - name: Validate k6 syntax and provisioned dashboard JSON
         run: |
           node --input-type=module --check < scaling/observability/k6/hub-workflows.js
+          node --input-type=module --check < scaling/observability/k6/offboarding-unconstrained.js
           python3 - <<'PY'
           import json
           path='scaling/observability/grafana/dashboards/workflow-hub-runtime.json'
@@ -158,6 +159,29 @@ jobs:
           assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
           print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
           PY
+      - name: Run eight native offboarding processors and standalone k6 smoke
+        run: |
+          set -euo pipefail
+          # The processor profile does not auto-run the offboarding k6 service.
+          OFFBOARD_PROCESSOR_WORKERS=4 docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build \
+            --scale processor=8 --scale provisioner=2
+          replicas="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+          test "$replicas" -eq 8
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm \
+            -e K6_OFFBOARD_COUNT=40 -e K6_OFFBOARD_VUS=16 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=120 k6-offboarding
+          test -s scaling/observability/results/k6-offboarding-summary.json
+          # Ensure there are no FIFO/capacity policy constraints for this workload.
+          constraints="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T postgres psql -U workflow -d workflow -Atc \
+            "SELECT count(*) FROM wfc_scale.hub_task_constraint c JOIN wfc_scale.hub_task t ON t.id=c.task_id WHERE t.hub_id='offboarding'")"
+          test "$constraints" -eq 0
+          echo 'PASS: eight offboarding processor containers completed 40 native-only workflows, zero resource constraints'
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --scale processor=0 --scale provisioner=2
       - name: Verify embedded timer scheduler and durable wait history
         run: |
           python3 - <<'PY'
