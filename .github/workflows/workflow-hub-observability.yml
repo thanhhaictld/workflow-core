@@ -179,6 +179,37 @@ jobs:
             exec -T postgres psql -U workflow -d workflow -Atc \
             "SELECT count(*) FROM wfc_scale.hub_task_constraint c JOIN wfc_scale.hub_task t ON t.id=c.task_id WHERE t.hub_id='offboarding'")"
           test "$constraints" -eq 0
+          # The old API silently excluded native workflow steps from /trace and
+          # showed a misleading "predates the attempt journal" warning.
+          # A finished native-only flow must now have three timestamped spans.
+          python3 - <<'PY'
+          import json,datetime,urllib.request
+          root='http://127.0.0.1:5100/api/hub/'
+          token=next(line.split('=',1)[1].strip() for line in
+              open('scaling/observability/.env.example') if line.startswith('WFC_HUB_AUTH_TOKEN='))
+          def get(path):
+              req=urllib.request.Request(root+path,headers={'Authorization':'Bearer '+token})
+              with urllib.request.urlopen(req,timeout=15) as r:return json.load(r)
+          page=get('workflows?hub=offboarding&take=10')
+          completed=[row for row in page['items'] if row['definitionId']=='tenant-offboarding-fast'
+                     and row['state']=='Complete']
+          assert completed, page
+          workflow=completed[0]['id']
+          trace=get('workflows/'+workflow+'/trace')
+          native=[step for step in trace if any(a.get('source')=='native-step'
+                      for a in step['attempts'])]
+          assert {step['stepIndex'] for step in native}=={0,1,2}, trace
+          for step in native:
+              assert step['state']=='Completed' and step['executionPointerId']
+              for attempt in step['attempts']:
+                  assert attempt['source']=='native-step' and attempt['outcome']=='Completed'
+                  started=datetime.datetime.fromisoformat(attempt['claimedAt'].replace('Z','+00:00'))
+                  finished=datetime.datetime.fromisoformat(attempt['finishedAt'].replace('Z','+00:00'))
+                  assert finished>=started
+          history=get('workflows/'+workflow+'/history')
+          assert len([e for e in history if e['eventType']=='NativeStepSpan'])>=3
+          print('PASS: three native worker-timed spans persisted and included in Hub trace')
+          PY
           echo 'PASS: eight offboarding processor containers completed 40 native-only workflows, zero resource constraints'
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-load up -d --scale processor=0 --scale provisioner=2
