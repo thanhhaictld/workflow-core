@@ -182,3 +182,57 @@ concurrency independently, not all knobs at once.
   fencing as part of **this** experiment. Those require separate correctness
   and performance design, targeted concurrency tests, and before/after
   benchmarks.
+
+## Native step trace fidelity (fixed)
+
+The original Hub waterfall only queried `hub_task` rows containing a
+`workflow_step` or `native_step_id`. Pure in-process native steps have
+**no corresponding activity task**, so a successful offboarding workflow
+returned an empty trace and incorrectly displayed "This execution predates the
+durable attempt journal."
+
+Current processors write a `NativeStepSpan` entry for a step when its
+`StepStarted` and `StepCompleted` lifecycle callbacks occur in the
+**same native execution iteration**. Its JSON payload contains the actual
+worker-observed `startedAt`/`finishedAt`, worker ID, lease epoch and
+attempt number. The Hub inserts this event in the **same fenced transaction**
+as the native snapshot and work-task acknowledgement. No extra database
+transaction is added for each local step.
+
+`GET /api/hub/workflows/{id}/trace` now returns this data as
+`attempts[].source="native-step"`, in addition to the existing
+`source="lease"` rows for routed activity tasks.
+The Next.js waterfall labels the two sources differently. It does
+**not** treat internal execution spans as task claims.
+
+Important limitations:
+- A crashed native worker may have executed a step without committing its
+  snapshot or `NativeStepSpan`. No durable event is claimed for such work.
+- A step that waits/suspends for a timer or remote event does not get one
+  invented end-to-end execution bar: only a matched start/complete in the
+  same iteration is timed; the durable timer wait has its own segment.
+- Existing native workflows run before these worker timestamps were added
+  retain their persisted `StepCompleted` markers only. Exact start/end
+  durations cannot be retroactively reconstructed.
+- Worker wall clocks require synchronization. These timestamps describe
+  a worker-observed step execution window, not isolated CPU use.
+- Routed activity tasks continue using true Hub lease timestamps;
+  the native history fallback must not duplicate their trace lanes.
+
+To verify a freshly executed offboarding workflow:
+
+```sql
+SELECT e.step_index, e.execution_pointer_id,
+       e.payload->>'startedAt' AS started_at,
+       e.payload->>'finishedAt' AS finished_at,
+       e.payload->>'workerId' AS worker_id
+FROM wfc_scale.hub_workflow_event e
+WHERE e.workflow_id = :workflow_id
+  AND e.event_type = 'NativeStepSpan'
+ORDER BY e.step_index, e.id;
+```
+
+Expect three rows for a normal three-step offboarding completion.
+The observability CI checks all three spans in the Hub trace API and
+also asserts that the original routed onboarding trace still works.
+
