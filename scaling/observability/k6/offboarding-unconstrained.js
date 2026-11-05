@@ -24,12 +24,16 @@ const submitLatency = new Trend("hub_offboarding_submit_latency_seconds", true);
 const overallThroughput = new Trend("hub_offboarding_overall_throughput_workflows_per_second", true);
 
 export const options = {
+  // k6 defaults teardown() to 60 seconds regardless of TIMEOUT. The
+  // offboarding benchmark intentionally waits for all queued workflows.
+  teardownTimeout: String(TIMEOUT + 30) + "s",
+  summaryTrendStats: ["avg", "min", "med", "max", "p(95)", "p(99)"],
   scenarios: {
     offboarding: {
       executor: "shared-iterations",
       vus: VUS,
       iterations: TOTAL,
-      maxDuration: "10m",
+      maxDuration: __ENV.K6_OFFBOARD_MAX_DURATION || "10m",
       gracefulStop: "10s",
     },
   },
