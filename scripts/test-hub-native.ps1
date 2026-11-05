@@ -89,9 +89,13 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
         throw "Native progression mismatch: expected $Steps completions, got $($completed.Count), distinct pointers $(@($completed.executionPointerId | Sort-Object -Unique).Count)"
     }
     $trace = @(Call-Hub GET "workflows/$Id/trace")
-    if ($trace.Count -ne 3 -or @($trace | Where-Object { -not $_.executionPointerId -or -not $_.dispatchKey }).Count) {
+    # A native timer/inline step is now a valid independent waterfall row.
+    # The remote onboarding path must still yield exactly three activity
+    # lanes with their durable task pointer/dispatch identifiers.
+    $routed = @($trace | Where-Object { $_.dispatchKey })
+    if ($routed.Count -ne 3 -or @($routed | Where-Object { -not $_.executionPointerId }).Count) {
         $lanes = @($trace | ForEach-Object { "step=$($_.stepIndex),type=$($_.activityType),pointer=$($_.executionPointerId),dispatch=$($_.dispatchKey),attempts=$(@($_.attempts).Count)" })
-        throw "Activity trace expected three routed lanes with pointer/dispatch identity; got $($trace.Count): $($lanes -join '; ')"
+        throw "Activity trace expected three routed lanes with pointer/dispatch identity; got $($routed.Count) routed / $($trace.Count) total: $($lanes -join '; ')"
     }
 }
 
