@@ -1,4 +1,7 @@
 using Npgsql;
+using NpgsqlTypes;
+using Microsoft.Extensions.Logging.Abstractions;
+using WorkflowCore.Hub.Gateway;
 using WorkflowCore.Hub;
 using Xunit;
 
@@ -47,7 +50,7 @@ public sealed class HubPostgresNotificationTests
             """, db, tx);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("hub", hub);
-        cmd.Parameters.AddWithValue("due", (object?)due ?? DBNull.Value);
+        cmd.Parameters.Add("due", NpgsqlDbType.TimestampTz).Value = (object?)due ?? DBNull.Value;
         await cmd.ExecuteNonQueryAsync();
         return id;
     }
@@ -148,4 +151,52 @@ public sealed class HubPostgresNotificationTests
         }
         await WaitForHubAsync(listener, hub, received);
     }
+    [Fact]
+    public async Task TwoHubPodsForwardCommittedHintToTheirOwnSseSubscribers()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var storeOne = new HubTaskStore(Database, 2);
+        await using var storeTwo = new HubTaskStore(Database, 2);
+        using var readinessOne = new HubReadinessBroadcaster(storeOne,
+            new HubWorkflowStore(storeOne, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            NullLogger<HubReadinessBroadcaster>.Instance);
+        using var readinessTwo = new HubReadinessBroadcaster(storeTwo,
+            new HubWorkflowStore(storeTwo, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            NullLogger<HubReadinessBroadcaster>.Instance);
+        using var listenerOne = new PostgresHubNotificationListener(Database, readinessOne,
+            NullLogger<PostgresHubNotificationListener>.Instance);
+        using var listenerTwo = new PostgresHubNotificationListener(Database, readinessTwo,
+            NullLogger<PostgresHubNotificationListener>.Instance);
+        await listenerOne.StartAsync(lifetime.Token);
+        await listenerTwo.StartAsync(lifetime.Token);
+        try
+        {
+            while (!listenerOne.IsListening || !listenerTwo.IsListening)
+                await Task.Delay(25, lifetime.Token);
+
+            await using var one = readinessOne.Subscribe(new[] { hub }, lifetime.Token)
+                .GetAsyncEnumerator(lifetime.Token);
+            await using var two = readinessTwo.Subscribe(new[] { hub }, lifetime.Token)
+                .GetAsyncEnumerator(lifetime.Token);
+            Assert.True(await one.MoveNextAsync()); // initial catch-up hint
+            Assert.True(await two.MoveNextAsync());
+            await using var writer = new NpgsqlConnection(Database);
+            await writer.OpenAsync(lifetime.Token);
+            await InsertTaskAsync(writer, hub);
+
+            var delivered = await Task.WhenAll(
+                one.MoveNextAsync().AsTask(), two.MoveNextAsync().AsTask());
+            Assert.All(delivered, Assert.True);
+            Assert.Equal(hub, one.Current);
+            Assert.Equal(hub, two.Current);
+        }
+        finally
+        {
+            await listenerOne.StopAsync(CancellationToken.None);
+            await listenerTwo.StopAsync(CancellationToken.None);
+        }
+    }
+
 }
