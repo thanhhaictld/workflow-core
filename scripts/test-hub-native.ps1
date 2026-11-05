@@ -97,7 +97,7 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
 try {
     if ([string]::IsNullOrWhiteSpace($HubToken)) { throw 'Set WFC_HUB_AUTH_TOKEN or pass -HubToken' }
     if ($ManageHosts) {
-        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 013 applied' }
+        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 014 applied' }
         $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'Hub readiness'
         $publisher = Start-ManagedHost WorkflowCore.Provisioner.Host -RegisterOnly
