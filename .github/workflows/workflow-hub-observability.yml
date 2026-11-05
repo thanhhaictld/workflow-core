@@ -199,8 +199,8 @@ jobs:
           curl --fail-with-body -fsS http://127.0.0.1:3002/definitions/hub/offboarding/tenant-offboarding-fast >/dev/null
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-k6 run --rm \
-            -e K6_OFFBOARD_COUNT=40 -e K6_OFFBOARD_VUS=16 \
-            -e K6_OFFBOARD_TIMEOUT_SECONDS=120 k6-offboarding
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 k6-offboarding
           test -s scaling/observability/results/k6-offboarding-summary.json
           # Ensure there are no FIFO/capacity policy constraints for this workload.
           constraints="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
@@ -238,7 +238,7 @@ jobs:
           assert len([e for e in history if e['eventType']=='NativeStepSpan'])>=3
           print('PASS: three native worker-timed spans persisted and included in Hub trace')
           PY
-          echo 'PASS: eight offboarding processor containers completed 40 native-only workflows, zero resource constraints'
+          echo 'PASS: eight offboarding processor containers completed 1000 native-only workflows, zero resource constraints'
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-load up -d --no-deps --scale processor=0 processor
       - name: Verify embedded timer scheduler and durable wait history
