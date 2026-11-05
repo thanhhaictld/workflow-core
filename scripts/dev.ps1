@@ -8,7 +8,7 @@
   pwsh -NoProfile -File ./scripts/dev.ps1 db-reset -ConfirmReset
 .NOTES
   Windows, macOS and Linux with PowerShell 7+. Requires Docker Compose v2 for
-  database tasks, .NET SDK 10, Node.js 22+, and npm. GNU Make is optional.
+  database tasks, .NET SDK 10, Node.js 22+, and Corepack. GNU Make is optional.
 #>
 [CmdletBinding()]
 param(
@@ -41,7 +41,7 @@ $WorkerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Sca
 $HubProject = Join-Path $RepoRoot 'scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj'
 $ProvisionerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj'
 $TestProject = Join-Path $RepoRoot 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
-$NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
+$CorepackCommand = if ($IsWindows) { 'corepack.cmd' } else { 'corepack' }
 
 if ($PgPort -eq 0) { $PgPort = if ($env:PG_PORT) { [int]$env:PG_PORT } else { 55432 } }
 if ($ApiPort -eq 0) { $ApiPort = if ($env:API_PORT) { [int]$env:API_PORT } else { 5000 } }
@@ -87,7 +87,7 @@ function Invoke-Compose([string[]] $ComposeArgs) {
 }
 
 function Test-Prerequisites([bool] $WithDocker = $true) {
-    foreach ($name in @('dotnet', 'node', $NpmCommand)) { Assert-Executable $name }
+    foreach ($name in @('dotnet', 'node', $CorepackCommand)) { Assert-Executable $name }
     $sdks = @(& dotnet --list-sdks)
     if ($LASTEXITCODE -ne 0 -or -not ($sdks | Where-Object { $_ -match '^10\.' })) {
         throw '.NET SDK 10 is required.'
@@ -100,7 +100,7 @@ function Test-Prerequisites([bool] $WithDocker = $true) {
         Assert-Executable 'docker'
         Invoke-External -Executable 'docker' -Arguments @('compose', 'version')
     }
-    Write-Host "Prerequisites OK: .NET 10, Node $nodeVersion, npm$(if ($WithDocker) { ', Docker Compose' })."
+    Write-Host "Prerequisites OK: .NET 10, Node $nodeVersion, Corepack$(if ($WithDocker) { ', Docker Compose' })."
 }
 
 function Start-Database {
@@ -133,12 +133,7 @@ function Apply-DatabaseSchema {
 }
 
 function Install-Monitor {
-    if (-not (Test-Path (Join-Path $MonitorDir 'node_modules/next'))) {
-        $installMode = if (Test-Path (Join-Path $MonitorDir 'package-lock.json')) { 'ci' } else { 'install' }
-        Invoke-External -Executable $NpmCommand -Arguments @($installMode, '--no-audit', '--no-fund') -Directory $MonitorDir
-    } else {
-        Write-Host 'Next.js dependencies already installed.'
-    }
+    Invoke-External -Executable $CorepackCommand -Arguments @('pnpm', 'install', '--frozen-lockfile') -Directory $MonitorDir
     $localEnv = Join-Path $MonitorDir '.env.local'
     if (-not (Test-Path $localEnv)) {
         Copy-Item -LiteralPath (Join-Path $MonitorDir '.env.example') -Destination $localEnv
@@ -185,11 +180,11 @@ function Start-RemoteWorker {
 function Start-Ui {
     Install-Monitor
     $env:WORKFLOW_API_URL = "http://127.0.0.1:$ApiPort"
-    Invoke-External -Executable $NpmCommand -Arguments @('run', 'dev', '--',
+    Invoke-External -Executable $CorepackCommand -Arguments @('pnpm', 'run', 'dev',
         '--hostname', '127.0.0.1', '--port', "$UiPort") -Directory $MonitorDir
 }
 
-# Start both programs without Unix shell operators or npm.cmd subprocesses.
+# Start both programs without Unix shell operators or package-manager subprocesses.
 function Start-ChildProcess([string] $Executable, [string[]] $Arguments,
     [string] $Directory) {
     $command = Get-Command $Executable -ErrorAction Stop
@@ -249,7 +244,7 @@ function Start-Development {
 function Show-Help {
     Write-Host @'
 Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
-  pwsh ./scripts/dev.ps1 bootstrap   PostgreSQL + EF/SQL migrations + npm
+  pwsh ./scripts/dev.ps1 bootstrap   PostgreSQL + EF/SQL migrations + pnpm
   pwsh ./scripts/dev.ps1 up          Bootstrap and start API + worker + UI
   pwsh ./scripts/dev.ps1 dev         Alias for up
   pwsh ./scripts/dev.ps1 api         Run .NET API only (no embedded workers)
@@ -336,14 +331,14 @@ try {
         }
         'check' {
             Install-Monitor
-            Invoke-External -Executable $NpmCommand -Arguments @('run', 'check-types') -Directory $MonitorDir
+            Invoke-External -Executable $CorepackCommand -Arguments @('pnpm', 'run', 'check-types') -Directory $MonitorDir
         }
         'build' {
             Install-Monitor
             Invoke-External -Executable 'dotnet' -Arguments @('build', $ApiProject, '-c', 'Release')
             Invoke-External -Executable 'dotnet' -Arguments @('build', $WorkerProject, '-c', 'Release')
             Invoke-External -Executable 'dotnet' -Arguments @('build', $HubProject, '-c', 'Release')
-            Invoke-External -Executable $NpmCommand -Arguments @('run', 'build') -Directory $MonitorDir
+            Invoke-External -Executable $CorepackCommand -Arguments @('pnpm', 'run', 'build') -Directory $MonitorDir
         }
         'db-logs' { Invoke-Compose -ComposeArgs @('logs', '-f', 'postgres') }
         'db-down' { Invoke-Compose -ComposeArgs @('down') }

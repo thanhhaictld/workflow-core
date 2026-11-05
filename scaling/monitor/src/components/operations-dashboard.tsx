@@ -10,6 +10,7 @@ import {
 import { Badge, Button, Card, CardHeader, EmptyState, Select, cn } from "./ui";
 import type { OperationsSnapshot, OperationsWindow } from "@/lib/operations";
 import { formatAge, formatCount, partitionSkew } from "@/lib/operations";
+import { countScale } from "@/lib/count-scale";
 
 const sections = [
   { id: "overview", title: "Overview", icon: BarChart3 },
@@ -38,29 +39,48 @@ function ChartBars({ title, description, points, property, isNullable = false }:
   isNullable?: boolean;
 }) {
   const values = points.map(p => p[property]);
-  const present = values.filter((n): n is number => n !== null && Number.isFinite(n));
-  const max = Math.max(1, ...present);
+  const scale = countScale(values);
+  const tickFormat = new Intl.NumberFormat("en-US", { notation: "compact", maximumSignificantDigits: 3 });
+  const widestTick = scale?.ticks.map(tick => tickFormat.format(tick))
+    .reduce((longest, label) => label.length > longest.length ? label : longest, "") ?? "";
   return <Card className="min-w-0">
     <CardHeader title={title} description={description} />
-    {present.length === 0 ? <EmptyState title="No persisted samples"
+    {!scale ? <EmptyState title="No persisted samples"
       description="Samples appear after the Hub runs with migration 011 applied; missing samples are not shown as zero." /> :
       <div className="px-5 pb-5 pt-4">
-        <div className="flex h-36 items-end gap-[3px]" role="img" aria-label={title + " over selected interval"}>
-          {points.map((point, i) => {
-            const value = values[i];
-            return <div key={point.bucket} className="flex h-full min-w-0 flex-1 items-end"
-              title={new Date(point.bucket).toLocaleString() + ": " + (value === null ? "no sample" : formatCount(value))}>
-              {value === null
-                ? <div className="h-[2px] w-full rounded bg-muted-foreground/20" />
-                : <div className={cn("w-full rounded-t-sm", isNullable ? "bg-blue-500/80" : "bg-emerald-600/80")}
-                    style={{ height: Math.max(2, 100 * value / max) + "%" }} />}
-            </div>;
-          })}
-        </div>
-        <div className="mt-2 flex justify-between text-[11px] text-muted-foreground">
-          <span>{new Date(points[0]?.bucket ?? 0).toLocaleTimeString()}</span>
-          <span>Peak {formatCount(max)}</span>
-          <span>{new Date(points[points.length - 1]?.bucket ?? 0).toLocaleTimeString()}</span>
+        <div className="mb-2 text-[11px] text-muted-foreground">Count</div>
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2" role="img"
+          aria-label={title + ", count over selected interval, peak " + formatCount(scale.peak)}>
+          <div className="relative h-36 text-right text-[11px] tabular-nums text-muted-foreground" aria-hidden="true">
+            {scale.ticks.map(tick => <span key={tick} title={formatCount(tick)}
+              className="absolute right-0 translate-y-1/2 whitespace-nowrap leading-none"
+              style={{ bottom: scale.position(tick) + "%" }}>{tickFormat.format(tick)}</span>)}
+            <span className="invisible whitespace-nowrap">{widestTick}</span>
+          </div>
+          <div className="relative h-36">
+            {scale.ticks.map(tick => <div key={tick} aria-hidden="true"
+              className={cn("absolute inset-x-0 border-t border-border", tick === 0 && "border-muted-foreground/60")}
+              style={{ bottom: scale.position(tick) + "%" }} />)}
+            <div className="absolute inset-0 flex items-end gap-[3px]">
+              {points.map((point, i) => {
+                const value = values[i];
+                const missing = value == null || !Number.isFinite(value) || value < 0;
+                return <div key={point.bucket} className="flex h-full min-w-0 flex-1 items-end"
+                  title={new Date(point.bucket).toLocaleString() + ": " + (missing ? "no sample" : formatCount(value))}>
+                  {missing
+                    ? <div className="h-[2px] w-full rounded bg-muted-foreground/40" />
+                    : <div className={cn("w-full rounded-t-sm", isNullable ? "bg-blue-500/80" : "bg-emerald-600/80")}
+                        style={{ height: scale.position(value) + "%" }} />}
+                </div>;
+              })}
+            </div>
+          </div>
+          <div />
+          <div className="mt-2 flex flex-wrap justify-between gap-x-2 text-[11px] text-muted-foreground">
+            <span>{new Date(points[0].bucket).toLocaleTimeString()}</span>
+            <span>Peak {formatCount(scale.peak)}</span>
+            <span>{new Date(points[points.length - 1].bucket).toLocaleTimeString()}</span>
+          </div>
         </div>
       </div>}
   </Card>;

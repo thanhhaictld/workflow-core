@@ -84,7 +84,7 @@ authentication, RBAC, audit and tenant isolation are implemented.
 
 \`\`\`bash
 dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release
-cd scaling/monitor && npm run check-types && npm run build
+cd scaling/monitor && corepack pnpm run check-types && corepack pnpm run build
 \`\`\`
 
 The PostgreSQL acceptance test asserts queue/lease separation, resource

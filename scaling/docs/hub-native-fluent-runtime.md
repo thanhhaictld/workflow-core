@@ -194,7 +194,7 @@ force-kills both processes during a durable wait, restarts them, and checks step
 and attempt history. It never resets the database. Omit `-ManageHosts` to check
 an existing combined deployment without restarting it.
 
-Run `npm run check-types`, `npm run test:topology`, and `npm run build` from
+Run `corepack pnpm run check-types`, `corepack pnpm run test:topology`, and `corepack pnpm run build` from
 `scaling/monitor` for monitoring changes.
 
 ## Boundaries

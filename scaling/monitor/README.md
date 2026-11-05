@@ -37,7 +37,7 @@ project does not include its paid source code.
   `scaling/sql/002_distributed_runtime.sql` through
   `scaling/sql/005_execution_history.sql` applied in order
 - .NET SDK 10 for `scaling/monitor/api`
-- Node.js 22+ with npm
+- Node.js 22+ and Corepack (install Corepack separately if your Node distribution omits it)
 - PowerShell 7+ (`pwsh`) on Windows, macOS or Linux
 - Docker Compose v2 (Docker Desktop on Windows/macOS) for local PostgreSQL
 
@@ -57,7 +57,7 @@ If you have GNU Make installed, these are equivalent:
 
 
 ```bash
-make bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + npm packages
+make bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + pnpm packages
 make dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
 # In another terminal, optionally create example executions:
 make seed
@@ -92,8 +92,8 @@ In a separate shell:
 ```bash
 cd scaling/monitor
 cp .env.example .env.local
-npm install
-npm run dev
+corepack pnpm install --frozen-lockfile
+corepack pnpm run dev
 ```
 
 Open **http://localhost:3000/workflows**. Set `WORKFLOW_API_URL` in
@@ -283,8 +283,8 @@ mutate workflow execution from this dashboard.
 
 ```bash
 cd scaling/monitor
-npm run check-types
-npm run build
+corepack pnpm run check-types
+corepack pnpm run build
 ```
 
 CI also builds the .NET API and executes the distributed PostgreSQL tests.
