@@ -71,7 +71,32 @@ services:
     depends_on:
       monitor-api-migrate:
         condition: service_completed_successfully
-      otel-collector:
+      # Separate native-only workflow processor used by the unconstrained
+  # offboarding benchmark. No PostgreSQL connection and no AddActivity policy.
+  # Profile keeps the default onboarding/observability stack unchanged.
+  # Scale with --profile offboarding-load up -d --scale processor=8 --scale provisioner=0
+  processor:
+    profiles: ["offboarding-load"]
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj
+    command: ["WorkflowCore.Offboarding.Processor.dll"]
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      WFC_HUB_URL: http://hub:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
+      WORKFLOW_WORKERS: "${OFFBOARD_PROCESSOR_WORKERS:-16}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
+      WFC_OTEL_LOGS_ENABLED: "true"
+    restart: unless-stopped
+
+  otel-collector:
         condition: service_started
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
@@ -250,6 +275,32 @@ services:
       - ./k6:/scripts:ro
       - ./results:/results
     command: ["run", "--out", "experimental-prometheus-rw", "/scripts/hub-workflows.js"]
+
+  # Dedicated submission-first benchmark, not the onboarding E2E poller.
+  k6-offboarding:
+    image: grafana/k6:1.8.2
+    profiles: ["offboarding-load"]
+    depends_on:
+      hub:
+        condition: service_healthy
+      processor:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    environment:
+      HUB_URL: http://hub:5100
+      HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
+      K6_OFFBOARD_COUNT: ${K6_OFFBOARD_COUNT:-1000}
+      K6_OFFBOARD_VUS: ${K6_OFFBOARD_VUS:-100}
+      K6_OFFBOARD_TIMEOUT_SECONDS: ${K6_OFFBOARD_TIMEOUT_SECONDS:-360}
+      K6_OFFBOARD_RUN_ID: ${K6_OFFBOARD_RUN_ID:-}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: "p(95),p(99),max"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "false"
+    volumes:
+      - ./k6:/scripts:ro
+      - ./results:/results
+    command: ["run", "--out", "experimental-prometheus-rw", "/scripts/offboarding-unconstrained.js"]
 
 volumes:
   hub_postgres:
