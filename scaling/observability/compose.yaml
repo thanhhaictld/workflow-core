@@ -279,12 +279,10 @@ services:
   # Dedicated submission-first benchmark, not the onboarding E2E poller.
   k6-offboarding:
     image: grafana/k6:1.8.2
-    profiles: ["offboarding-load"]
+    profiles: ["offboarding-k6"]
     depends_on:
       hub:
         condition: service_healthy
-      processor:
-        condition: service_started
       prometheus:
         condition: service_started
     environment:
