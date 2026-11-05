@@ -71,32 +71,7 @@ services:
     depends_on:
       monitor-api-migrate:
         condition: service_completed_successfully
-      # Separate native-only workflow processor used by the unconstrained
-  # offboarding benchmark. No PostgreSQL connection and no AddActivity policy.
-  # Profile keeps the default onboarding/observability stack unchanged.
-  # Scale with --profile offboarding-load up -d --scale processor=8 --scale provisioner=0
-  processor:
-    profiles: ["offboarding-load"]
-    build:
-      context: ../..
-      dockerfile: scaling/observability/Dockerfile.app
-      args:
-        PROJECT: scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj
-    command: ["WorkflowCore.Offboarding.Processor.dll"]
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
-      WORKFLOW_WORKERS: "${OFFBOARD_PROCESSOR_WORKERS:-16}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_METRIC_EXPORT_INTERVAL: "5000"
-      WFC_OTEL_LOGS_ENABLED: "true"
-    restart: unless-stopped
-
-  otel-collector:
+      otel-collector:
         condition: service_started
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
@@ -194,6 +169,29 @@ services:
       WFC_OTEL_LOGS_ENABLED: "true"
     restart: unless-stopped
 
+  # Native-only offboarding processor: 8 replicas, no DB credentials,
+  # no routed activities, and no explicit per-resource/FIFO policy.
+  processor:
+    profiles: ["offboarding-load"]
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj
+    command: ["WorkflowCore.Offboarding.Processor.dll"]
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      WFC_HUB_URL: http://hub:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
+      WORKFLOW_WORKERS: "${OFFBOARD_PROCESSOR_WORKERS:-16}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
+      WFC_OTEL_LOGS_ENABLED: "true"
+    restart: unless-stopped
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
@@ -276,7 +274,7 @@ services:
       - ./results:/results
     command: ["run", "--out", "experimental-prometheus-rw", "/scripts/hub-workflows.js"]
 
-  # Dedicated submission-first benchmark, not the onboarding E2E poller.
+  # On-demand submission-first offboarding benchmark.
   k6-offboarding:
     image: grafana/k6:1.8.2
     profiles: ["offboarding-k6"]
