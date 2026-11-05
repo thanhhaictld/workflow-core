@@ -14,6 +14,12 @@ internal sealed class HubExecutionSession(string hub)
     public List<HubNativeHistory> History { get; }=[];
     public WorkflowInstance Workflow { get; set; }=null!;
     public Dictionary<int,string> StepNames { get; set; }=[];
+    // StepStarted and StepCompleted must occur in the SAME executor iteration
+    // to measure native processing, never time spent suspended on an event.
+    public Dictionary<string,DateTime> NativeStepStarts { get; }=new(StringComparer.Ordinal);
+    public HashSet<int> ExcludedTimingSteps { get; set; }=[];
+    public string WorkerId { get; set; }="";
+    public long LeaseEpoch { get; set; }
 }
 public sealed class HubExecutionSessionAccessor
 {
@@ -31,6 +37,25 @@ internal sealed class HubNativeLifeCyclePublisher(HubExecutionSessionAccessor se
         var pointerId=evt switch { StepStarted s=>s.ExecutionPointerId,StepCompleted s=>s.ExecutionPointerId,
             WorkflowError e=>e.ExecutionPointerId,_=>"" };
         var pointer=session.Workflow.ExecutionPointers.FindById(pointerId);
+        var observedAt=DateTime.UtcNow;
+        // Only record a true in-process native step span. Routed activities
+        // have their own persisted Hub lease attempts; their event wait must
+        // never be misrepresented as worker execution time.
+        if(pointer is not null && !session.ExcludedTimingSteps.Contains(pointer.StepId))
+        {
+            if(evt is StepStarted)
+                session.NativeStepStarts[pointerId]=observedAt;
+            else if(evt is StepCompleted && session.NativeStepStarts.Remove(pointerId,out var startedAt))
+            {
+                session.History.Add(new("NativeStepSpan",pointerId,pointer.StepId,
+                    pointer.PredecessorId,pointer.Scope.ToArray(),pointer.RetryCount,
+                    JsonSerializer.SerializeToElement(new {
+                        startedAt,finishedAt=observedAt,workerId=session.WorkerId,
+                        epoch=session.LeaseEpoch,attemptNumber=pointer.RetryCount+1
+                    },HubNativeExecutor.JsonOptions),
+                    session.StepNames.GetValueOrDefault(pointer.StepId)));
+            }
+        }
         session.History.Add(new(evt.GetType().Name,pointerId,pointer?.StepId??0,pointer?.PredecessorId,
             pointer?.Scope.ToArray()??[],pointer?.RetryCount??0,
             JsonSerializer.SerializeToElement(evt,evt.GetType(),HubNativeExecutor.JsonOptions),
@@ -105,8 +130,14 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
         if(workflow.Id!=runtime.Id.ToString() || workflow.WorkflowDefinitionId!=runtime.DefinitionId || workflow.Version!=runtime.Version)
             throw new InvalidOperationException("Snapshot definition identity mismatch");
         workflow.Status=Enum.Parse<WorkflowStatus>(runtime.Status);
-        var session=new HubExecutionSession(runtime.HubId){Workflow=workflow};
+        var session=new HubExecutionSession(runtime.HubId){
+            Workflow=workflow,WorkerId=owner,LeaseEpoch=lease.Epoch
+        };
         session.StepNames=definition.Steps.ToDictionary(s=>s.Id,s=>catalog.Route(runtime.HubId,s.BodyType)?.Policy.ActivityType??s.Name??s.BodyType.Name);
+        session.ExcludedTimingSteps=definition.Steps
+            .Where(s=>catalog.Route(runtime.HubId,s.BodyType) is not null ||
+                s.BodyType.FullName?.StartsWith("WorkflowCore.Primitives.Activity",StringComparison.Ordinal)==true)
+            .Select(s=>s.Id).ToHashSet();
         var before=workflow.ExecutionPointers.ToDictionary(p=>p.Id,p=>p.Status);
         sessions.Current.Value=session;
         try
