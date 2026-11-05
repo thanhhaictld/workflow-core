@@ -105,8 +105,12 @@ during local development.
 
 The **Workflow definitions** page at `/definitions` displays snapshots
 derived from the registered C# fluent workflow definitions. Choose a definition
-to compare any two archived versions in an **Added / Removed / Modified**
-metadata diff, review individual step schemas, and copy normalized JSON.
+to view or copy an archived version as YAML, or compare two versions in a
+split or unified text diff. The YAML is generated from the complete archived
+JSON snapshot; it is read-only and is not an executable workflow definition.
+Expressions, closures, and step-body implementations are omitted, so matching
+metadata does not prove equivalent behavior. Numeric step ID shifts can produce
+additional text changes when steps are inserted.
 
 The catalog is **read-only for operators**. It never publishes, edits,
 deprecates, deploys or selects executable versions. Workflow Core's code-first
@@ -114,7 +118,7 @@ registry remains the sole authority for execution. Same-version metadata drift
 is surfaced as a warning, without blocking workflow starts.
 
 The `tenant-onboarding-versioned` C# sample defines v1 and v2; the second
-adds `ConfigureAccessStep`. Use it to review a meaningful structural diff.
+adds `ConfigureAccessStep`. Use it to review a meaningful text diff.
 A separate demo API can start either C# version for runtime tests.
 
 Only the separate **instance-level** suspend/resume/terminate controls are

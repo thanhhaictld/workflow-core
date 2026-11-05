@@ -100,6 +100,28 @@ The PowerShell acceptance script asserts that all three branch roots have
 durable `StepAttemptStarted` events and the Sequence container's join has a
 committed `StepCompleted` record before the overall workflow completes.
 
+## Hub provisioner parallel sample
+
+The Hub provisioner also registers `tenant-onboarding-parallel` version 1 in
+the `onboarding` Hub. It follows the same three two-step branches and join,
+then checks that database, roles, and quota branches finished before activation
+and the welcome activity. Activities are simulated and do not provision real
+resources. This is a separate Hub workflow from the legacy sample above; Hub
+runs appear under **Workflow runs**, not in the legacy definition archive.
+
+Rebuild and start the observability stack from the repository root as described
+in [the observability guide](../observability/README.md), then run a small
+end-to-end workload (the existing `.env` supplies the Hub token):
+
+```powershell
+docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env --profile load run --rm -e K6_DEFINITION=tenant-onboarding-parallel -e K6_VERSION=1 -e K6_WORKFLOWS=1 -e K6_VUS=1 k6
+```
+
+Open `http://localhost:3002/workflows?hub=onboarding` and select the new run.
+The k6 check validates branch completion, activation, and welcome in the
+persisted native snapshot. Hub trace rendering uses recorded activities; it
+does not currently provide the legacy topology fork/join view.
+
 ## Run
 
 ```powershell

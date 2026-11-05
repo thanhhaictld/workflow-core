@@ -108,7 +108,7 @@ export default function (data) {
 
     if (result.state === "Complete") {
       let nativeData = null;
-      if (VERSION >= 2) {
+      if (VERSION >= 2 || DEFINITION === "tenant-onboarding-parallel") {
         const runtime = http.get(BASE + "/api/hub/workflows/" + workflowId + "/native-runtime", {
           headers: headers(), tags: { name: "hub_native_result" }, timeout: "15s",
         });
@@ -116,7 +116,11 @@ export default function (data) {
       }
       const outcome = check(result, {
         "all workflow steps completed": r =>
-          VERSION >= 2 ? nativeData !== null && nativeData.Validated === true &&
+          DEFINITION === "tenant-onboarding-parallel" ? nativeData !== null &&
+            nativeData.Validated === true && nativeData.DatabaseReady === true &&
+            nativeData.RolesReady === true && nativeData.QuotaReady === true &&
+            nativeData.Activated === true && nativeData.WelcomeSent === true
+          : VERSION >= 2 ? nativeData !== null && nativeData.Validated === true &&
             nativeData.WorkspaceId === "workspace-" + tenant && nativeData.WelcomeSent === true
           : DEFINITION === "tenant-onboarding-timer"
             ? r.nextStep === 4 && r.stepCount === 4 &&

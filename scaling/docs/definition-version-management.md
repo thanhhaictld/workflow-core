@@ -9,8 +9,9 @@ controller. The API and worker register Workflow Core definitions as before,
 and the runtime selects the executable version through IWorkflowRegistry.
 
 The version-review UI is at `/definitions` and `/definitions/{id}`.
-It provides a searchable catalog of captured versions, normalized schema JSON,
-and side-by-side Added / Removed / Modified metadata changes.
+It provides a searchable catalog of captured versions, a read-only YAML view,
+and split or unified text comparison of archived snapshots. The JSON archive and
+structural diff API remain available to existing clients.
 
 ## Data flow
 
@@ -23,8 +24,9 @@ Workflow version is pinned at start"]
   Registry -. "Best-effort snapshot extraction" .-> Snapshot["Normalized metadata + SHA256"]
   Snapshot --> Postgres[("PostgreSQL definition_version
 read-only archive")]
-  Postgres --> Diff["GET /api/definitions/{id}/diff"]
-  Diff --> UI["Metadata comparison UI"]
+  Postgres --> Versions["GET /api/definitions/{id}/versions"]
+  Versions --> UI["YAML viewer and text diff"]
+  Postgres --> Diff["Structural diff API"]
 ~~~
 
 **No edge from the metadata store to the runtime.** If capturing metadata
@@ -66,7 +68,14 @@ the UI and its endpoints are read-only.
 
 ## Comparison algorithm
 
-Two archived versions are flattened into normalized metadata paths. Changes
+The monitor serializes the complete archived schemas to deterministic YAML and
+compares their lines. Numeric step ID shifts can produce additional changes;
+text comparison does not match steps by ExternalId or establish behavioral
+compatibility. YAML omits executable expressions, closures and step-body code.
+The archive can differ from the currently registered C# metadata when a
+same-version drift warning is shown.
+
+The separate structural diff API continues to compare two archived versions are flattened into normalized metadata paths. Changes
 are classified as `Added`, `Removed`, or `Modified`, with before/after
 JSON values. Steps match by stable `ExternalId` if set, otherwise numeric
 step ID. Inserting steps can shift IDs and create multiple related diff rows.
