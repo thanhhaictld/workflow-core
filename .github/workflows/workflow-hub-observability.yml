@@ -169,6 +169,32 @@ jobs:
           replicas="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
           test "$replicas" -eq 8
+          # The offboarding processor publishes through Hub REST. The Definitions
+          # page must use that persisted catalog, not only the legacy archive.
+          for i in {1..30}; do
+            curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json
+            if python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
+          assert any(d['hubId']=='offboarding' and
+                     d['definitionId']=='tenant-offboarding-fast' and
+                     d['version']==1 and d['executionMode']=='native' and
+                     len(d['steps'])==3 and len(d['metadata']['steps'])==3
+                     for d in defs), defs
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
+          assert any(d['hubId']=='offboarding' and
+                     d['definitionId']=='tenant-offboarding-fast' and
+                     d['version']==1 and len(d['steps'])==3 for d in defs),defs
+          print('PASS: offboarding definition is published and visible via the authenticated Next.js Hub registry')
+          PY
+          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions >/dev/null
+          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions/hub/offboarding/tenant-offboarding-fast >/dev/null
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-k6 run --rm \
             -e K6_OFFBOARD_COUNT=40 -e K6_OFFBOARD_VUS=16 \
