@@ -83,7 +83,10 @@ public static class HubGatewayEndpoints
             var remote=await published.DefinitionsAsync(ct);
             return Results.Ok(registry.Describe().Cast<object>().Concat(
                 remote.Select(d=> (object)new {
-                    d.HubId,d.DefinitionId,d.Version,d.Partitions,
+                    d.HubId,d.DefinitionId,d.Version,d.Partitions,d.StepCount,
+                    ExecutionMode=d.Metadata.TryGetProperty("executionMode",out var mode)
+                        ? mode.GetString() : "remote",
+                    Metadata=d.Metadata,
                     Steps=d.Metadata.TryGetProperty("steps",out var steps)
                         ? steps : default(System.Text.Json.JsonElement)
                 })));
