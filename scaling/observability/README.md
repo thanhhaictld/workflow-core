@@ -55,6 +55,24 @@ docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env ps
 ~~~
 
+GNU Make shortcuts are also available:
+
+~~~bash
+make obs-setup                      # create .env if it does not exist
+# Edit scaling/observability/.env to set a local token and password.
+make obs-up                         # build and start with four Provisioners
+make obs-scale PROVISIONERS=6       # change the number of Provisioners
+make obs-ps
+make obs-stress-test                # use K6_* settings from .env
+make obs-down                       # retain named volumes
+make obs-clean                      # delete stack and named volumes
+~~~
+
+Set `OBS_ENV_FILE` or `OBS_COMPOSE_FILE` to use different files. Compose
+environment variables override values in the env file as usual. For example,
+`K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
+that run. `make up` remains the separate PowerShell development stack.
+
 PowerShell:
 
 ~~~powershell
@@ -215,8 +233,9 @@ docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env down
 ~~~
 
-This keeps all named data volumes. Only add -v to down if you **explicitly
-intend to erase** local workflow, PostgreSQL, Prometheus and Grafana state.
+This keeps all named data volumes. Run `make obs-clean` (or add `--volumes`
+to `down`) only when you intend to erase the Compose project’s named volumes,
+including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ## Caveats
 
