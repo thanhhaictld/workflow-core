@@ -519,7 +519,8 @@ public sealed class HubWorkflowStore(
                 // Remote activity dispatches already have a persisted lease
                 // trace. Do not create overlapping synthetic native spans.
                 if(grouped.Any(t=>t.StepIndex==index &&
-                    (t.ExecutionPointerId is null || t.ExecutionPointerId==pointer)))
+                    (t.DispatchKey is not null || t.ExecutionPointerId is null ||
+                     t.ExecutionPointerId==pointer)))
                     continue;
                 if(!nativeRows.TryGetValue(key,out var entry))
                     entry=(task,name,events.GetInt32(7),new List<HubWorkflowTraceAttempt>());
