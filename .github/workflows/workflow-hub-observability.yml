@@ -229,17 +229,20 @@ jobs:
             -d '{"tenantId":"smoke-legacy-otel","organizationName":"Smoke Test"}' \
             http://127.0.0.1:5000/api/demo/onboardings > /tmp/legacy-created.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&status=Complete&take=10&page=1' > /tmp/unified-onboarding.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&take=10&page=2' > /tmp/unified-hub-page2.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=legacy' > /tmp/unified-legacy.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=all' > /tmp/unified-all.json
           python3 - <<'PY'
           import json
           hub=json.load(open('/tmp/unified-hub.json'))
+          onboarding=json.load(open('/tmp/unified-onboarding.json'))
           p2=json.load(open('/tmp/unified-hub-page2.json'))
           legacy=json.load(open('/tmp/unified-legacy.json'))
           combined=json.load(open('/tmp/unified-all.json'))
           assert hub['total']>=20, hub
-          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in hub['items'])
+          assert all(x['source']=='hub' and x['status']=='Complete' for x in hub['items'])
+          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in onboarding['items'])
           assert p2['items'] and p2['total']>=20
           assert legacy['total']>=1, legacy
           assert all(x['source']=='legacy' for x in legacy['items'])
@@ -250,7 +253,7 @@ jobs:
           print('PASS: unified list returns both sources and hub/status/pagination filters')
           # The preceding timer test also creates a completed 4-step workflow.
           # Only validate the 3-step activity workload in this assertion.
-          selected=next(x for x in hub['items'] if x['definitionId']=='tenant-onboarding')
+          selected=next(x for x in onboarding['items'] if x['definitionId']=='tenant-onboarding')
           open('/tmp/hub-workflow-id','w').write(selected['id'])
           PY
           workflow_id="$(cat /tmp/hub-workflow-id)"
