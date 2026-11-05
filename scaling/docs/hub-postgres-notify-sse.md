@@ -124,7 +124,9 @@ other clients, migrations and PostgreSQL overhead.
 
 The LISTEN connection requires session affinity. Do not use a PgBouncer
 **transaction-pooling** address for it. Use a direct PostgreSQL endpoint or a
-session-pooled endpoint.
+session-pooled endpoint. If the task pool uses a different address, configure
+`WFC_HUB_PG_NOTIFY_CONNECTION` with a direct/session-pooled PostgreSQL
+connection string for this listener only. It does not change the task pool.
 
 ## 4. Invariants and recovery
 
