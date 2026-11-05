@@ -88,7 +88,7 @@ docker compose -f scaling/observability/compose.yaml \
 
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
-  --profile offboarding-load run --rm \
+  --profile offboarding-k6 run --rm \
   -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
   -e K6_OFFBOARD_TIMEOUT_SECONDS=360 k6-offboarding
 ```
