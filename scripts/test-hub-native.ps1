@@ -14,7 +14,8 @@ $runId = 'native-smoke-' + [guid]::NewGuid().ToString('N')
 $managed = [Collections.Generic.List[object]]::new()
 
 function Start-ManagedHost([string]$Project, [switch]$RegisterOnly) {
-    $binary = Join-Path $root "scaling/sample/onboarding/$Project/bin/Release/net10.0/$Project.dll"
+    $projectDir = if ($Project -eq 'WorkflowCore.Hub.Server') { "scaling/src/$Project" } else { "scaling/sample/onboarding/$Project" }
+    $binary = Join-Path $root "$projectDir/bin/Release/net10.0/$Project.dll"
     if (-not (Test-Path -LiteralPath $binary)) { throw "Build the Release scaling solution first: $binary" }
     $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute = $false
@@ -29,7 +30,7 @@ function Start-ManagedHost([string]$Project, [switch]$RegisterOnly) {
     $start.Environment['OTEL_SDK_DISABLED'] = 'true'
     $start.Environment.Remove('WFC_PG') | Out-Null
     $start.Environment.Remove('WFC_TEST_PG') | Out-Null
-    if ($Project -eq 'WorkflowCore.Hub.Host') {
+    if ($Project -eq 'WorkflowCore.Hub.Server') {
         $start.Environment['WFC_PG'] = $ConnectionString
         $start.ArgumentList.Add('--urls')
         $start.ArgumentList.Add($ApiUrl)
@@ -96,32 +97,22 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
 try {
     if ([string]::IsNullOrWhiteSpace($HubToken)) { throw 'Set WFC_HUB_AUTH_TOKEN or pass -HubToken' }
     if ($ManageHosts) {
-        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 012 applied' }
-        $hub = Start-ManagedHost WorkflowCore.Hub.Host
+        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 013 applied' }
+        $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'Hub readiness'
         $publisher = Start-ManagedHost WorkflowCore.Provisioner.Host -RegisterOnly
         if (-not $publisher.Process.WaitForExit(30000) -or $publisher.Process.ExitCode -ne 0) { throw 'Register-only publication failed' }
         $provisioner = Start-ManagedHost WorkflowCore.Provisioner.Host
     }
-    $legacy = Start-Workflow 1
-    $native = Start-Workflow 2
-    Wait-Completed $legacy
+    $native = Start-Workflow 3
     Wait-Completed $native
-    $legacyResult = (Call-Hub GET "workflows/$legacy").results
-    if (-not $legacyResult.'0'.validated -or -not $legacyResult.'1'.provisioned -or -not $legacyResult.'2'.welcomeSent) {
-        throw 'Sequential v1 compatibility failed'
-    }
-    if ($legacyResult.'0'.tenantId -ne "$runId-v1" -or $legacyResult.'1'.tenantId -ne "$runId-v1" -or
-        $legacyResult.'2'.tenantId -ne "$runId-v1" -or $legacyResult.'1'.PSObject.Properties.Name -contains 'workspaceId') {
-        throw 'Sequential v1 result contract changed'
-    }
     Assert-NativeResult $native 3
-    $timer = Start-Workflow 2 tenant-onboarding-timer
+    $timer = Start-Workflow 3 tenant-onboarding-timer
     Wait-For { @((Call-Hub GET "workflows/$timer/history") | Where-Object eventType -eq TimerScheduled).Count -gt 0 } 'durable timer wait'
     if ($ManageHosts) {
         Stop-ManagedHost $provisioner
         Stop-ManagedHost $hub
-        $hub = Start-ManagedHost WorkflowCore.Hub.Host
+        $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'restarted Hub readiness'
         $provisioner = Start-ManagedHost WorkflowCore.Provisioner.Host
     }
@@ -129,7 +120,7 @@ try {
     Assert-NativeResult $timer 4
     $history = @(Call-Hub GET "workflows/$timer/history")
     if (@($history | Where-Object eventType -eq TimerFired).Count -lt 1) { throw 'Durable timer did not fire' }
-    Write-Output "PASS: v1/v2 coexistence, native mappings, idempotent starts, durable wait, pointer/attempt history; process restart=$ManageHosts"
+    Write-Output "PASS: native v3 mappings, idempotent starts, durable wait, pointer/attempt history; process restart=$ManageHosts"
     Write-Output "Native workflow: $native; timer workflow: $timer"
 } catch {
     foreach ($hostState in $managed) {

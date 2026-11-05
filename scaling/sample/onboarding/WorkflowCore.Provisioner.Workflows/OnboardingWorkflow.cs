@@ -14,7 +14,7 @@ public sealed class OnboardingData
 public sealed class OnboardingWorkflow : IWorkflow<OnboardingData>
 {
     public string Id=>"tenant-onboarding";
-    public int Version=>2;
+    public int Version=>3;
     public void Build(IWorkflowBuilder<OnboardingData> builder)=>builder
         .StartWith<ValidateTenant>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.Validated,s=>s.Validated)
         .Then<ProvisionTenant>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WorkspaceId,s=>s.WorkspaceId)
@@ -24,7 +24,7 @@ public sealed class OnboardingWorkflow : IWorkflow<OnboardingData>
 public sealed class OnboardingTimerWorkflow : IWorkflow<OnboardingData>
 {
     public string Id=>"tenant-onboarding-timer";
-    public int Version=>2;
+    public int Version=>3;
     public void Build(IWorkflowBuilder<OnboardingData> builder)=>builder
         .StartWith<ValidateTenant>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.Validated,s=>s.Validated)
         .Delay(d=>TimeSpan.FromSeconds(2))
@@ -74,3 +74,4 @@ public sealed class CapturePayment : StepBodyAsync
     public override async Task<ExecutionResult> RunAsync(IStepExecutionContext context)
     { await Task.Delay(300,context.CancellationToken);Captured=true;return ExecutionResult.Next(); }
 }
+

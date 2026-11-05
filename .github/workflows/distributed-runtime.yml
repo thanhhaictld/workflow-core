@@ -8,7 +8,7 @@ on:
       - 'scaling/src/WorkflowCore.Hub/**'
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Hub.Host/**'
+      - 'scaling/src/WorkflowCore.Hub.Server/**'
       - 'src/WorkflowCore/**'
       - 'scaling/monitor/api/**'
       - 'scaling/sample/onboarding/WorkflowCore.Scaling.Samples/**'
@@ -59,19 +59,20 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
         run: dotnet build scaling/src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
       - name: Build standalone Hub gateway
-        run: dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
+        run: dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
       - name: Build benchmark API
         run: dotnet build scaling/monitor/api/WorkflowCore.Scaling.Api.csproj -c Release
       - name: Build standalone sample worker
         run: dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
       - name: Restore and test
         run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --logger "console;verbosity=normal"
-      - name: Native combined-host crash recovery and sequential coexistence
+      - name: Native combined-host crash recovery
         env:
           WFC_HUB_AUTH_TOKEN: ci-native-hub-secret-please-change-2026
         run: pwsh -NoProfile -File scripts/test-hub-native.ps1 -ManageHosts -ApiUrl http://127.0.0.1:5102
@@ -145,7 +146,7 @@ jobs:
           fi
           # Hub runs as a separate deployable process with its own bounded pool.
           WFC_PG="Host=127.0.0.1;Port=55432;Database=workflow;Username=workflow;Password=workflow_dev_only" \
-            dotnet run --no-launch-profile --project scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
+            dotnet run --no-launch-profile --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
             --urls http://127.0.0.1:5100 > /tmp/hub-standalone.log 2>&1 &
           hub_pid=$!
           for attempt in {1..40}; do
@@ -249,11 +250,11 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
       - name: Build Hub, remote worker and performance harness
         run: |
-          dotnet build scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj -c Release
+          dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj -c Release
-          dotnet build scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj -c Release
           dotnet build scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj -c Release
       - name: Stage 1000 workflows, then execute all via DB-free workers
@@ -261,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           dotnet run --no-build -c Release \
-            --project scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj \
+            --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
             --urls http://127.0.0.1:5100 > /tmp/perf-hub.log 2>&1 &
           hub_pid=$!
           worker_pids=''
@@ -275,11 +276,11 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5100/health/ready
-          # Publish immutable workflow/activity metadata without starting the processors.
+          # Publish immutable workflow/activity metadata without starting the Provisioner lanes.
           env -u WFC_PG dotnet run --no-build -c Release \
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             -- --register-only
-          # No processors yet: all 1000 workflow instances must be durably pending.
+          # No workflow lanes yet: all 1000 workflow instances must be durably pending.
           if ! WFC_LOAD_PHASE=submit dotnet run --no-build -c Release \
             --project scaling/sample/onboarding/WorkflowCore.Hub.LoadTest/WorkflowCore.Hub.LoadTest.csproj; then
             tail -150 /tmp/perf-hub.log
@@ -320,5 +321,4 @@ jobs:
             /tmp/workflow-hub-1000.json
             /tmp/perf-hub.log
             /tmp/perf-worker-*.log
-            /tmp/perf-processor-*.log
           if-no-files-found: warn

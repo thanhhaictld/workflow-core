@@ -31,8 +31,9 @@ public sealed class HubRemoteSchedulerTests
         });
         Assert.True(await defs.RegisterAsync(new(hub,"onboard",1,8,3,metadata),default));
         Assert.False(await defs.RegisterAsync(new(hub,"onboard",1,8,3,metadata),default));
-        await Assert.ThrowsAsync<InvalidOperationException>(async()=>await defs.RegisterAsync(
-            new(hub,"onboard",1,8,2,metadata),default));
+        Assert.False(await defs.RegisterAsync(new(hub,"onboard",1,8,2,metadata),default));
+        Assert.Equal(2,(await defs.GetAsync(hub,"onboard",1,default))!.StepCount);
+        Assert.False(await defs.RegisterAsync(new(hub,"onboard",1,8,3,metadata),default));
         Assert.True(await defs.RegisterActivityAsync(new(hub,"validate",1,8,10,10),default));
         Assert.True(await defs.RegisterActivityAsync(new(hub,"provision",1,8,10,10,
             "tenant","tenantId",1,true),default));

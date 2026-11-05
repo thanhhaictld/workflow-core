@@ -12,7 +12,7 @@ const VUS = Math.max(1, Number(__ENV.K6_VUS || 100));
 const TIMEOUT = Math.max(15, Number(__ENV.K6_MAX_WAIT_SECONDS || 180));
 const MODE = __ENV.K6_MODE || "e2e";
 const DEFINITION = __ENV.K6_DEFINITION || "tenant-onboarding";
-const VERSION = Number(__ENV.K6_VERSION || 2);
+const VERSION = Number(__ENV.K6_VERSION || 3);
 
 const starts = new Counter("hub_workflows_started");
 const completed = new Counter("hub_workflows_completed");

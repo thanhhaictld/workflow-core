@@ -1,9 +1,12 @@
 # Workflow Hub observability and local k6 stress lab
 
 This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
-The generic Hub includes an embedded durable timer scheduler. The legacy
-Workflow Core IWorkflow<T> runtime remains separate; the new remote execution
-adapter currently supports a code-first sequential Activity/Delay workflow slice.
+The generic Hub includes an embedded durable timer scheduler. The combined Provisioner runs native `IWorkflow<T>` workflows and typed activities
+over REST/SSE. See [native runtime contracts](../docs/hub-native-fluent-runtime.md).
+Workflow code lives in a separate assembly so host policy edits do not alter its
+implementation fingerprint. New sample runs use v3; existing v1/v2 data is retained
+and unfinished old runs require their matching binary. If reusing an existing
+`.env`, set `K6_VERSION=3` for new native runs.
 
 ## Architecture
 
@@ -14,8 +17,8 @@ flowchart LR
   UI -->|legacy /backend proxy| API["Workflow Core monitor API"]
   API --> P
   H --> P[("PostgreSQL")]
-  H -. SSE workflow tasks .-> PR["Workflow Processor"]
-  H -. SSE activity tasks .-> W["Activity Provisioner"]
+  H -. SSE workflow tasks .-> PR["Provisioner workflow lane"]
+  H -. SSE activity tasks .-> W["Provisioner activity lane"]
   PR -->|REST transition commands| H
   W -->|REST claim/complete| H
   H -->|local internal module| S["Embedded Timer Scheduler"]
@@ -44,13 +47,31 @@ Requires Docker Desktop or Docker Engine + Compose v2.
 cp scaling/observability/.env.example scaling/observability/.env
 # Edit scaling/observability/.env to set strong local token/password.
 
-docker compose -f scaling/observability/compose.yaml `
-  --env-file scaling/observability/.env `
+docker compose -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env \
   up -d --build --scale provisioner=4
 
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env ps
 ~~~
+
+GNU Make shortcuts are also available:
+
+~~~bash
+make obs-setup                      # create .env if it does not exist
+# Edit scaling/observability/.env to set a local token and password.
+make obs-up                         # build and start with four Provisioners
+make obs-scale PROVISIONERS=6       # change the number of Provisioners
+make obs-ps
+make obs-stress-test                # use K6_* settings from .env
+make obs-down                       # retain named volumes
+make obs-clean                      # delete stack and named volumes
+~~~
+
+Set `OBS_ENV_FILE` or `OBS_COMPOSE_FILE` to use different files. Compose
+environment variables override values in the env file as usual. For example,
+`K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
+that run. `make up` remains the separate PowerShell development stack.
 
 PowerShell:
 
@@ -176,7 +197,7 @@ Prometheus labels.
 
 ### Traces and logs
 
-Grafana > Explore > Tempo: query workflow-hub, workflow-processor and
+Grafana > Explore > Tempo: query workflow-hub and
 workflow-provisioner services. Trace context flows from HTTP through Hub and worker
 REST calls; the never-ending SSE stream is excluded from server spans.
 Grafana > Explore > Loki: inspect OTLP application logs.
@@ -195,7 +216,7 @@ curl 'http://localhost:9090/api/v1/query?query=workflow_hub_workflows_completed_
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_process_working_set_bytes'
 docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env logs --tail=100 \
-  hub processor provisioner monitor-api monitor otel-collector prometheus grafana tempo loki
+  hub provisioner monitor-api monitor otel-collector prometheus grafana tempo loki
 ~~~
 
 All host-published ports bind to loopback. PostgreSQL, Loki and the worker
@@ -212,8 +233,9 @@ docker compose -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env down
 ~~~
 
-This keeps all named data volumes. Only add -v to down if you **explicitly
-intend to erase** local workflow, PostgreSQL, Prometheus and Grafana state.
+This keeps all named data volumes. Run `make obs-clean` (or add `--volumes`
+to `down`) only when you intend to erase the Compose project’s named volumes,
+including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ## Caveats
 

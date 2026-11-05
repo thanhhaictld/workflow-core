@@ -57,7 +57,13 @@ public sealed class HubRestClient : IDisposable
     public async Task RegisterAsync(string path,object payload,CancellationToken ct)
     {
         using var response=await Http.PostAsJsonAsync(path,payload,ct);
-        response.EnsureSuccessStatusCode();
+        if(!response.IsSuccessStatusCode)
+        {
+            var error=await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(
+                $"Hub registration {path} failed with {(int)response.StatusCode}: {error[..Math.Min(error.Length,1500)]}",
+                null,response.StatusCode);
+        }
     }
 
     public void Dispose()=>Http.Dispose();

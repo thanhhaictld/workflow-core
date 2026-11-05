@@ -14,7 +14,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'check-tools', 'bootstrap', 'setup', 'up', 'dev',
-        'api', 'worker', 'hub', 'remote-worker', 'processor', 'provisioner', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
+        'api', 'worker', 'hub', 'remote-worker', 'provisioner', 'ui', 'install', 'db-up', 'db-ef', 'db-schema', 'db-down',
         'db-logs', 'db-reset', 'seed', 'approve', 'test', 'build', 'check', 'clean')]
     [string] $Task = 'help',
     [ValidateRange(0, 65535)][int] $PgPort = 0,
@@ -38,8 +38,7 @@ $MonitorDir = Join-Path $RepoRoot 'scaling/monitor'
 $ComposeFile = Join-Path $RepoRoot 'scaling/compose.monitor.yaml'
 $ApiProject = Join-Path $RepoRoot 'scaling/monitor/api/WorkflowCore.Scaling.Api.csproj'
 $WorkerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/WorkflowCore.Scaling.Worker.csproj'
-$HubProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Hub.Host/WorkflowCore.Hub.Host.csproj'
-$ProcessorProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Processor.Host/WorkflowCore.Processor.Host.csproj'
+$HubProject = Join-Path $RepoRoot 'scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj'
 $ProvisionerProject = Join-Path $RepoRoot 'scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj'
 $TestProject = Join-Path $RepoRoot 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj'
 $NpmCommand = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
@@ -125,7 +124,8 @@ function Apply-DatabaseSchema {
     foreach ($migration in @('002_distributed_runtime.sql', '003_signal_delivery.sql',
         '004_request_dedupe.sql', '005_execution_history.sql', '006_definition_versions.sql',
         '007_hub_gateway.sql', '008_hub_workflows.sql', '009_hub_task_attempts.sql',
-        '010_hub_remote_scheduler.sql', '011_hub_monitor_sample.sql', '012_hub_native_runtime.sql')) {
+        '010_hub_remote_scheduler.sql', '011_hub_monitor_sample.sql', '012_hub_native_runtime.sql',
+        '013_activity_policy_revision.sql')) {
         Write-Host "Applying $migration..."
         Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
@@ -256,8 +256,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 worker      Run legacy PostgreSQL-backed worker
   pwsh ./scripts/dev.ps1 hub         Run standalone REST+SSE Hub gateway (set WFC_HUB_AUTH_TOKEN)
   pwsh ./scripts/dev.ps1 remote-worker  Run legacy Hub activity worker without PostgreSQL
-  pwsh ./scripts/dev.ps1 processor  Run optional v1 sequential processor (no DB)
-  pwsh ./scripts/dev.ps1 provisioner  Run combined workflow/activity Provisioner (no DB)
+  pwsh ./scripts/dev.ps1 provisioner  Run native workflow/activity Provisioner (no DB)
   pwsh ./scripts/dev.ps1 ui          Run Next.js dashboard only
   pwsh ./scripts/dev.ps1 seed        Create happy, retry, approval and parallel runs
   pwsh ./scripts/dev.ps1 approve -WorkflowId UUID   Signal onboarding approval
@@ -266,7 +265,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
-  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–012 migrations
+  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–013 migrations
   pwsh ./scripts/dev.ps1 db-down     Stop PostgreSQL (keep data)
   pwsh ./scripts/dev.ps1 db-logs     Tail PostgreSQL logs
   pwsh ./scripts/dev.ps1 db-reset -ConfirmReset    DELETE local DB volume
@@ -294,12 +293,6 @@ try {
         'worker'      { Start-Worker }
         'hub'         { Start-Hub }
         'remote-worker' { Start-RemoteWorker }
-        'processor'   {
-            if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
-            if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }
-            Remove-Item Env:WFC_PG -ErrorAction SilentlyContinue
-            Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $ProcessorProject)
-        }
         'provisioner' {
             if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
             if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }
