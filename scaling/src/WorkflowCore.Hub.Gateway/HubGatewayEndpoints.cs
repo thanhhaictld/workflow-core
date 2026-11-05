@@ -35,7 +35,8 @@ public static class HubGatewayEndpoints
         var notifyFlag = Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_ENABLED");
         if (notifyFlag != "0" && !string.Equals(notifyFlag, "false", StringComparison.OrdinalIgnoreCase))
             services.AddHostedService(sp => new PostgresHubNotificationListener(
-                connectionString, sp.GetRequiredService<HubReadinessBroadcaster>(),
+                Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_CONNECTION") ?? connectionString,
+                sp.GetRequiredService<HubReadinessBroadcaster>(),
                 sp.GetRequiredService<ILogger<PostgresHubNotificationListener>>()));
         services.AddHostedService<HubMetricsSampler>();
         return services;
