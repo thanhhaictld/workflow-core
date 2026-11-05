@@ -57,6 +57,15 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_store_duration_seconds", "s");
     public static readonly Counter<long> SseNotifications =
         Meter.CreateCounter<long>("workflow_hub_sse_notifications", "{notification}");
+    // Low-cardinality transport health; no hub/tenant identifiers on these instruments.
+    public static readonly Counter<long> PostgresHintsReceived =
+        Meter.CreateCounter<long>("workflow_hub_pg_notify_received", "{notification}");
+    public static readonly Counter<long> PostgresHintsForwarded =
+        Meter.CreateCounter<long>("workflow_hub_pg_notify_forwarded", "{notification}");
+    public static readonly Counter<long> PostgresListenerFailures =
+        Meter.CreateCounter<long>("workflow_hub_pg_notify_failures", "{failure}");
+    public static readonly UpDownCounter<long> PostgresListenersActive =
+        Meter.CreateUpDownCounter<long>("workflow_hub_pg_notify_listeners", "{connection}");
     public static readonly UpDownCounter<long> SseConnections =
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_connections", "{connection}");
     public static readonly UpDownCounter<long> WorkerInflight =

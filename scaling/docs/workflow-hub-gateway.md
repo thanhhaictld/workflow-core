@@ -69,8 +69,12 @@ For E2E: pwsh ./scripts/test-hub-gateway.ps1 -ApiUrl http://127.0.0.1:5100
 Claims specify workerId, hubs, exact capabilities [(hubId,taskType,version)],
 and maxTasks. SSE is an advisory wakeup, never proof of ownership. A new
 subscriber receives initial hints, with replay-by-claim on reconnect and
-periodic reconciliation. Hub replicas poll pending DB work every 2 seconds,
-rather than per-worker polling. Keepalive comments protect idle connections.
+periodic reconciliation. Hub replicas listen for PostgreSQL `wfc_hub_task_ready` notifications after
+migration 014 and immediately fan out advisory SSE hints for their subscribed hubs.
+A dedicated, non-pooled LISTEN connection per Hub pod is required. The existing
+2-second DB sweep remains the loss-recovery and timer/lease-expiry fallback.
+Keepalive comments protect idle connections. See
+[notification plan](hub-postgres-notify-sse.md).
 
 ## Code-first policy configuration
 
@@ -112,6 +116,7 @@ so downstream operations must use fencing or idempotency.
 The standalone Hub uses one NpgsqlDataSource with a maximum pool size of
 WFC_HUB_DB_POOL (default 12 per process). For a deployment with 8 Hub
 replicas, that means at most 96 connections from these Hub stores, plus
+one dedicated PostgreSQL LISTEN session per replica (when enabled), and any
 connections from any other services. REST/SSE worker processes use zero
 workflow-state PostgreSQL connections.
 

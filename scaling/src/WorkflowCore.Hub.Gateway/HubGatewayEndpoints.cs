@@ -30,6 +30,14 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubOperationsStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
+        // Each Gateway pod holds one dedicated LISTEN session. The existing
+        // PostgreSQL sweep remains authoritative if hints are lost or disabled.
+        var notifyFlag = Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_ENABLED");
+        if (notifyFlag != "0" && !string.Equals(notifyFlag, "false", StringComparison.OrdinalIgnoreCase))
+            services.AddHostedService(sp => new PostgresHubNotificationListener(
+                Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_CONNECTION") ?? connectionString,
+                sp.GetRequiredService<HubReadinessBroadcaster>(),
+                sp.GetRequiredService<ILogger<PostgresHubNotificationListener>>()));
         services.AddHostedService<HubMetricsSampler>();
         return services;
     }

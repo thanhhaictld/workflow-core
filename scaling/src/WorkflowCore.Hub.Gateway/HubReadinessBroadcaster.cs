@@ -52,6 +52,13 @@ public sealed class HubReadinessBroadcaster(
         }
     }
 
+    /// <summary>Catch up after LISTEN/reconnect; also used by the periodic safety sweep.</summary>
+    public async Task ReconcileReadyAsync(CancellationToken ct)
+    {
+        foreach (var hub in await store.ReadyHubsAsync(ct))
+            Publish(hub);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
@@ -62,8 +69,7 @@ public sealed class HubReadinessBroadcaster(
             {
                 await store.DeadLetterExpiredAsync(stoppingToken);
                 await workflows.ReconcileDeadAsync(stoppingToken);
-                foreach (var hub in await store.ReadyHubsAsync(stoppingToken))
-                    Publish(hub);
+                await ReconcileReadyAsync(stoppingToken);
                 // SSE comments keep intermediaries from closing truly idle streams.
                 if (++ticks % 5 == 0)
                     foreach (var client in _clients.Values)
