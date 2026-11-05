@@ -13,6 +13,8 @@ public sealed class PostgresHubNotificationListener : BackgroundService
 {
     public const string ChannelName = "wfc_hub_task_ready";
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
+    private int _listening;
+    public bool IsListening => Volatile.Read(ref _listening) == 1;
     private readonly string _connectionString;
     private readonly HubReadinessBroadcaster _readiness;
     private readonly ILogger<PostgresHubNotificationListener> _logger;
@@ -26,7 +28,8 @@ public sealed class PostgresHubNotificationListener : BackgroundService
         var options = new NpgsqlConnectionStringBuilder(connectionString)
         {
             Pooling = false,
-            ApplicationName = "workflow-hub-notify"
+            ApplicationName = "workflow-hub-notify",
+            KeepAlive = 30
         };
         _connectionString = options.ConnectionString;
         _readiness = readiness;
@@ -60,6 +63,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 await using (var command = new NpgsqlCommand("LISTEN " + ChannelName, connection))
                     await command.ExecuteNonQueryAsync(stoppingToken);
 
+                Volatile.Write(ref _listening, 1);
                 HubTelemetry.PostgresListenersActive.Add(1);
                 _logger.LogInformation("PostgreSQL work-ready notification listener connected");
                 retryDelay = TimeSpan.FromSeconds(1);
@@ -75,6 +79,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 }
                 finally
                 {
+                    Volatile.Write(ref _listening, 0);
                     HubTelemetry.PostgresListenersActive.Add(-1);
                     hints.Writer.TryComplete();
                     try { await publishing; }
