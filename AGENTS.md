@@ -76,9 +76,9 @@ The `up` command starts local services and may install dependencies.
 For monitor changes, run the relevant commands from `scaling/monitor/`:
 
 ```powershell
-npm run check-types
-npm run test:topology
-npm run build
+corepack pnpm run check-types
+corepack pnpm run test:topology
+corepack pnpm run build
 ```
 
 Choose tests that cover the behavior changed, including integration tests for

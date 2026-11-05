@@ -88,13 +88,13 @@ jobs:
         with:
           node-version: '22'
       - name: Install frontend dependencies
-        run: npm install --no-audit --no-fund
+        run: corepack pnpm install --frozen-lockfile
       - name: Check TypeScript
-        run: npm run check-types
+        run: corepack pnpm run check-types
       - name: Build monitoring dashboard
-        run: npm run build
+        run: corepack pnpm run build
       - name: Test parallel trace layout and nested joins
-        run: npm run test:topology
+        run: corepack pnpm run test:topology
 
   bootstrap-smoke:
     runs-on: ubuntu-latest
