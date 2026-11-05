@@ -7,7 +7,7 @@ using NpgsqlTypes;
 namespace WorkflowCore.Hub;
 
 /// <summary>
-/// Immutable definition and declarative concurrency registration for independent
+/// Workflow metadata and declarative concurrency registration for independent
 /// processor / provisioner processes. Persisted metadata is common to all Hub replicas.
 /// </summary>
 public sealed class HubDefinitionStore(HubTaskStore tasks)
@@ -28,21 +28,12 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             INSERT INTO wfc_scale.hub_definition
                 (hub_id,definition_id,version,partitions,step_count,metadata)
             VALUES (@hub,@definition,@version,@partitions,@steps,@metadata)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (hub_id,definition_id,version) DO UPDATE
+            SET partitions=EXCLUDED.partitions,step_count=EXCLUDED.step_count,metadata=EXCLUDED.metadata
+            RETURNING xmax=0
             """);
         BindDefinition(cmd, definition);
-        var inserted = await cmd.ExecuteNonQueryAsync(ct);
-        if (inserted == 1) return true;
-
-        await using var check = Source.CreateCommand("""
-            SELECT 1 FROM wfc_scale.hub_definition
-            WHERE hub_id=@hub AND definition_id=@definition AND version=@version
-              AND partitions=@partitions AND step_count=@steps AND metadata=@metadata
-            """);
-        BindDefinition(check, definition);
-        if (await check.ExecuteScalarAsync(ct) is null)
-            throw new InvalidOperationException("Immutable workflow definition/version mismatch");
-        return false;
+        return (bool)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
     private static void BindDefinition(NpgsqlCommand cmd, HubDefinitionRegistration definition)
@@ -114,28 +105,16 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
               @resource,@field,
               COALESCE((SELECT resource_capacity FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub AND resource_name=@resource LIMIT 1),@resourcecap),
               @fifo,@contract)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (hub_id,activity_type,version) DO UPDATE
+            SET partitions=EXCLUDED.partitions,resource_name=EXCLUDED.resource_name,
+                resource_field=EXCLUDED.resource_field,resource_fifo=EXCLUDED.resource_fifo,
+                contract=EXCLUDED.contract
+            RETURNING xmax=0
             """,db,tx);
         BindActivity(cmd, policy);
-        var inserted = await cmd.ExecuteNonQueryAsync(ct);
-        if (inserted == 0)
-        {
-            await using var immutable = new NpgsqlCommand("""
-                SELECT 1 FROM wfc_scale.hub_activity_registration
-                WHERE hub_id=@hub AND activity_type=@type AND version=@version
-                  AND partitions=@partitions
-                  AND resource_name IS NOT DISTINCT FROM @resource
-                  AND resource_field IS NOT DISTINCT FROM @field
-                  AND resource_fifo=@fifo
-                  AND contract IS NOT DISTINCT FROM @contract
-                """,db,tx);
-            BindActivity(immutable, policy);
-            if (await immutable.ExecuteScalarAsync(ct) is null)
-                throw new InvalidOperationException(
-                    $"Immutable activity routing/contract mismatch for {policy.HubId}/{policy.ActivityType}/v{policy.Version}");
-        }
+        var inserted = (bool)(await cmd.ExecuteScalarAsync(ct))!;
         await tx.CommitAsync(ct);
-        return inserted == 1;
+        return inserted;
     }
 
     internal static async Task LockPolicyHub(NpgsqlConnection db,NpgsqlTransaction tx,string hub,CancellationToken ct,bool shared=false)
@@ -147,8 +126,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         await gate.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>CAS update for operational capacities. Activity contract, key selection,
-    /// partition count, and FIFO semantics remain immutable within an activity version.</summary>
+    /// <summary>CAS update for operational capacities. Registration updates metadata
+    /// separately and preserves these operator-controlled capacities.</summary>
     public async Task<long> UpdateActivityCapacityAsync(HubActivityCapacityUpdate request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.HubId) || request.HubId.Length > 80 ||

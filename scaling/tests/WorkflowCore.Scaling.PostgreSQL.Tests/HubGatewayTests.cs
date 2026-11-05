@@ -356,9 +356,9 @@ public sealed class HubGatewayTests
             Assert.Equal(winner,current!.HubConcurrency);
             Assert.Equal(winner,current.ActivityConcurrency);
         }
-        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.RegisterActivityAsync(
+        Assert.False(await definitions.RegisterActivityAsync(
             registration with {StrictFifo=true},CancellationToken.None));
-        await Assert.ThrowsAsync<InvalidOperationException>(()=>definitions.RegisterActivityAsync(
+        Assert.False(await definitions.RegisterActivityAsync(
             registration with {Contract=JsonSerializer.SerializeToElement(new {changed=true})},CancellationToken.None));
     }
 

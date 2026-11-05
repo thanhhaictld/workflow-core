@@ -131,23 +131,25 @@ explicit compatibility deployments, but the sample does not publish or claim v1.
 Workflow definitions and step bodies live in the separate
 `WorkflowCore.Provisioner.Workflows` assembly. Keep operational policy and worker
 configuration in the Host: editing those settings no longer changes the assembly
-fingerprint of executable workflow code. Workflow/step implementation changes
-still require a new version. Capacity declarations are initial defaults; use the
+fingerprint of executable workflow code. Fingerprints are informational and do
+not restrict registration or execution. Capacity declarations are initial defaults; use the
 [revision-checked operator API](activity-policy-update.md) for live limits.
 
-V3 is necessary because the previously published v2 implementation fingerprint
-already differs from the current binary. Existing v1/v2 registrations, snapshots,
-and history are preserved, not overwritten or migrated. Unfinished old runs need
-the exact matching old binary in a separate compatibility deployment; the v3
-sample does not advertise those capabilities. Drain those runs before retiring
-that binary. Do not reset the PostgreSQL volume to resolve registration conflicts.
-
 Registrations contain application assembly fingerprints and property contracts.
+Publishing again under the same identity and version updates the current metadata
+and activity contract. A changed build ID does not block provisioner startup.
+Developers own backward compatibility with existing snapshots and activity payloads.
+For breaking changes, introduce a new version in code and keep earlier versions
+registered until their runs finish. Existing runs retain their version and durable
+state; registration never restarts them or migrates their snapshots.
+
 Workflow claims advertise definition/version capabilities, so a host cannot claim
-a pinned version it has not registered during rollout.
-Keep the exact registered code available for pinned runs. Increment versions for
-workflow code or activity contract changes. Publishing a different registration
-under an existing version fails. Live definition migration is not implemented.
+a version it has not registered. The current sample registers v3, so unfinished
+v1/v2 runs require application code that registers those versions. No exact binary
+match is enforced. Preserve the PostgreSQL volume when redeploying.
+
+Current registration metadata is updated in place. Drift detection and audit
+presentation can use this metadata without gating registration or execution.
 
 Compose starts `provisioner` with `WORKFLOW_WORKERS` and `ACTIVITY_WORKERS`.
 The Provisioner is the workflow processor and the activity worker.

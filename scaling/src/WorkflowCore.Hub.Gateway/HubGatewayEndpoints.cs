@@ -86,7 +86,7 @@ public static class HubGatewayEndpoints
             try {
                 var created=await store.RegisterAsync(definition,ct);
                 return created?Results.Created("/api/hub/definitions",new{registered=true}):
-                    Results.Ok(new{registered=true,idempotent=true});
+                    Results.Ok(new{registered=true});
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
@@ -97,7 +97,7 @@ public static class HubGatewayEndpoints
             try {
                 var created=await store.RegisterActivityAsync(policy,ct);
                 return created?Results.Created("/api/hub/activity-registrations",new{registered=true}):
-                    Results.Ok(new{registered=true,idempotent=true});
+                    Results.Ok(new{registered=true});
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}

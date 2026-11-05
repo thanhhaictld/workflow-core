@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace WorkflowCore.Hub;
 
-/// <summary>Immutable metadata published by independently deployed processor hosts.</summary>
+/// <summary>Current metadata published by independently deployed processor hosts.</summary>
 public sealed record HubDefinitionRegistration(string HubId, string DefinitionId,
     int Version, int Partitions, int StepCount, JsonElement Metadata);
 /// <summary>Serializable Hub-enforced activity concurrency policy. No arbitrary C# delegates.</summary>

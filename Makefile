@@ -61,4 +61,4 @@ obs-clean:
 	$(OBS_COMPOSE) down --volumes
 
 obs-ps:
-	$(OBS_COMPOSE) ps
+	$(OBS_COMPOSE) ps -a

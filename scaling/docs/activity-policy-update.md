@@ -1,10 +1,16 @@
 # Activity policy capacity changes
 
-Operational capacity limits are mutable without changing activity version. The activity contract, partition count, resource identity/selector and strict FIFO mode remain immutable; change those only through a planned version migration. Existing tasks retain resource keys, while active leases retain their fencing epochs and are never revoked when a limit decreases.
+Operational capacity limits are mutable without changing activity version.
+Provisioners can also republish activity metadata and contracts under the same
+version. Developers own compatibility and introduce a new code-defined version
+for breaking changes. Existing tasks retain their resource keys, while active
+leases retain their fencing epochs and are never revoked when a limit decreases.
 
 ## Ownership
 
-Provisioners register the immutable activity contract and initial capacities. Repeated startup registration compares immutable fields, but **never** changes the current capacity. A stale provisioner therefore cannot restore previous limits.
+Provisioners upsert the activity contract and supply initial capacities.
+Repeated startup registration refreshes metadata while preserving existing
+operator capacities. A stale provisioner therefore cannot restore previous limits.
 
 The operator owns subsequent capacity updates through `PUT /api/hub/activity-registrations/capacity`. Read the current revision from `GET /api/hub/activity-registrations/{hub}/{activity}/{version}`; provide `expectedRevision` to the update request. The Hub serializes the compare-and-swap against registration writes and enqueues. Stale revisions return HTTP 409.
 
@@ -54,4 +60,8 @@ The update endpoint currently uses the existing Hub bearer-token scope. Restrict
 
 ## Limitations
 
-This fix does **not** support live FIFO changes, resource selector changes, partition rehashing or shared resource identity/FIFO rewrites. Those require a separate, transactional migration and explicit queue semantics. It does not change workflow definitions, retry accounting or durable execution history.
+The capacity endpoint changes limits only. Republishing metadata does not rewrite
+existing task partitions or resource constraints. Developers must account for
+those persisted values when changing routing or FIFO declarations; new versions
+also need compatible shared resource declarations. Registration does not migrate
+queued work or change retry accounting and durable execution history.

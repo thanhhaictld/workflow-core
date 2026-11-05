@@ -7,12 +7,12 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 ## Implemented boundaries
 
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
-- `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted immutable workflow metadata, serializable concurrency policies), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
+- `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted current workflow metadata, serializable concurrency policies), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
 - `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/src/WorkflowCore.Hub.Server/Program.cs` registers it **inside the Hub process**.
 - `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` reuses native builders, executor, mappings, pointers, error handlers, and middleware. The sequential registry remains for v1 runs.
 - `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes registrations and runs separately bounded workflow/activity lanes using **REST/SSE only**.
 - `scaling/sample/onboarding/WorkflowCore.Processor.Host` was historical v1-only tooling; the project has been removed. New deployments use the combined native workflow/activity lanes in `WorkflowCore.Provisioner.Host`. The reusable sequential runtime remains in `WorkflowCore.RemoteExecution` for v1 compatibility.
-- Removing that sample host does not remove existing v1/v2 data. Unfinished runs pinned to those versions still require their matching historical processor binaries; the native Provisioner advertises v3 definitions and does not claim v1/v2 capability.
+- Removing that sample host does not remove existing v1/v2 data. Unfinished runs require application code that registers their versions; the native Provisioner advertises v3 definitions and does not claim v1/v2 capability. Build fingerprints do not gate registration.
 - `scaling/sql/010_hub_remote_scheduler.sql` is forward-only: it does not discard prior Hub executions or legacy workflow history.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
@@ -51,7 +51,7 @@ To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions wh
 
 | Endpoint | Description |
 | --- | --- |
-| `POST /api/hub/definitions` | Persist immutable versioned workflow definition metadata |
+| `POST /api/hub/definitions` | Upsert current workflow metadata by ID/version |
 | `POST /api/hub/activity-registrations` | Persist declarative resource concurrency constraints |
 | `GET /api/hub/definitions` and `/policies` | Read published business metadata, including previous in-memory definitions |
 | `POST /api/hub/workflows` | Idempotently create a remote workflow and its first workflow task |
@@ -67,6 +67,12 @@ To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions wh
 | `GET /api/hub/workflows/{id}/trace` | Attempt waterfall (claim/finish timestamps), timer spans added in Next.js |
 
 All mutating workflow operations are SQL transactions. A workflow waits by persisting a timer, releasing the processor, and re-enqueueing work on a future due deadline. SSE readiness is best-effort and reconciled by periodic Hub sweeps.
+
+Workflow and activity registration updates metadata under the supplied identity
+and version. Developers keep same-version changes backward compatible and define
+a new code version for breaking changes, retaining earlier registrations while
+their runs finish. Assembly fingerprints are informational. Registration leaves
+existing run state and operator-controlled capacities unchanged.
 
 ## Scheduler controls and future extraction
 
@@ -89,7 +95,8 @@ For a future dedicated host, reuse `WorkflowCore.Hub.Scheduling` and `IHubTimerS
 
 ## Validation
 
-- `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubRemoteSchedulerTests.cs` covers immutable registration, fenced workflow transitions and replay, remote activity completion, a two-scanner due-timer race, and persisted history.
+- `scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubRemoteSchedulerTests.cs` covers registration updates, fenced workflow transitions and replay, remote activity completion, a two-scanner due-timer race, and persisted history.
+- `HubRegistrationTests` covers same-version metadata/contract updates, concurrent publication, retained operator capacities, waiting-snapshot recovery, and code-defined versions.
 - `HubNativeExecutionTests`, `HubNativeRoutedTests`, `HubNativeRuntimeTests`, and `HubNativeTransportTests` cover native/upstream semantic comparisons, typed/scalar mappings, pointer recovery, durable races, cancellation, and completion transport outages.
 - `pwsh scripts/test-hub-native.ps1 -ManageHosts` force-restarts Hub and the combined Provisioner during a native wait and verifies native v3 recovery.
 - `.github/workflows/workflow-hub-observability.yml` runs Compose, 20 real k6 workflows, a timer workflow, monitor history/waterfall assertions, metrics export.
