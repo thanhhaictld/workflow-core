@@ -60,7 +60,7 @@ obs-offboarding-up:
 	$(OBS_COMPOSE) --profile offboarding-load up -d --build --scale processor=$(OFFBOARD_PROCESSORS) --scale provisioner=0
 
 obs-offboarding-test:
-	$(OBS_COMPOSE) --profile offboarding-load run --rm k6-offboarding
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm k6-offboarding
 
 obs-offboarding-ps:
 	$(OBS_COMPOSE) --profile offboarding-load ps
