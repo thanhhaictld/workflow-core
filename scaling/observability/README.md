@@ -245,6 +245,35 @@ workflow commits per hub even though this sample has no business constraints.
 
 See [offboarding benchmark design](../docs/offboarding-unconstrained-benchmark.md).
 
+
+### Finding offboarding under Workflow definitions
+
+The **Workflow definitions** page (`http://localhost:3002/definitions`)
+now displays both the legacy archived C# catalog and the Hub's persisted,
+remote-published catalog. The offboarding definition appears as:
+
+- Hub: `offboarding`
+- Definition: `tenant-offboarding-fast`
+- Version: `1`
+- Execution mode: `native`
+
+Select it to inspect published steps, metadata, and compare distinct versions.
+The monitor uses its authenticated **server-side** `/api/hub-definitions`
+proxy, backed by `GET /api/hub/definitions`; it does not place the Hub
+bearer token in the browser or require the legacy monitoring API to know
+about offboarding.
+
+The offboarding processor is an **optional Compose profile**. An ordinary
+`docker compose up` does not start it or register a new definition in an
+empty database. Start `make obs-offboarding-up` (or the eight-replica Compose
+command above) before expecting it to appear. Registrations are persistent
+and stay visible after those processors are stopped, until the database is
+reset.
+
+If the definition is missing, check `/api/hub-definitions` on the Next.js
+monitor. A 503/502 indicates a Hub/token connection problem; a successful
+empty array means this database has not received a processor registration.
+
 ## What Grafana shows
 
 The provisioned Workflow Hub Stress Test & Runtime dashboard contains:
