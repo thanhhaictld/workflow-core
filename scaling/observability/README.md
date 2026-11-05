@@ -80,7 +80,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
-The migrate container applies SQL migrations 002–011, followed by the
+The migrate container applies SQL migrations 002â€“011, followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
@@ -176,6 +176,75 @@ use the two-phase .NET harness from the previous Hub branch, or set
 K6_MODE=submit with workers stopped, then start the workers and inspect
 the run summary. See ../docs/workflow-hub-1000-performance.md.
 
+
+## Offboarding throughput baseline: eight dedicated processors
+
+This is a **separate, native-only** synthetic workflow for throughput diagnosis:
+
+- Hub: `offboarding`
+- Workflow: `tenant-offboarding-fast` version `1`
+- Steps: `ValidateOffboarding` → `RevokeOffboardingAccess` → `RemoveOffboardingResources`
+- None of the steps is registered through `AddActivity`; there is **no
+  activity-level capacity, resource key, or strict FIFO policy**.
+- The three steps are lightweight in-memory operations, without deliberately
+  waiting for external APIs. This measures the runtime's native task path,
+  not a realistic end-to-end tenant deprovisioning service.
+- Native workflow tasks still use the database's authoritative claim,
+  revision fencing, hub-scoped event-lane lock, sequence scan and durable
+  history. There is no switch to bypass those correctness mechanisms.
+
+Start **eight** Docker Compose replicas of the dedicated `processor`
+service and stop the normal onboarding `provisioner` for a clean baseline:
+
+~~~bash
+cp scaling/observability/.env.example scaling/observability/.env
+docker compose -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env \
+  --profile offboarding-load up -d --build \
+  --scale processor=8 --scale provisioner=0
+
+docker compose -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env \
+  --profile offboarding-load ps
+~~~
+
+Run the separate k6 workload (submits all instances without per-workflow
+status polling, then polls only the run summary until all have completed):
+
+~~~bash
+docker compose -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env \
+  --profile offboarding-load run --rm \
+  -e K6_OFFBOARD_COUNT=1000 \
+  -e K6_OFFBOARD_VUS=100 \
+  -e K6_OFFBOARD_TIMEOUT_SECONDS=360 \
+  k6-offboarding
+~~~
+
+Shortcuts: `make obs-offboarding-up` and `make obs-offboarding-test`.
+Use `OFFBOARD_PROCESSORS=4` or `8` when invoking the Make target to
+compare container counts. Each replica runs its own bounded native workflow
+worker lane; adjust `OFFBOARD_PROCESSOR_WORKERS` to tune per-pod concurrency.
+Each processor has **no** `WFC_PG` credentials or database connection.
+
+The benchmark writes `scaling/observability/results/k6-offboarding-summary.json`
+without overwriting the original onboarding k6 results. On success it also
+prints completed workflows/second over the full run, the server-observed
+creation-to-completion window, p95/p99 workflow duration, and verifies a
+persisted workflow snapshot has all three output flags set. Run IDs are unique
+unless `K6_OFFBOARD_RUN_ID` is set explicitly.
+
+For diagnosing a bottleneck, compare 1/4/8 processor replicas and
+`WFC_HUB_DB_POOL` values separately. Inspect Hub claim duration, ready-work
+age, PostgreSQL connection usage, transaction/advisory-lock wait time and
+OTel workflow/worker metrics. **Do not attribute a throughput difference
+solely to FIFO ordering**: onboarding adds remote activity round trips and an
+intentional 400-ms provisioner delay, which are absent here. The Hub's
+internal `EventLane` advisory transaction lock serializes some native
+workflow commits per hub even though this sample has no business constraints.
+
+See [offboarding benchmark design](../docs/offboarding-unconstrained-benchmark.md).
+
 ## What Grafana shows
 
 The provisioned Workflow Hub Stress Test & Runtime dashboard contains:
@@ -234,7 +303,7 @@ docker compose -f scaling/observability/compose.yaml \
 ~~~
 
 This keeps all named data volumes. Run `make obs-clean` (or add `--volumes`
-to `down`) only when you intend to erase the Compose project�s named volumes,
+to `down`) only when you intend to erase the Compose project’s named volumes,
 including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ## Caveats
