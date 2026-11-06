@@ -18,11 +18,11 @@ public sealed class HubReadinessBroadcaster(
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
 
     // Optional in-process matching subscriber; SSE remains available for fallback.
-    public event Action<string, string?, int>? TaskReady;
+    public event Action<string, string?, int, int?>? TaskReady;
 
-    public void Publish(string hub, string? taskType = null, int version = 0)
+    public void Publish(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
-        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, taskType, version);
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
         PublishLegacy(hub);
     }
 
@@ -35,9 +35,9 @@ public sealed class HubReadinessBroadcaster(
     }
 
     /// <summary>In-process hint for a task capability or a permit-release rescan.</summary>
-    public void PublishMatchingHint(string hub, string? type, int version)
+    public void PublishMatchingHint(string hub, string? type, int version, int? taskPartitionId = null)
     {
-        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, type, version);
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, type, version, taskPartitionId);
     }
 
     public async IAsyncEnumerable<string> Subscribe(
