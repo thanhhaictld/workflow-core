@@ -193,6 +193,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
         var results = new List<HubLeasedTask>(maxTasks);
+        var scannedCandidates = 0;
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         for (var batch = 0; batch < maxTasks; batch++)
         {
@@ -220,6 +221,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
             }
+            scannedCandidates += candidates.Count;
 
             HubLeasedTask? found = null;
             foreach (var taskId in candidates)
@@ -392,8 +394,20 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(found.HubId),
                 HubTelemetry.ActivityTag(found.TaskType));
         }
-        HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds);
+        var outcome = results.Count == 0 ? "empty" : "claimed";
+        // Stable process-level label separates the two benchmark modes without
+        // cardinality from hubs, workflow IDs or worker IDs.
+        var mode = string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"),
+            "false", StringComparison.OrdinalIgnoreCase) ||
+            Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") == "0" ? "legacy" : "batch";
+        var modeTag = new KeyValuePair<string, object?>("history_mode", mode);
+        var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
+        HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
+            outcomeTag, modeTag);
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag);
+        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag);
         span?.SetTag("tasks.claimed", results.Count);
+        span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         return results;
     }
 
