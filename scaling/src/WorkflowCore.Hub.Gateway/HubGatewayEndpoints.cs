@@ -369,11 +369,29 @@ public static class HubGatewayEndpoints
                 return Results.BadRequest(new { error = "Invalid activity result" });
             using var completionSpan = HubTelemetry.Traces.StartActivity("hub.gateway.activity.complete");
             var routingStarted = Stopwatch.GetTimestamp();
-            var route = await store.GetCompletionRouteAsync(id, ct);
+            // Keep the legacy classification as an A/B control for the p95 experiment.
+            var fastPath = Environment.GetEnvironmentVariable("WFC_HUB_COMPLETION_FAST_PATH_ENABLED")
+                is not ("0" or "false" or "False");
+            HubCompletionRoute? route;
+            if (fastPath)
+            {
+                route = await store.GetCompletionRouteAsync(id, ct);
+            }
+            else
+            {
+                var remoteActivity = await remote.IsRemoteActivityAsync(id, ct);
+                var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
+                var nativeActivity = await native.IsActivityAsync(id, ct);
+                var kind = nativeActivity ? HubCompletionKind.Native
+                    : remoteActivity ? HubCompletionKind.Remote
+                    : managed ? HubCompletionKind.Managed : HubCompletionKind.Standalone;
+                route = new HubCompletionRoute(string.Empty, kind);
+            }
             completionSpan?.AddEvent(new ActivityEvent("completion.route.resolved",
                 tags: new ActivityTagsCollection {
                     { "elapsed.seconds", Stopwatch.GetElapsedTime(routingStarted).TotalSeconds },
-                    { "route.kind", route?.Kind.ToString() ?? "NotFound" } }));
+                    { "route.kind", route?.Kind.ToString() ?? "NotFound" },
+                    { "route.optimized", fastPath } }));
             if (route is null)
                 return Results.Conflict(new { error = "Task is stale or lease expired" });
             var done = route.Kind switch
@@ -387,7 +405,15 @@ public static class HubGatewayEndpoints
                 _ => await store.CompleteAsync(
                     id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct)
             };
-            if (done) readiness.Publish(route.HubId);
+            if (done)
+            {
+                if (fastPath) readiness.Publish(route.HubId);
+                else
+                {
+                    var task = await store.GetAsync(id, ct);
+                    if (task is not null) readiness.Publish(task.HubId);
+                }
+            }
             return done ? Results.NoContent() :
                 Results.Conflict(new { error = "Task is stale or lease expired" });
         });
