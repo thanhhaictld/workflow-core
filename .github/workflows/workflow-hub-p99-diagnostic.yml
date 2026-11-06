@@ -1,4 +1,4 @@
-name: Workflow Hub P95/P99 Adaptive Claim A/B (100 workflows)
+name: Workflow Hub Claim Single-Scan A/B (100 workflows)
 
 on:
   pull_request:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        claim_strategy: [baseline, optimized]
+        claim_strategy: [optimized, single-scan]
     timeout-minutes: 35
     env:
       COMPOSE: scaling/observability/compose.yaml
@@ -33,9 +33,11 @@ jobs:
       OFFBOARD_PROCESSOR_WORKERS: "4"
       COUNT: "100"
       CLAIM_STRATEGY: ${{ matrix.claim_strategy }}
-      WFC_HUB_ADAPTIVE_CLAIMS: ${{ matrix.claim_strategy == 'optimized' && 'true' || 'false' }}
-      WFC_HUB_CLAIM_ADMISSION_ENABLED: ${{ matrix.claim_strategy == 'optimized' && 'true' || 'false' }}
-      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: ${{ matrix.claim_strategy == 'optimized' && 'true' || 'false' }}
+      # Both variants retain every measured PR #18 improvement.
+      WFC_HUB_ADAPTIVE_CLAIMS: "true"
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "true"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
+      WFC_HUB_CLAIM_SINGLE_SCAN_ENABLED: ${{ matrix.claim_strategy == 'single-scan' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate diagnostic scripts
