@@ -107,6 +107,10 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
     public static readonly Histogram<double> ClaimPermitCheck =
         Meter.CreateHistogram<double>("workflow_hub_claim_permit_check_seconds", "s");
+    public static readonly Counter<long> MatchingDispatchAttempts =
+        Meter.CreateCounter<long>("workflow_hub_matching_dispatch_attempts", "{attempt}");
+    public static readonly Histogram<double> MatchingDispatchDuration =
+        Meter.CreateHistogram<double>("workflow_hub_matching_dispatch_duration_seconds", "s");
     public static readonly Counter<long> WorkerClaimRequests =
         Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
     public static readonly Histogram<double> WorkerEmptyClaimBackoff =

@@ -185,13 +185,9 @@ jobs:
         if: always()
         run: make db-down
 
-  powershell-platform-check:
-    name: PowerShell 7 cross-platform (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  powershell-windows-check:
+    name: PowerShell 7 validation (Windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

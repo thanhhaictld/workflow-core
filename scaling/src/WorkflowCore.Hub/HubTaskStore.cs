@@ -221,10 +221,25 @@ public sealed class HubTaskStore : IAsyncDisposable
             if (_claimAdmissionEnabled)
             {
                 var waitStarted = Stopwatch.GetTimestamp();
-                await _claimGate.WaitAsync(ct);
-                gateAcquired = true;
-                HubTelemetry.ClaimAdmissionWait.Record(
-                    Stopwatch.GetElapsedTime(waitStarted).TotalSeconds);
+                using (var admission = HubTelemetry.Traces.StartActivity("hub.task.claim.admission_wait"))
+                {
+                    admission?.SetTag("matching.partition", matchPartition);
+                    admission?.SetTag("matching.partition_count", matchCount);
+                    await _claimGate.WaitAsync(ct);
+                    gateAcquired = true;
+                    var waitSeconds = Stopwatch.GetElapsedTime(waitStarted).TotalSeconds;
+                    admission?.SetTag("admission.wait_seconds", waitSeconds);
+                    span?.SetTag("claim.admission_wait_seconds", waitSeconds);
+                    span?.AddEvent(new ActivityEvent("claim.admission.acquired",
+                        tags: new ActivityTagsCollection {
+                            { "wait.seconds", waitSeconds },
+                            { "matching.partition", matchPartition },
+                            { "matching.partition_count", matchCount }
+                        }));
+                    HubTelemetry.ClaimAdmissionWait.Record(waitSeconds,
+                        new KeyValuePair<string, object?>("claim_path",
+                            matchingPartitionCount is > 1 ? "matching" : "legacy"));
+                }
             }
 
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
@@ -591,6 +606,32 @@ public sealed class HubTaskStore : IAsyncDisposable
             reader.GetString(3), reader.GetInt32(4), states[reader.GetInt16(5)],
             reader.GetInt32(6), reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.IsDBNull(8) ? null : JsonDocument.Parse(reader.GetString(8)).RootElement.Clone());
+    }
+
+    /// <summary>
+    /// Low-frequency recovery scan for missed PostgreSQL notifications.
+    /// Returns shard-targetable hints, not a one-query-per-worker claim.
+    /// The dispatcher deduplicates these before touching the claim store.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Hub, string TaskType, int Version, int Partition)>> ReadyMatchingHintsAsync(
+        CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("""
+            SELECT hub_id,task_type,task_version,partition_id
+            FROM wfc_scale.hub_task
+            WHERE attempts < max_attempts AND
+                  ((state=0 AND due_at<=now()) OR
+                   (state=1 AND lease_until<now()))
+            GROUP BY hub_id,task_type,task_version,partition_id
+            ORDER BY hub_id,task_type,task_version,partition_id
+            LIMIT 512
+            """);
+        var hints = new List<(string Hub, string TaskType, int Version, int Partition)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            hints.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
+                reader.GetInt32(3)));
+        return hints;
     }
 
     public async Task<string[]> ReadyHubsAsync(CancellationToken ct)
