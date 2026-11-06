@@ -27,12 +27,16 @@ all_spans=collections.defaultdict(list)
 service_counts=collections.Counter()
 errors=0
 lines=0
+claim_outcomes=collections.Counter()
 
 def attr(sp,key):
     for item in sp.get("attributes",[]):
         if item.get("key")==key:
             v=item.get("value",{})
-            return v.get("stringValue") or v.get("intValue") or v.get("doubleValue")
+            # OTLP intValue may be numeric zero, which is a valid claimed=0 value.
+            for field in ("stringValue","intValue","doubleValue","boolValue"):
+                if field in v:
+                    return v[field]
     return None
 
 def parse_time(ns):
@@ -53,6 +57,13 @@ with TRACE.open() as reader:
             for group in res.get("scopeSpans",[]):
                 for sp in group.get("spans",[]):
                     name=sp.get("name","unknown")
+                    if name=="hub.task.claim":
+                        claimed=attr(sp,"tasks.claimed")
+                        if claimed is not None:
+                            claim_outcomes["total"]+=1
+                            claim_outcomes["leased"]+=int(claimed)
+                            if int(claimed)==0:
+                                claim_outcomes["empty"]+=1
                     service_counts[svc]+=1
                     scopes[(svc,name)]+=1
                     t0=parse_time(sp.get("startTimeUnixNano"))
@@ -82,7 +93,7 @@ stats={k:{"count":len([x for x in v if x is not None]),
           "max":max((x for x in v if x is not None),default=None)}
        for k,v in all_spans.items() if k in important}
 out={"source":"real OTLP JSON trace archive","otlpBatches":lines,"invalidJsonLines":errors,
-     "services":dict(service_counts),"spanCounts":{f"{svc}:{name}":n for (svc,name),n in scopes.items()},
+     "services":dict(service_counts),"claimSummary":dict(claim_outcomes),"spanCounts":{f"{svc}:{name}":n for (svc,name),n in scopes.items()},
      "importantSpanDurationsSeconds":stats,
      "slowWorkflows":{wf:{**meta,"spans":matched[wf]}
                       for wf,meta in slow.items() if wf in matched},
@@ -91,6 +102,7 @@ out={"source":"real OTLP JSON trace archive","otlpBatches":lines,"invalidJsonLin
 ROOT.mkdir(parents=True,exist_ok=True)
 (ROOT/"otel-investigation.json").write_text(json.dumps(out,indent=2)+"\n")
 print(json.dumps({"otlpBatches":lines,"services":dict(service_counts),
+                  "claimSummary":dict(claim_outcomes),
                   "importantSpanDurationsSeconds":stats,
                   "slowWorkflowsWithSpans":out["slowWorkflowsWithSpans"],
                   "slowWorkflowsExpected":out["slowWorkflowsExpected"]},indent=2))

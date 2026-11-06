@@ -91,6 +91,21 @@ public sealed class HubGatewayTests
     }
 
     [Fact]
+    public async Task CompletionRoute_ResolvesUnconstrainedTask_AndUnknownId()
+    {
+        if (Database is null) return;
+        var hub = Key();
+        var policy = Registry(hub, 1, fifo: false);
+        await using var store = new HubTaskStore(Database, 3);
+        var taskId = await Create(store, policy, hub, "resource");
+        var route = await store.GetCompletionRouteAsync(taskId, CancellationToken.None);
+        Assert.NotNull(route);
+        Assert.Equal(hub, route.HubId);
+        Assert.Equal(HubCompletionKind.Standalone, route.Kind);
+        Assert.Null(await store.GetCompletionRouteAsync(Guid.NewGuid(), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task CompletionIsIdempotent_AndRejectsStaleEpoch()
     {
         if (Database is null) return;

@@ -130,6 +130,8 @@ services:
       ASPNETCORE_URLS: http://0.0.0.0:5100
       WFC_PG: Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12}
       WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "${WFC_HUB_CLAIM_ADMISSION_ENABLED:-false}"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"
       # Benchmark-only control: default is the new batched event journal.
       WFC_HUB_BATCH_HISTORY_ENABLED: "${WFC_HUB_BATCH_HISTORY_ENABLED:-true}"
       # Default: event-free commits bypass Hub advisory lock; 'hub' is the A/B control.
@@ -169,6 +171,7 @@ services:
       WFC_HUB_ALLOW_INSECURE_HTTP: "true"
       WORKERS: "${WORKERS:-16}"
       WORKFLOW_WORKERS: "${WORKFLOW_WORKERS:-8}"
+      WFC_HUB_ADAPTIVE_CLAIMS: "${WFC_HUB_ADAPTIVE_CLAIMS:-true}"
       ACTIVITY_WORKERS: "${ACTIVITY_WORKERS:-16}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       WFC_OTEL_LOGS_ENABLED: "true"
@@ -192,6 +195,7 @@ services:
       WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
       WFC_HUB_ALLOW_INSECURE_HTTP: "true"
       WORKFLOW_WORKERS: "${OFFBOARD_PROCESSOR_WORKERS:-16}"
+      WFC_HUB_ADAPTIVE_CLAIMS: "${WFC_HUB_ADAPTIVE_CLAIMS:-true}"
       ACTIVITY_WORKERS: "${POLICY_BENCH_ACTIVITY_WORKERS:-8}"
       POLICY_BENCHMARK_ENABLED: "${POLICY_BENCHMARK_ENABLED:-false}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

@@ -58,6 +58,7 @@ native AS (
   GROUP BY e.workflow_id
 )
 SELECT wf.id::text AS workflow_id, wf.partition_id,
+  round(extract(epoch FROM (SELECT max(completed_at)-min(created_at) FROM wf))::numeric,6) AS run_span_s,
   round(extract(epoch FROM wf.completed_at-wf.created_at)::numeric,6) AS total_s,
   round(extract(epoch FROM native.first_claim-wf.created_at)::numeric,6) AS initial_queue_s,
   round(extract(epoch FROM activity.created_at-native.first_claim)::numeric,6) AS initial_processing_s,
@@ -107,6 +108,8 @@ def percentile(values, pct):
     high = math.ceil(idx)
     return round(numbers[low] + (numbers[high]-numbers[low])*(idx-low), 3)
 
+run_span = float(rows[0]["run_span_s"]) if rows else 0
+throughput = round(len(rows) / run_span, 4) if run_span > 0 else None
 aggregates = {}
 for key in numeric:
     vals = [r[key] for r in rows]
@@ -129,6 +132,7 @@ for row in slowest:
 report = {
     "runId": args.run_id, "mode": args.mode, "processors": int(args.stage),
     "workflows": len(rows), "timingUnits": "seconds",
+    "runSpanSeconds": run_span, "completedWorkflowsPerSecond": throughput,
     "definition": "workflow p99 is completed_at-created_at; task activity lease includes Hub transport and completion",
     "caveat": "Native claim events use transaction timestamps; sub-second negative adjacent intervals should be treated as timestamp artifacts, not negative runtime.",
     "latencyByStage": aggregates, "slowestWorkflows": slowest,
@@ -145,6 +149,7 @@ pathlib.Path(args.output).parent.mkdir(parents=True,exist_ok=True)
 pathlib.Path(args.output).write_text(json.dumps(report,indent=2)+"\n")
 print(json.dumps({
     "mode":args.mode,"processors":int(args.stage),"count":len(rows),
+    "completedWorkflowsPerSecond": throughput,
     "p99ByStage":{k:v["p99"] for k,v in aggregates.items()},
     "coverage":report["coverage"],
     "slowest":slowest[:5],

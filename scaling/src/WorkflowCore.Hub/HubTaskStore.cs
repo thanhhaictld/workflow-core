@@ -16,6 +16,11 @@ public sealed record HubLeasedTask(
 public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
+
+// Completion routing is immutable task metadata. Resolve once instead of making
+// three independent classification queries and reloading task metadata after ACK.
+public enum HubCompletionKind { Standalone, Managed, Remote, Native }
+public sealed record HubCompletionRoute(string HubId, HubCompletionKind Kind);
 public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
     HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null);
 public sealed record HubEnqueueRequest(string HubId, string TaskType, int Version,
@@ -36,6 +41,10 @@ public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long Activ
 public sealed class HubTaskStore : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
+    // Admission control reserves connections for completion, timers and writes.
+    // Unlike a global workflow lock, this only limits speculative claim SQL.
+    private readonly SemaphoreSlim _claimGate;
+    private readonly bool _claimAdmissionEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12)
@@ -45,6 +54,9 @@ public sealed class HubTaskStore : IAsyncDisposable
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
+        _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
+        _claimAdmissionEnabled =
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -190,6 +202,18 @@ public sealed class HubTaskStore : IAsyncDisposable
             maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
             lease > TimeSpan.FromMinutes(5))
             throw new ArgumentException("Invalid worker claim parameters");
+
+        var gateAcquired = false;
+        try
+        {
+            if (_claimAdmissionEnabled)
+            {
+                var waitStarted = Stopwatch.GetTimestamp();
+                await _claimGate.WaitAsync(ct);
+                gateAcquired = true;
+                HubTelemetry.ClaimAdmissionWait.Record(
+                    Stopwatch.GetElapsedTime(waitStarted).TotalSeconds);
+            }
 
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
@@ -428,6 +452,11 @@ public sealed class HubTaskStore : IAsyncDisposable
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         span?.SetTag("tasks.claim_amplification", results.Count == 0 ? scannedCandidates : (double)scannedCandidates / results.Count);
         return results;
+        }
+        finally
+        {
+            if (gateAcquired) _claimGate.Release();
+        }
     }
 
     public async Task<bool> IsManagedWorkflowStepAsync(Guid id, CancellationToken ct)
@@ -453,6 +482,25 @@ public sealed class HubTaskStore : IAsyncDisposable
         command.Parameters.AddWithValue("epoch", epoch);
         command.Parameters.Add("lease", NpgsqlDbType.Interval).Value = lease;
         return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<HubCompletionRoute?> GetCompletionRouteAsync(Guid id, CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("""
+            SELECT t.hub_id,
+                   CASE WHEN t.dispatch_key IS NOT NULL THEN 3
+                        WHEN w.execution_mode='remote' AND t.workflow_step IS NOT NULL
+                             AND t.task_type<>'__workflow__' THEN 2
+                        WHEN t.workflow_step IS NOT NULL THEN 1
+                        ELSE 0 END
+            FROM wfc_scale.hub_task t
+            LEFT JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+            WHERE t.id=@id
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new(reader.GetString(0), (HubCompletionKind)reader.GetInt32(1));
     }
 
     public async Task<bool> CompleteAsync(Guid id, string worker, long epoch,
@@ -580,5 +628,9 @@ public sealed class HubTaskStore : IAsyncDisposable
     private static string HubPolicyDigest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _dataSource.DisposeAsync();
+        _claimGate.Dispose();
+    }
 }
