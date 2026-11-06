@@ -15,7 +15,9 @@ public sealed class HubMatchingOwnership : BackgroundService
     private readonly HubMatchingLeaseStore _store;
     private readonly ILogger<HubMatchingOwnership> _logger;
     private readonly ConcurrentDictionary<string, HubMatchingLease> _owned = new();
-    private readonly HttpClient _forwarder = new() { Timeout = TimeSpan.FromSeconds(27) };
+    private readonly HttpClient _forwarder = new(new HttpClientHandler {
+        AllowAutoRedirect = false
+    }) { Timeout = TimeSpan.FromSeconds(27) };
     private readonly HashSet<string> _trustedPeers;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromSeconds(8);
     private readonly TimeSpan _renewInterval = TimeSpan.FromSeconds(2);
