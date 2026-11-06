@@ -15,7 +15,7 @@ METRICS = {
     "eventLaneLock": 'workflow_hub_native_event_lane_lock_wait_seconds_bucket{operation="native_commit",history_mode="%s"}',
     "historyWrite": 'workflow_hub_native_history_write_duration_seconds_bucket{history_mode="%s"}',
     "commitDuration": 'workflow_hub_native_commit_duration_seconds_bucket{history_mode="%s"}',
-    "claimLatency": "workflow_hub_claim_duration_seconds_bucket",
+    "claimLatency": 'workflow_hub_claim_duration_seconds_bucket{history_mode="%s"}',
 }
 
 def query(prometheus: str, expression: str) -> float | None:
