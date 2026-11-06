@@ -8,6 +8,7 @@ import argparse
 import collections
 import json
 import pathlib
+import signal
 import subprocess
 import time
 
@@ -21,6 +22,9 @@ WHERE datname=current_database() AND state='active'
   AND pid<>pg_backend_pid()
 GROUP BY 1,2"""
 records=[]
+def on_term(_signum, _frame):
+    raise KeyboardInterrupt()
+signal.signal(signal.SIGTERM,on_term)
 try:
     while True:
         cmd=["docker","compose","-f","scaling/observability/compose.yaml",
