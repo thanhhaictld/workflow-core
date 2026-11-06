@@ -15,6 +15,7 @@ public sealed class HubTaskMatcher
     private sealed class Waiter(HubClaimRequest claim)
     {
         public string Hub { get; } = claim.Hubs[0];
+        public int Partition { get; } = claim.MatchingPartition ?? 0;
         private readonly HashSet<(string Type, int Version)> _types =
             claim.Capabilities.Select(c => (c.TaskType, c.Version)).ToHashSet();
         public bool Supports(string? type, int version) =>
@@ -29,7 +30,7 @@ public sealed class HubTaskMatcher
     private readonly HubTaskStore _tasks;
     private readonly HubMatchingOwnership _ownership;
     private readonly object _sync = new();
-    private readonly Dictionary<string, LinkedList<Waiter>> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Hub, int Partition), LinkedList<Waiter>> _pending = new();
     // An initial DB catch-up scan is necessary for existing backlog. Coalesce
     // many identical worker registrations into one probe per capability lane.
     private readonly ConcurrentDictionary<string, long> _lastProbe = new();
@@ -47,26 +48,41 @@ public sealed class HubTaskMatcher
 
     public int PendingCount { get { lock (_sync) return _count; } }
 
-    public void NotifyReady(string hub, string? type = null, int version = 0)
+    public void NotifyReady(string hub, string? type = null, int version = 0,
+        int? taskPartitionId = null)
     {
         lock (_sync)
         {
-            if (!_pending.TryGetValue(hub, out var waiters) || waiters.Count == 0) return;
-            for (var node = waiters.First; node is not null; node = node.Next)
-            {
-                if (!node.Value.Supports(type, version)) continue;
-                var selected = node.Value;
-                waiters.Remove(node);
-                waiters.AddLast(selected); // round-robin among compatible workers
-                selected.Signal.Writer.TryWrite(true);
-                break;
-            }
+            // Null partition means "permit released / recovery scan": any
+            // matching shard may contain work. Typed enqueue targets one shard.
+            var partition = taskPartitionId.HasValue && _ownership.Sharded
+                ? taskPartitionId.Value % _ownership.PartitionCount : (int?)null;
+            if (partition.HasValue)
+                NotifyOne(hub, partition.Value, type, version);
+            else
+                for (var shard = 0; shard < _ownership.PartitionCount; shard++)
+                    NotifyOne(hub, shard, type, version);
+        }
+    }
+
+    private void NotifyOne(string hub, int partition, string? type, int version)
+    {
+        if (!_pending.TryGetValue((hub, partition), out var waiters) || waiters.Count == 0) return;
+        for (var node = waiters.First; node is not null; node = node.Next)
+        {
+            if (!node.Value.Supports(type, version)) continue;
+            var selected = node.Value;
+            waiters.Remove(node);
+            waiters.AddLast(selected);
+            selected.Signal.Writer.TryWrite(true);
+            break;
         }
     }
 
     private bool ShouldProbe(HubClaimRequest request)
     {
-        var key = request.Hubs[0] + "|" + string.Join(",",
+        var key = request.Hubs[0] + "#" + (request.MatchingPartition ?? 0) + "|" +
+            string.Join(",",
             request.Capabilities
                 .Select(c => c.TaskType + ":" + c.Version)
                 .OrderBy(x => x, StringComparer.Ordinal));
@@ -87,13 +103,14 @@ public sealed class HubTaskMatcher
         HubClaimRequest request, CancellationToken ct)
     {
         var hub = request.Hubs[0];
+        var shard = request.MatchingPartition ?? 0;
         var waiter = new Waiter(request);
         lock (_sync)
         {
             if (_count >= MaxPending)
                 throw new InvalidOperationException("Matching waiter capacity exceeded");
-            if (!_pending.TryGetValue(hub, out var list))
-                _pending[hub] = list = new LinkedList<Waiter>();
+            if (!_pending.TryGetValue((hub, shard), out var list))
+                _pending[(hub, shard)] = list = new LinkedList<Waiter>();
             list.AddLast(waiter);
             _count++;
         }
@@ -101,24 +118,32 @@ public sealed class HubTaskMatcher
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            deadline.CancelAfter(TimeSpan.FromSeconds(WaitSeconds));
+            // Workers rotate shards after a bounded wait when demand is sparse;
+            // no shard is permanently stranded without a dedicated poller.
+            deadline.CancelAfter(TimeSpan.FromSeconds(
+                _ownership.Sharded ? 4 : WaitSeconds));
             var shouldClaim = ShouldProbe(request);
             while (!deadline.IsCancellationRequested)
             {
-                if (!await _ownership.StillOwnsAsync(hub, ct))
+                var stillOwner = _ownership.Sharded
+                    ? await _ownership.StillOwnsPartitionAsync(hub, shard, ct)
+                    : await _ownership.StillOwnsAsync(hub, ct);
+                if (!stillOwner)
                     throw new InvalidOperationException("Matching owner lease was lost");
 
                 if (shouldClaim)
                 {
                     var claimed = await _tasks.ClaimAsync(request.WorkerId,
                         request.Hubs, request.Capabilities, request.MaxTasks,
-                        TimeSpan.FromSeconds(45), ct, request.Workflows);
+                        TimeSpan.FromSeconds(45), ct, request.Workflows,
+                        request.MatchingPartition, request.MatchingPartitionCount);
                     if (claimed.Count > 0)
                     {
                         // Another compatible waiter can drain remaining backlog.
                         Remove(waiter);
                         var example = claimed[0];
-                        NotifyReady(hub, example.TaskType, example.Version);
+                        NotifyReady(hub, example.TaskType, example.Version,
+                            example.PartitionId);
                         return claimed;
                     }
                 }
@@ -146,10 +171,10 @@ public sealed class HubTaskMatcher
     {
         lock (_sync)
         {
-            if (!_pending.TryGetValue(waiter.Hub, out var list)) return;
+            if (!_pending.TryGetValue((waiter.Hub, waiter.Partition), out var list)) return;
             if (!list.Remove(waiter)) return;
             _count--;
-            if (list.Count == 0) _pending.Remove(waiter.Hub);
+            if (list.Count == 0) _pending.Remove((waiter.Hub, waiter.Partition));
         }
     }
 }

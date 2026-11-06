@@ -22,7 +22,8 @@ public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
 public enum HubCompletionKind { Standalone, Managed, Remote, Native }
 public sealed record HubCompletionRoute(string HubId, HubCompletionKind Kind);
 public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
-    HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null);
+    HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null,
+    int? MatchingPartition = null, int? MatchingPartitionCount = null);
 public sealed record HubEnqueueRequest(string HubId, string TaskType, int Version,
     JsonElement Payload, Guid? WorkflowId = null, string? IdempotencyKey = null);
 public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
@@ -193,15 +194,26 @@ public sealed class HubTaskStore : IAsyncDisposable
 
     public async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
-        int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null)
+        int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null,
+        int? matchingPartition = null, int? matchingPartitionCount = null)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(workerId) || workerId.Length > 128 ||
             hubs.Count is < 1 or > 32 || capabilities.Count is < 1 or > 128 ||
             maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
-            lease > TimeSpan.FromMinutes(5))
+            lease > TimeSpan.FromMinutes(5) ||
+            (matchingPartition.HasValue != matchingPartitionCount.HasValue) ||
+            (matchingPartitionCount.HasValue &&
+                (matchingPartitionCount.Value is < 1 or > 64 ||
+                 matchingPartition!.Value < 0 ||
+                 matchingPartition.Value >= matchingPartitionCount.Value)))
             throw new ArgumentException("Invalid worker claim parameters");
+
+        var matchPartition = matchingPartition ?? 0;
+        var matchCount = matchingPartitionCount ?? 1;
+        span?.SetTag("matching.partition", matchingPartition);
+        span?.SetTag("matching.partition_count", matchCount);
 
         var gateAcquired = false;
         try
@@ -231,6 +243,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
                 WHERE hub_id = ANY(@hubs)
+                  AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
                       WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                   AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
@@ -246,6 +259,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                 """, db))
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
+                candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
+                candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
                 candidateQuery.Parameters.AddWithValue("types", supported);
                 candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
@@ -268,6 +283,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,
                            payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)
                     FROM wfc_scale.hub_task WHERE id = @id
+                      AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
                       AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
                         SELECT 1 FROM wfc_scale.hub_workflow w,
                           jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
@@ -282,6 +298,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                     """, db, tx))
                 {
                     row.Parameters.AddWithValue("id", taskId);
+                    row.Parameters.AddWithValue("matchCount", matchCount);
+                    row.Parameters.AddWithValue("matchPartition", matchPartition);
                     row.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                     await using var reader = await row.ExecuteReaderAsync(ct);
                     if (!await reader.ReadAsync(ct)) continue;

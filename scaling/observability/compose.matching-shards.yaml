@@ -1,0 +1,19 @@
+# Phase 3 overlay: four independently owned matching partitions per Hub
+# namespace, two active Hub replicas and worker long-poll rotation.
+# Compose order: compose.yaml, compose.matching-ha.yaml, this file.
+services:
+  hub:
+    environment:
+      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+
+  hub-2:
+    environment:
+      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+
+  processor:
+    environment:
+      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+
+  provisioner:
+    environment:
+      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"

@@ -19,6 +19,7 @@ public static class HubGatewayEndpoints
             ? Math.Clamp(max, 1, 100) : 12;
         services.AddSingleton(new HubTaskStore(connectionString, maxConnections));
         services.AddSingleton<HubMatchingLeaseStore>();
+        services.AddSingleton<HubMatchingPartitionLeaseStore>();
         services.AddSingleton<HubMatchingOwnership>();
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
         services.AddSingleton<HubTaskMatcher>();
@@ -353,8 +354,55 @@ public static class HubGatewayEndpoints
                     string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
                     c.Version < 1))
                 return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            if (!ownership.Sharded &&
+                (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
+                return Results.Conflict(new { error = "Matching partition topology mismatch" });
+            if (ownership.Sharded &&
+                (request.MatchingPartitionCount != ownership.PartitionCount ||
+                 request.MatchingPartition is null ||
+                 request.MatchingPartition < 0 ||
+                 request.MatchingPartition >= ownership.PartitionCount))
+                return Results.Conflict(new { error = "Matching partition topology mismatch" });
             try
             {
+                if (ownership.Sharded)
+                {
+                    var hub = request.Hubs[0];
+                    var partition = request.MatchingPartition!.Value;
+                    var forwarded = context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded");
+                    var current = await ownership.ResolvePartitionAsync(hub, partition, ct);
+                    if (current is null)
+                    {
+                        // Unowned/expired partition: prefer a deterministic owner
+                        // so healthy replicas share the matching workload.
+                        if (!forwarded)
+                        {
+                            try
+                            {
+                                var routed = await ownership.ForwardToAsync(
+                                    ownership.PreferredUrl(partition), request,
+                                    context.Request.Headers.Authorization.ToString(), ct);
+                                if (routed is not null) return Results.Ok(routed);
+                            }
+                            catch (HttpRequestException) { /* preferred peer unavailable */ }
+                            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
+                        }
+                        // Owner failed: elect locally using PostgreSQL's fenced
+                        // UPSERT. Concurrent replicas cannot both win.
+                        current = await ownership.AcquirePartitionAsync(hub, partition, ct);
+                    }
+                    if (!ownership.IsLocal(current))
+                    {
+                        if (forwarded) return Results.StatusCode(503);
+                        var leases = await ownership.ForwardToAsync(current.OwnerUrl,
+                            request, context.Request.Headers.Authorization.ToString(), ct);
+                        return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
+                    }
+                    if (!await ownership.StillOwnsPartitionAsync(hub, partition, ct))
+                        return Results.StatusCode(503);
+                    return Results.Ok(await matcher.LongPollAsync(request, ct));
+                }
+
                 var owner = await ownership.ResolveAsync(request.Hubs[0], ct);
                 if (!ownership.IsLocal(owner))
                 {
@@ -392,6 +440,21 @@ public static class HubGatewayEndpoints
             return lease is null ? Results.NotFound() :
                 Results.Ok(new { lease.HubId, lease.OwnerId, lease.OwnerUrl,
                     lease.Epoch, lease.LeaseUntil, ThisNode = ownership.NodeId });
+        });
+
+        routes.MapGet("/matching/partitions/{hub}", async (string hub,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Sharded) return Results.NotFound();
+            if (string.IsNullOrWhiteSpace(hub) || hub.Length > 80)
+                return Results.BadRequest(new { error = "Invalid hub" });
+            var leases = await ownership.ListPartitionsAsync(hub, ct);
+            return Results.Ok(new { hub, partitions = ownership.PartitionCount,
+                thisNode = ownership.NodeId,
+                owners = leases.Select(l => new {
+                    l.Partition, l.OwnerId, l.OwnerUrl, l.Epoch, l.LeaseUntil,
+                    Active = l.LeaseUntil > DateTime.UtcNow
+                }) });
         });
 
         routes.MapPost("/workers/tasks:claim", async (HubClaimRequest request,

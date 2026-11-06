@@ -22,6 +22,11 @@ public sealed class HubRuntimeOptions
     // Polls wait server-side; failed long-poll requests retry with backoff.
     public bool LongPollingEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_LONG_POLL_ENABLED") is "true" or "1" or "True";
+    // Every processor and Hub replica must use the same count. The Hub also
+    // enforces an immutable per-namespace count stored in PostgreSQL.
+    public int MatchingPartitions { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PARTITIONS"),
+            out var count) ? count : 1;
     // Feature flag for controlled baseline/optimized benchmark runs.
     public bool AdaptiveClaimsEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
@@ -157,7 +162,8 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
-           options.PollInterval<TimeSpan.FromMilliseconds(10))throw new ArgumentException("Invalid Hub worker options");
+           options.PollInterval<TimeSpan.FromMilliseconds(10) ||
+           options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
             o.EnableWorkflows=false;o.EnableEvents=false;o.EnableIndexes=false;o.EnablePolling=false;

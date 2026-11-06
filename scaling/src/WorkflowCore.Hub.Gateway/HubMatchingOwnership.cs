@@ -1,37 +1,51 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
-using System.Net.Http.Headers;
 using WorkflowCore.Hub;
 
 namespace WorkflowCore.Hub.Gateway;
 
 /// <summary>
-/// Matching owner election and renewal shared across Hub gateway replicas.
-/// One logical matching partition per hub namespace for the initial HA rollout.
-/// SQL, not process-local state, decides ownership and lease generations.
+/// PostgreSQL-fenced matching ownership. One-owner-per-Hub remains supported
+/// for legacy mode; sharded mode uses independent (hub, matchingPartition)
+/// owner leases. Matching ownership never substitutes for task lease fencing.
 /// </summary>
 public sealed class HubMatchingOwnership : BackgroundService
 {
-    private readonly HubMatchingLeaseStore _store;
+    private readonly HubMatchingLeaseStore _legacy;
+    private readonly HubMatchingPartitionLeaseStore _partitions;
     private readonly ILogger<HubMatchingOwnership> _logger;
     private readonly ConcurrentDictionary<string, HubMatchingLease> _owned = new();
-    private readonly HttpClient _forwarder = new(new HttpClientHandler {
-        AllowAutoRedirect = false
+    private readonly ConcurrentDictionary<string, byte> _configured = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string Hub, int Partition), HubMatchingPartitionLease>
+        _partitionOwned = new();
+    private readonly HttpClient _forwarder = new(new SocketsHttpHandler {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(2)
     }) { Timeout = TimeSpan.FromSeconds(27) };
     private readonly HashSet<string> _trustedPeers;
+    private readonly string[] _orderedPeers;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromSeconds(8);
     private readonly TimeSpan _renewInterval = TimeSpan.FromSeconds(2);
 
     public bool Enabled { get; }
+    public bool Sharded => Enabled && PartitionCount > 1;
+    public int PartitionCount { get; }
     public string NodeId { get; }
     public string AdvertiseUrl { get; }
 
-    public HubMatchingOwnership(HubMatchingLeaseStore store,
+    public HubMatchingOwnership(HubMatchingLeaseStore legacy,
+        HubMatchingPartitionLeaseStore partitions,
         ILogger<HubMatchingOwnership> logger)
     {
-        _store = store;
+        _legacy = legacy;
+        _partitions = partitions;
         _logger = logger;
         Enabled = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_ENABLED") is "true" or "1" or "True";
+        var rawCount = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PARTITIONS");
+        if (rawCount is not null && (!int.TryParse(rawCount, out var parsed) ||
+            parsed is < 1 or > 64))
+            throw new InvalidOperationException("WFC_HUB_MATCHING_PARTITIONS must be 1..64");
+        PartitionCount = rawCount is null ? 1 : int.Parse(rawCount);
         NodeId = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_NODE_ID") ??
             Environment.MachineName + "-" + Guid.NewGuid().ToString("N");
         AdvertiseUrl = (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_ADVERTISE_URL") ?? "").TrimEnd('/');
@@ -39,6 +53,7 @@ public sealed class HubMatchingOwnership : BackgroundService
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(p => p.TrimEnd('/'))
             .ToHashSet(StringComparer.Ordinal);
+        _orderedPeers = _trustedPeers.OrderBy(x => x, StringComparer.Ordinal).ToArray();
         if (Enabled && (!Uri.TryCreate(AdvertiseUrl, UriKind.Absolute, out var uri) ||
                         uri.Scheme is not ("http" or "https") ||
                         NodeId.Length > 128 || _trustedPeers.Count == 0 ||
@@ -46,12 +61,12 @@ public sealed class HubMatchingOwnership : BackgroundService
                         _trustedPeers.Any(p => !Uri.TryCreate(p, UriKind.Absolute, out var peer) ||
                                                peer.Scheme is not ("http" or "https"))))
             throw new InvalidOperationException(
-                "Matching HA requires a trusted WFC_HUB_MATCHING_ADVERTISE_URL and WFC_HUB_MATCHING_PEERS");
+                "Matching HA requires trusted WFC_HUB_MATCHING_ADVERTISE_URL and WFC_HUB_MATCHING_PEERS");
     }
 
     public async Task<HubMatchingLease> ResolveAsync(string hub, CancellationToken ct)
     {
-        var lease = await _store.AcquireOrReadAsync(hub, NodeId, AdvertiseUrl, _leaseDuration, ct);
+        var lease = await _legacy.AcquireOrReadAsync(hub, NodeId, AdvertiseUrl, _leaseDuration, ct);
         if (lease.OwnerId == NodeId) _owned[hub] = lease;
         else _owned.TryRemove(hub, out _);
         return lease;
@@ -61,21 +76,76 @@ public sealed class HubMatchingOwnership : BackgroundService
         lease.OwnerId == NodeId && lease.LeaseUntil > DateTime.UtcNow;
 
     public Task<HubMatchingLease?> ReadAsync(string hub, CancellationToken ct) =>
-        _store.ReadAsync(hub, ct);
+        _legacy.ReadAsync(hub, ct);
 
     public Task<bool> StillOwnsAsync(string hub, CancellationToken ct) =>
         _owned.TryGetValue(hub, out var lease)
-            ? _store.OwnsAsync(hub, NodeId, lease.Epoch, ct)
+            ? _legacy.OwnsAsync(hub, NodeId, lease.Epoch, ct)
             : Task.FromResult(false);
 
-    public async Task<HubLeasedTask[]?> ForwardAsync(
-        HubMatchingLease owner, HubClaimRequest claim, string authorization, CancellationToken ct)
+    // In a healthy two-Hub system different matching partitions prefer
+    // different owners. This is an affinity hint, NOT authority; SQL is.
+    public string PreferredUrl(int partition) =>
+        _orderedPeers[partition % _orderedPeers.Length];
+
+    public async Task<HubMatchingPartitionLease?> ResolvePartitionAsync(
+        string hub, int partition, CancellationToken ct)
     {
-        // The DB owner URL must match deployment-configured peers. It cannot
-        // redirect worker tokens to an arbitrary URL or follow HTTP redirects.
-        var url = owner.OwnerUrl.TrimEnd('/');
+        ValidatePartition(partition);
+        if (!_configured.ContainsKey(hub))
+        {
+            await _partitions.EnsureConfigAsync(hub, PartitionCount, ct);
+            _configured.TryAdd(hub, 0);
+        }
+        var current = await _partitions.ReadAsync(hub, partition, ct);
+        if (current is not null && current.LeaseUntil > DateTime.UtcNow)
+        {
+            TrackPartition(hub, partition, current);
+            return current;
+        }
+        // Let the preferred owner acquire lazily on its first forwarded poll.
+        // The gateway falls back to electing locally if that owner is down.
+        if (PreferredUrl(partition) != AdvertiseUrl)
+            return null;
+        return await AcquirePartitionAsync(hub, partition, ct);
+    }
+
+    public async Task<HubMatchingPartitionLease> AcquirePartitionAsync(
+        string hub, int partition, CancellationToken ct)
+    {
+        ValidatePartition(partition);
+        var lease = await _partitions.AcquireOrReadAsync(
+            hub, partition, PartitionCount, NodeId, AdvertiseUrl, _leaseDuration, ct);
+        TrackPartition(hub, partition, lease);
+        return lease;
+    }
+
+    public Task<HubMatchingPartitionLease?> ReadPartitionAsync(
+        string hub, int partition, CancellationToken ct) =>
+        _partitions.ReadAsync(hub, partition, ct);
+
+    public Task<IReadOnlyList<HubMatchingPartitionLease>> ListPartitionsAsync(
+        string hub, CancellationToken ct) => _partitions.ListAsync(hub, ct);
+
+    public bool IsLocal(HubMatchingPartitionLease lease) =>
+        lease.OwnerId == NodeId && lease.LeaseUntil > DateTime.UtcNow;
+
+    public Task<bool> StillOwnsPartitionAsync(
+        string hub, int partition, CancellationToken ct) =>
+        _partitionOwned.TryGetValue((hub, partition), out var lease)
+            ? _partitions.OwnsAsync(hub, partition, NodeId, lease.Epoch, ct)
+            : Task.FromResult(false);
+
+    public Task<HubLeasedTask[]?> ForwardAsync(
+        HubMatchingLease owner, HubClaimRequest claim, string authorization, CancellationToken ct) =>
+        ForwardToAsync(owner.OwnerUrl, claim, authorization, ct);
+
+    public async Task<HubLeasedTask[]?> ForwardToAsync(
+        string url, HubClaimRequest claim, string authorization, CancellationToken ct)
+    {
+        url = url.TrimEnd('/');
         if (!_trustedPeers.Contains(url))
-            throw new InvalidOperationException("Matching owner URL is not in the trusted peer set");
+            throw new InvalidOperationException("Matching owner URL is not in trusted peer set");
         using var message = new HttpRequestMessage(HttpMethod.Post,
             url + "/api/hub/workers/tasks:poll");
         message.Headers.TryAddWithoutValidation("Authorization", authorization);
@@ -84,38 +154,80 @@ public sealed class HubMatchingOwnership : BackgroundService
         using var response = await _forwarder.SendAsync(message, ct);
         if (response.IsSuccessStatusCode)
             return await response.Content.ReadFromJsonAsync<HubLeasedTask[]>(cancellationToken: ct);
-        // A crashed or lease-fenced owner is retried through the worker's
-        // load-balanced Hub endpoint; never forward recursively.
-        _logger.LogWarning("Matching peer {Owner} rejected poll with {Status}",
-            owner.OwnerId, (int)response.StatusCode);
+        _logger.LogWarning("Matching peer {Url} rejected poll with HTTP {Status}",
+            url, (int)response.StatusCode);
         return null;
+    }
+
+    private void ValidatePartition(int partition)
+    {
+        if (partition < 0 || partition >= PartitionCount)
+            throw new ArgumentException("Matching partition outside configured range");
+    }
+
+    private void TrackPartition(string hub, int partition, HubMatchingPartitionLease lease)
+    {
+        if (lease.OwnerId == NodeId && lease.LeaseUntil > DateTime.UtcNow)
+            _partitionOwned[(hub, partition)] = lease;
+        else _partitionOwned.TryRemove((hub, partition), out _);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!Enabled) return;
-        using var timer = new PeriodicTimer(_renewInterval);
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        try
         {
-            foreach (var (hub, lease) in _owned.ToArray())
+            using var timer = new PeriodicTimer(_renewInterval);
+            while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                try
+                foreach (var (hub, lease) in _owned.ToArray())
                 {
-                    if (await _store.RenewAsync(hub, NodeId, lease.Epoch,
-                            _leaseDuration, stoppingToken))
-                        _owned[hub] = lease with { LeaseUntil = DateTime.UtcNow.Add(_leaseDuration) };
-                    else
+                    try
+                    {
+                        if (await _legacy.RenewAsync(hub, NodeId, lease.Epoch,
+                                _leaseDuration, stoppingToken))
+                            _owned[hub] = lease with { LeaseUntil = DateTime.UtcNow.Add(_leaseDuration) };
+                        else _owned.TryRemove(hub, out _);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+                    catch (Exception ex)
+                    {
                         _owned.TryRemove(hub, out _);
+                        _logger.LogWarning(ex, "Matching owner lease renewal failed for {Hub}", hub);
+                    }
                 }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                foreach (var (key, lease) in _partitionOwned.ToArray())
                 {
-                    return;
+                    try
+                    {
+                        if (await _partitions.RenewAsync(key.Hub, key.Partition, NodeId,
+                                lease.Epoch, _leaseDuration, stoppingToken))
+                            _partitionOwned[key] = lease with { LeaseUntil = DateTime.UtcNow.Add(_leaseDuration) };
+                        else _partitionOwned.TryRemove(key, out _);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+                    catch (Exception ex)
+                    {
+                        _partitionOwned.TryRemove(key, out _);
+                        _logger.LogWarning(ex, "Matching partition lease renewal failed for {Hub}/{Partition}",
+                            key.Hub, key.Partition);
+                    }
                 }
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        finally
+        {
+            // Graceful shutdown makes other replicas eligible immediately.
+            // Hard crashes rely on expiry; old owner epochs cannot renew.
+            foreach (var (key, lease) in _partitionOwned.ToArray())
+            {
+                try { await _partitions.ReleaseAsync(key.Hub, key.Partition, NodeId,
+                    lease.Epoch, CancellationToken.None); }
                 catch (Exception ex)
                 {
-                    // Never assume ownership following a failed renewal.
-                    _owned.TryRemove(hub, out _);
-                    _logger.LogWarning(ex, "Matching lease renewal failed for {Hub}", hub);
+                    _logger.LogWarning(ex, "Could not release matching partition {Hub}/{Partition}",
+                        key.Hub, key.Partition);
                 }
             }
         }
