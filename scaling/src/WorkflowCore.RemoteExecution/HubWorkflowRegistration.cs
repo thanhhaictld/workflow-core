@@ -18,6 +18,9 @@ public sealed class HubRuntimeOptions
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+    // Feature flag for controlled baseline/optimized benchmark runs.
+    public bool AdaptiveClaimsEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
     public TimeSpan ErrorRetryInterval { get; set; } = TimeSpan.FromSeconds(60);
     public bool RegisterOnly { get; set; }
     public bool SequentialVersionOneCompatibility { get; set; }
