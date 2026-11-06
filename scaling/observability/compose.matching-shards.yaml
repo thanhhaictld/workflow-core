@@ -5,10 +5,12 @@ services:
   hub:
     environment:
       WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+      WFC_HUB_MATCHING_EVENT_GATED: "${WFC_HUB_MATCHING_EVENT_GATED:-false}"
 
   hub-2:
     environment:
       WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+      WFC_HUB_MATCHING_EVENT_GATED: "${WFC_HUB_MATCHING_EVENT_GATED:-false}"
 
   processor:
     environment:
