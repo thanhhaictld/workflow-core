@@ -58,7 +58,8 @@ public sealed class HubNativeEventLaneTests
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
-        await using var setup = await CreateAsync(database);
+        var setup = await CreateAsync(database);
+        await using var ownedTasks = setup.Tasks;
         for (var i = 0; i < 8; i++) await Start(setup.Remote, setup.Hub);
         var leases = await setup.Tasks.ClaimAsync("worker", [setup.Hub],
             [new(setup.Hub, "__native_workflow__", 1)], 8,
@@ -85,7 +86,8 @@ public sealed class HubNativeEventLaneTests
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
-        await using var setup = await CreateAsync(database);
+        var setup = await CreateAsync(database);
+        await using var ownedTasks = setup.Tasks;
         var workflow = await Start(setup.Remote, setup.Hub);
         var task = await Claim(setup.Tasks, setup.Hub);
         var subs = new[] { new HubNativeSubscription("pointer", "approved", "key", DateTime.UnixEpoch) };
@@ -111,7 +113,8 @@ public sealed class HubNativeEventLaneTests
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
-        await using var setup = await CreateAsync(database);
+        var setup = await CreateAsync(database);
+        await using var ownedTasks = setup.Tasks;
         var workflow = await Start(setup.Remote, setup.Hub);
         var first = await Claim(setup.Tasks, setup.Hub);
         var subscription = new[] { new HubNativeSubscription("pointer", "approved", "key", DateTime.UnixEpoch) };
