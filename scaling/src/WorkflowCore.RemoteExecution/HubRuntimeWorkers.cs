@@ -190,6 +190,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             using(var bodySpan=HubTelemetry.Traces.StartActivity(
                 isActivity?"hub.worker.activity.body":"hub.worker.workflow.body"))
             {
+                bodySpan?.SetTag("activity.type",task.TaskType);
+                bodySpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
+                bodySpan?.SetTag("task.id",task.Id.ToString());
                 try { result=await Execute(task,_owner,execution.Token); }
                 finally
                 {
@@ -206,6 +209,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     var httpStarted=Stopwatch.GetTimestamp();
                     using var completeSpan=HubTelemetry.Traces.StartActivity("hub.worker.completion_http");
                     completeSpan?.SetTag("retry.attempt",attempt);
+                    completeSpan?.SetTag("activity.type",task.TaskType);
+                    completeSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
+                    completeSpan?.SetTag("task.id",task.Id.ToString());
                     HttpResponseMessage response;
                     try { response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token); }
                     finally
