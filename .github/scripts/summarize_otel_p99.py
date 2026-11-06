@@ -63,7 +63,11 @@ with open(args.traces) as fp:
                     workflow=att.get("workflow.id")
                     key=ids_to_run.get(workflow)
                     name=sp.get("name","")
-                    if not key and name not in ("hub.task.claim","hub.activity.db_commit") and not (
+                    if not key and name not in (
+                        "hub.task.claim","hub.activity.db_commit",
+                        "hub.activity.completion.route",
+                        "hub.activity.classify.remote","hub.activity.classify.managed",
+                        "hub.activity.classify.native","hub.activity.readiness.lookup") and not (
                         name.startswith("POST /api/hub/tasks/") and name.endswith("/complete")):
                         continue
                     first=int(sp.get("startTimeUnixNano",0))/1e9
@@ -117,6 +121,11 @@ for key,run in runs.items():
         pool=float(event.get("db.pool.acquired",{}).get("duration.seconds",0))
         wf_lock=float(event.get("db.workflow_row.locked",{}).get("duration.seconds",0))
         task_lock=float(event.get("db.task_row.locked",{}).get("duration.seconds",0))
+        route=find("hub.activity.completion.route",lambda s:s["taskId"]==task)
+        remoteCheck=find("hub.activity.classify.remote",lambda s:s["taskId"]==task)
+        managedCheck=find("hub.activity.classify.managed",lambda s:s["taskId"]==task)
+        nativeCheck=find("hub.activity.classify.native",lambda s:s["taskId"]==task)
+        readinessCheck=find("hub.activity.readiness.lookup",lambda s:s["taskId"]==task)
         stages={
             "activityBody":body["seconds"],
             "completionHttp":ack["seconds"],
@@ -128,6 +137,10 @@ for key,run in runs.items():
             "dbCommit":commit["seconds"],
             "httpNetworkRemainder":max(0,ack["seconds"]-server["seconds"]),
         }
+        for name,phase in (("completionRoute",route),("classifyRemote",remoteCheck),
+                           ("classifyManaged",managedCheck),("classifyNative",nativeCheck),
+                           ("readinessLookup",readinessCheck)):
+            if phase is not None:stages[name]=phase["seconds"]
         if claim:
             stages["claimRequest"]=claim["seconds"]
             metrics["claimCandidateScanCount"].append(float(claim["candidatesScanned"] or 0))
