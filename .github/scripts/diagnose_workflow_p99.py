@@ -132,6 +132,7 @@ report = {
     "definition": "workflow p99 is completed_at-created_at; task activity lease includes Hub transport and completion",
     "caveat": "Native claim events use transaction timestamps; sub-second negative adjacent intervals should be treated as timestamp artifacts, not negative runtime.",
     "latencyByStage": aggregates, "slowestWorkflows": slowest,
+    "workflowTimelines": rows,
     "activityRetries": sum(max(0,r["activity_attempts"]-1) for r in rows),
     "nativeClaims": sum(r["native_claims"] for r in rows),
     "coverage": {

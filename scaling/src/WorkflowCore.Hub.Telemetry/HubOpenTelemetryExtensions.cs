@@ -61,6 +61,20 @@ public static class HubOpenTelemetryExtensions
                 metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_workflow_row_lock_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_history_write_duration_seconds", latencyBuckets);
+                foreach (var instrument in new[] {
+                    "workflow_hub_worker_body_duration_seconds",
+                    "workflow_hub_worker_completion_http_duration_seconds",
+                    "workflow_hub_activity_completion_duration_seconds",
+                    "workflow_hub_activity_db_pool_wait_seconds",
+                    "workflow_hub_activity_workflow_lock_seconds",
+                    "workflow_hub_activity_task_lock_seconds",
+                    "workflow_hub_activity_db_commit_seconds",
+                    "workflow_hub_claim_db_pool_wait_seconds",
+                    "workflow_hub_claim_candidate_query_seconds",
+                    "workflow_hub_claim_permit_lock_seconds",
+                    "workflow_hub_claim_permit_check_seconds"
+                })
+                    metrics.AddView(instrument, latencyBuckets);
 
                 metrics.AddOtlpExporter(options =>
                 {
@@ -72,6 +86,10 @@ public static class HubOpenTelemetryExtensions
             {
                 tracing.AddSource(HubTelemetry.ActivitySourceName, "WorkflowCore.Distributed")
                     .AddHttpClientInstrumentation();
+                // SQL tracing is opt-in: queries can reveal schema or business data,
+                // and high-volume DB spans perturb normal benchmarks.
+                if (Environment.GetEnvironmentVariable("WFC_OTEL_SQL_SPANS_ENABLED") == "true")
+                    tracing.AddSource("Npgsql");
 
                 if (httpServer)
                     tracing.AddAspNetCoreInstrumentation(options =>

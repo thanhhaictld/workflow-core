@@ -366,9 +366,29 @@ public static class HubGatewayEndpoints
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
-            var remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
-            var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
-            var nativeActivity=await native.IsActivityAsync(id,ct);
+            using var completionRoute=HubTelemetry.Traces.StartActivity("hub.activity.completion.route");
+            completionRoute?.SetTag("task.id",id.ToString());
+            bool remoteActivity;
+            using (var querySpan=HubTelemetry.Traces.StartActivity("hub.activity.classify.remote"))
+            {
+                querySpan?.SetTag("task.id",id.ToString());
+                remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
+            }
+            bool managed=false;
+            if (!remoteActivity)
+            {
+                using var querySpan=HubTelemetry.Traces.StartActivity("hub.activity.classify.managed");
+                querySpan?.SetTag("task.id",id.ToString());
+                managed=await store.IsManagedWorkflowStepAsync(id,ct);
+            }
+            bool nativeActivity;
+            using (var querySpan=HubTelemetry.Traces.StartActivity("hub.activity.classify.native"))
+            {
+                querySpan?.SetTag("task.id",id.ToString());
+                nativeActivity=await native.IsActivityAsync(id,ct);
+            }
+            completionRoute?.SetTag("activity.route",
+                nativeActivity ? "native" : remoteActivity ? "remote" : managed ? "managed" : "direct");
             var done = nativeActivity
                 ? await native.CompleteActivityAsync(id,request.WorkerId,request.Epoch,request.Result,ct)
                 : remoteActivity
@@ -381,7 +401,12 @@ public static class HubGatewayEndpoints
                         request.Result.GetRawText(), ct);
             if (done)
             {
-                var task = await store.GetAsync(id, ct);
+                HubTaskStatus? task;
+                using (var lookupSpan=HubTelemetry.Traces.StartActivity("hub.activity.readiness.lookup"))
+                {
+                    lookupSpan?.SetTag("task.id",id.ToString());
+                    task=await store.GetAsync(id,ct);
+                }
                 if (task is not null) readiness.Publish(task.HubId);
             }
             return done ? Results.NoContent() :

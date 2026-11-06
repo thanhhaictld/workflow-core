@@ -12,7 +12,7 @@ public sealed record HubWorkflowCapability(string HubId, string DefinitionId, in
 public sealed record HubLeasedTask(
     Guid Id, string HubId, int PartitionId, string TaskType, int Version,
     Guid? WorkflowId, JsonElement Payload, long Epoch, int Attempts,
-    DateTime LeaseUntil);
+    DateTime LeaseUntil, string? TraceParent = null);
 public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
@@ -195,10 +195,16 @@ public sealed class HubTaskStore : IAsyncDisposable
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
         var results = new List<HubLeasedTask>(maxTasks);
         var scannedCandidates = 0;
+        var poolStarted = Stopwatch.GetTimestamp();
         await using var db = await _dataSource.OpenConnectionAsync(ct);
+        var poolSeconds = Stopwatch.GetElapsedTime(poolStarted).TotalSeconds;
+        HubTelemetry.ClaimConnectionWait.Record(poolSeconds);
+        span?.AddEvent(new ActivityEvent("db.pool.acquired",
+            tags: new ActivityTagsCollection {{"duration.seconds",poolSeconds}}));
         for (var batch = 0; batch < maxTasks; batch++)
         {
             var candidates = new List<Guid>();
+            var candidateQueryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
                 WHERE hub_id = ANY(@hubs)
@@ -222,6 +228,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
             }
+            var querySeconds = Stopwatch.GetElapsedTime(candidateQueryStarted).TotalSeconds;
+            HubTelemetry.ClaimCandidateQueryDuration.Record(querySeconds);
             scannedCandidates += candidates.Count;
 
             HubLeasedTask? found = null;
@@ -251,7 +259,12 @@ public sealed class HubTaskStore : IAsyncDisposable
                     row.Parameters.AddWithValue("id", taskId);
                     row.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                     await using var reader = await row.ExecuteReaderAsync(ct);
-                    if (!await reader.ReadAsync(ct)) continue;
+                    if (!await reader.ReadAsync(ct))
+                    {
+                        HubTelemetry.ClaimRejectedCandidates.Add(1,
+                            new KeyValuePair<string,object?>("reason","unavailable_or_locked"));
+                        continue;
+                    }
                     id = reader.GetGuid(0);
                     hub = reader.GetString(1);
                     partition = reader.GetInt32(2);
@@ -287,6 +300,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     // Fetch current values *under* the permit lock, never from a stale candidate snapshot.
                     int currentCapacity;
                     bool currentFifo;
+                    var lockStarted = Stopwatch.GetTimestamp();
                     await using (var resourceLock = new NpgsqlCommand("""
                         SELECT capacity,strict_fifo FROM wfc_scale.hub_resource
                         WHERE resource_key = @key FOR UPDATE
@@ -299,7 +313,10 @@ public sealed class HubTaskStore : IAsyncDisposable
                         currentCapacity=resourceReader.GetInt32(0);
                         currentFifo=resourceReader.GetBoolean(1);
                     }
+                    HubTelemetry.ClaimPermitRowLockWait.Record(
+                        Stopwatch.GetElapsedTime(lockStarted).TotalSeconds);
 
+                    var checkStarted = Stopwatch.GetTimestamp();
                     await using var check = new NpgsqlCommand("""
                         SELECT count(*) FILTER (WHERE t.state = 1 AND t.lease_until > now()),
                                count(*) FILTER (WHERE t.sequence < @seq AND t.state IN (0,1))
@@ -313,9 +330,14 @@ public sealed class HubTaskStore : IAsyncDisposable
                     if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Resource missing");
                     var active = reader.GetInt64(0);
                     var earlier = reader.GetInt64(1);
+                    HubTelemetry.ClaimPermitEligibilityDuration.Record(
+                        Stopwatch.GetElapsedTime(checkStarted).TotalSeconds);
                     if (active >= currentCapacity || (currentFifo && earlier > 0))
                     {
                         eligible = false;
+                        HubTelemetry.ClaimRejectedCandidates.Add(1,
+                            new KeyValuePair<string,object?>("reason",
+                                active >= currentCapacity ? "capacity" : "fifo_prior"));
                         break;
                     }
                 }
@@ -339,7 +361,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     var epoch = reader.GetInt64(0);
                     var until = reader.GetDateTime(1);
                     found = new(id, hub, partition, taskType, version, workflow,
-                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until);
+                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until, span?.Id);
                 }
                 // A lease is a durable fencing epoch. Keep one actual claim
                 // timestamp per managed workflow activity attempt, including

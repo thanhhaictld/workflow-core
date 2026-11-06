@@ -23,23 +23,31 @@ jobs:
       POLICY_BENCH_ACTIVITY_WORKERS: "8"
       OFFBOARD_PROCESSOR_WORKERS: "4"
       COUNT: "100"
+      OTEL_COLLECTOR_CONFIG: otel-collector-diagnostic.yaml
+      WFC_OTEL_SQL_SPANS_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
       - name: Validate diagnostic scripts
         run: |
           set -euo pipefail
-          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py
+          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py .github/scripts/summarize_otel_p99.py
           node --input-type=module --check < scaling/observability/k6/partition-ordering.js
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
       - name: Start Hub, PostgreSQL, and 8 policy processors
         run: |
           set -euo pipefail
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub
+          mkdir -p scaling/observability/results scaling/observability/results/p99-100
+          chmod 0777 scaling/observability/results scaling/observability/results/p99-100
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub prometheus tempo loki grafana
           for i in {1..100}; do
-            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null && \
+               curl -fsS http://127.0.0.1:3200/ready >/dev/null && \
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null; then break; fi
             sleep 2
           done
           curl -fsS http://127.0.0.1:5100/health/ready
+          curl -fsS http://127.0.0.1:3200/ready
+          curl -fsS http://127.0.0.1:9090/-/ready
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
             --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
           mkdir -p scaling/observability/results/p99-100
@@ -120,6 +128,12 @@ jobs:
                   print('SLOWEST',json.dumps(t['slowestWorkflows'][:3]))
           print('PASS: 600 completed workflows with 6 durable per-workflow traces')
           PY
+          # OTLP batch exporter and file exporter flush asynchronously.
+          sleep 8
+          python3 .github/scripts/summarize_otel_p99.py \
+            --traces scaling/observability/results/p99-otel-traces.jsonl \
+            --results scaling/observability/results/p99-100 \
+            --output scaling/observability/results/p99-100/otel-correlated-summary.json
       - name: Upload forensic results and raw k6 logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,10 +141,12 @@ jobs:
           name: workflow-hub-p99-100-workflows
           path: |
             scaling/observability/results/p99-100/*.json
+            scaling/observability/results/p99-otel-traces.jsonl
+            scaling/observability/results/p99-otel-metrics.jsonl
             /tmp/p99-k6-*.log
             /tmp/p99-waits-*.log
           if-no-files-found: warn
       - name: Print service logs on failures
         if: failure()
         run: |
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor otel-collector tempo || true

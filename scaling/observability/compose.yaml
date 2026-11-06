@@ -143,6 +143,7 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: "5000"
       WFC_OTEL_LOGS_ENABLED: "true"
       OTEL_SERVICE_INSTANCE_ID: hub-1
+      WFC_OTEL_SQL_SPANS_ENABLED: "${WFC_OTEL_SQL_SPANS_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "/bin/bash", "-c", "echo > /dev/tcp/127.0.0.1/5100"]
       interval: 5s
@@ -203,7 +204,9 @@ services:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
-      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./${OTEL_COLLECTOR_CONFIG:-otel-collector.yaml}:/etc/otelcol-contrib/config.yaml:ro
+      # Dedicated benchmark collector config optionally writes OTLP JSONL here.
+      - ./results:/results
     ports:
       - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
 

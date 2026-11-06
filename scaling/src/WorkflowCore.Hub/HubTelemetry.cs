@@ -95,6 +95,31 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_worker_executions", "{task}");
     public static readonly Histogram<double> WorkerExecutionDuration =
         Meter.CreateHistogram<double>("workflow_hub_worker_execution_duration_seconds", "s");
+    // Lease occupancy decomposition: body work vs HTTP acknowledgement.
+    public static readonly Histogram<double> WorkerBodyDuration =
+        Meter.CreateHistogram<double>("workflow_hub_worker_body_duration_seconds", "s");
+    public static readonly Histogram<double> WorkerCompletionHttpDuration =
+        Meter.CreateHistogram<double>("workflow_hub_worker_completion_http_duration_seconds", "s");
+    public static readonly Histogram<double> HubActivityCompletionDuration =
+        Meter.CreateHistogram<double>("workflow_hub_activity_completion_duration_seconds", "s");
+    public static readonly Histogram<double> HubActivityConnectionWait =
+        Meter.CreateHistogram<double>("workflow_hub_activity_db_pool_wait_seconds", "s");
+    public static readonly Histogram<double> HubActivityWorkflowRowLockWait =
+        Meter.CreateHistogram<double>("workflow_hub_activity_workflow_lock_seconds", "s");
+    public static readonly Histogram<double> HubActivityTaskRowLockWait =
+        Meter.CreateHistogram<double>("workflow_hub_activity_task_lock_seconds", "s");
+    public static readonly Histogram<double> HubActivityCommitDuration =
+        Meter.CreateHistogram<double>("workflow_hub_activity_db_commit_seconds", "s");
+    public static readonly Histogram<double> ClaimConnectionWait =
+        Meter.CreateHistogram<double>("workflow_hub_claim_db_pool_wait_seconds", "s");
+    public static readonly Histogram<double> ClaimCandidateQueryDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
+    public static readonly Histogram<double> ClaimPermitRowLockWait =
+        Meter.CreateHistogram<double>("workflow_hub_claim_permit_lock_seconds", "s");
+    public static readonly Histogram<double> ClaimPermitEligibilityDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_permit_check_seconds", "s");
+    public static readonly Counter<long> ClaimRejectedCandidates =
+        Meter.CreateCounter<long>("workflow_hub_claim_rejected_candidates", "{candidate}");
 
     // These observable instruments are process-local, not estimates of
     // total machine / container memory. Resource service.instance.id disambiguates.
