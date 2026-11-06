@@ -1,0 +1,90 @@
+# Compose overlay for matching high-availability experiments.
+# Run: docker compose -f scaling/observability/compose.yaml
+#      -f scaling/observability/compose.matching-ha.yaml
+#      --env-file scaling/observability/.env.example up -d --build hub hub-2 hub-lb
+services:
+  hub:
+    environment:
+      WFC_HUB_MATCHING_ENABLED: "true"
+      WFC_HUB_MATCHING_NODE_ID: hub-a
+      WFC_HUB_MATCHING_ADVERTISE_URL: http://hub:5100
+      WFC_HUB_MATCHING_PEERS: http://hub:5100,http://hub-2:5100
+
+  hub-2:
+    build:
+      context: ../..
+      dockerfile: scaling/observability/Dockerfile.app
+      args:
+        PROJECT: scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj
+    command: ["WorkflowCore.Hub.Server.dll"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:5100
+      WFC_PG: Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12}
+      WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "${WFC_HUB_CLAIM_ADMISSION_ENABLED:-true}"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"
+      WFC_HUB_BATCH_HISTORY_ENABLED: "${WFC_HUB_BATCH_HISTORY_ENABLED:-true}"
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: "${WFC_HUB_NATIVE_EVENT_LANE_MODE:-subscriptions}"
+      WorkflowHub__Scheduler__Enabled: "${HUB_SCHEDULER_ENABLED:-true}"
+      WorkflowHub__Scheduler__PollIntervalMs: "500"
+      WorkflowHub__Scheduler__BatchSize: "100"
+      WorkflowHub__Scheduler__MaxConcurrentBatches: "2"
+      WFC_HUB_MATCHING_ENABLED: "true"
+      WFC_HUB_MATCHING_NODE_ID: hub-b
+      WFC_HUB_MATCHING_ADVERTISE_URL: http://hub-2:5100
+      WFC_HUB_MATCHING_PEERS: http://hub:5100,http://hub-2:5100
+      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set Hub bearer token}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
+      WFC_OTEL_LOGS_ENABLED: "true"
+      OTEL_SERVICE_INSTANCE_ID: hub-2
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "echo > /dev/tcp/127.0.0.1/5100"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  hub-lb:
+    image: nginx:1.29-alpine
+    depends_on:
+      hub:
+        condition: service_healthy
+      hub-2:
+        condition: service_healthy
+    volumes:
+      - ./nginx.matching-ha.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:${HUB_LB_PORT:-5110}:5100"
+    restart: unless-stopped
+
+  processor:
+    environment:
+      WFC_HUB_URL: http://hub-lb:5100
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
+
+  provisioner:
+    environment:
+      WFC_HUB_URL: http://hub-lb:5100
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
+
+  monitor:
+    environment:
+      WORKFLOW_HUB_URL: http://hub-lb:5100
+
+  k6-policy:
+    environment:
+      HUB_URL: http://hub-lb:5100
+
+  k6:
+    environment:
+      HUB_URL: http://hub-lb:5100
+
+  k6-offboarding:
+    environment:
+      HUB_URL: http://hub-lb:5100

@@ -17,6 +17,9 @@ parser.add_argument("--mode", required=True, choices=["unordered", "partition", 
 parser.add_argument("--run-id", required=True)
 parser.add_argument("--count", required=True, type=int)
 parser.add_argument("--output", required=True)
+# Allow at-least-once replay only in deliberate owner-crash tests. All
+# regular ordering/performance runs preserve strict no-retry assertions.
+parser.add_argument("--max-extra-attempts", type=int, default=0)
 args = parser.parse_args()
 
 hub = "policy-benchmark"
@@ -36,6 +39,7 @@ tasktype = {
 import re
 assert re.fullmatch(r"[A-Za-z0-9_-]{1,100}", args.run_id)
 assert 0 < args.count <= 100000
+assert 0 <= args.max_extra_attempts <= args.count
 
 def query(sql):
     result = subprocess.run([
@@ -63,6 +67,7 @@ WITH attempts AS (
 )
 """
 total = query(base + "SELECT count(*) FROM attempts")
+distinct_tasks = query(base + "SELECT count(DISTINCT id) FROM attempts")
 unclosed = query(base + "SELECT count(*) FROM attempts WHERE finished_at IS NULL")
 overlap = query(base + """
 SELECT COUNT(*) FROM attempts a WHERE EXISTS (
@@ -88,7 +93,8 @@ SELECT COUNT(*) FROM (
 
 token = next(v.split("=", 1)[1].strip() for v in
     open("scaling/observability/.env.example") if v.startswith("WFC_HUB_AUTH_TOKEN="))
-url = ("http://127.0.0.1:5100/api/hub/runs/" +
+url = (os.environ.get("WFC_HUB_VERIFY_URL", "http://127.0.0.1:5100").rstrip("/") +
+       "/api/hub/runs/" +
        urllib.parse.quote(args.run_id, safe="") + "/summary")
 with urllib.request.urlopen(urllib.request.Request(url,
     headers={"Authorization": "Bearer " + token}), timeout=40) as resp:
@@ -104,6 +110,9 @@ report = {
     "mode": args.mode, "runId": args.run_id,
     "workflows": summary["total"], "completed": summary["completed"],
     "failed": summary["failed"], "activityAttempts": total,
+    "distinctActivityTasks": distinct_tasks,
+    "extraAttempts": total - distinct_tasks,
+    "maxExtraAttemptsAllowed": args.max_extra_attempts,
     "unfinishedAttempts": unclosed, "overlappingLeasesWithinPolicyScope": overlap,
     "activityConstraints": constraints, "distinctWorkflowPartitions": distinct_partition,
     "resourceKeysAcrossPartitions": cross_partition_key,
@@ -117,7 +126,8 @@ with open(args.output, "w", encoding="utf-8") as f:
     json.dump(report, f, indent=2)
 print(json.dumps(report, indent=2))
 
-assert total == args.count and unclosed == 0, "Missing or incomplete routed activity attempts"
+assert distinct_tasks == args.count and unclosed == 0, "Missing or incomplete routed activity attempts"
+assert total <= args.count + args.max_extra_attempts, "Too many replayed activity attempts"
 assert distinct_partition >= 2, "Workload did not span partitions"
 if args.mode == "unordered":
     assert constraints == 0, "Unordered activities have an unexpected implicit resource constraint"

@@ -1,0 +1,171 @@
+name: Workflow Hub Two-Replica Matching A/B (100 workflows)
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/diagnose_workflow_p99.py'
+      - '.github/scripts/sample_postgres_waits.py'
+      - '.github/workflows/workflow-hub-matching-performance.yml'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/compose.matching-ha.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-matching-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p99-root-cause:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        claim_strategy: [adaptive, matching]
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      OTEL_OVERRIDE: scaling/observability/compose.p99.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      COUNT: "100"
+      CLAIM_STRATEGY: ${{ matrix.claim_strategy }}
+      # Both cases retain all PR #18 optimizations and identical two-Hub resources.
+      WFC_HUB_ADAPTIVE_CLAIMS: "true"
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "true"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
+      WFC_HUB_LONG_POLL_ENABLED: ${{ matrix.claim_strategy == 'matching' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate diagnostic scripts
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py .github/scripts/summarize_p99_otel.py
+          node --input-type=module --check < scaling/observability/k6/partition-ordering.js
+          docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" config --quiet
+      - name: Start Hub, PostgreSQL, and 8 policy processors
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/otel-p99
+          chmod 0777 scaling/observability/results/otel-p99
+          docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          mkdir -p scaling/observability/results/p99-100
+          chmod 0777 scaling/observability/results scaling/observability/results/p99-100
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/definitions >/tmp/policy-definitions.json && \
+              python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          print('PASS: native policy workflow definitions registered')
+          PY
+      - name: Diagnose 100 workflows per policy with 8 and 16 processors
+        run: |
+          set -euo pipefail
+          echo "Runner CPUs: $(nproc) | strategy=$CLAIM_STRATEGY"
+          free -h
+          for processors in 8 16; do
+            docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 12
+            for mode in unordered partition keyed; do
+              run="ci-p99-${processors}-${mode}-${CLAIM_STRATEGY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "::group::P99 forensic test processors=$processors mode=$mode 100 workflows"
+              python3 .github/scripts/sample_postgres_waits.py \
+                --output "scaling/observability/results/p99-100/waits-${processors}-${mode}.json" \
+                >"/tmp/p99-waits-${processors}-${mode}.log" 2>&1 &
+              wait_pid=$!
+              set +e
+              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=480 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/p99-k6-${processors}-${mode}.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$wait_pid" 2>/dev/null || true
+              wait "$wait_pid" || true
+              test "$k6_rc" -eq 0
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/p99-100/k6-${processors}-${mode}.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/p99-100/verify-${processors}-${mode}.json"
+              python3 .github/scripts/diagnose_workflow_p99.py \
+                --mode "$mode" --stage "$processors" --run-id "$run" \
+                --output "scaling/observability/results/p99-100/timeline-${processors}-${mode}.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('scaling/observability/results/p99-100')
+          for mode in ('unordered','partition','keyed'):
+              for processors in (8,16):
+                  t=json.loads((root/f'timeline-{processors}-{mode}.json').read_text())
+                  v=json.loads((root/f'verify-{processors}-{mode}.json').read_text())
+                  assert t['workflows']==v['completed']==100
+                  print('P95/P99 RESULT',processors,mode,'workflow_p95_s',t['latencyByStage']['total_s']['p95'],'workflow_p99_s',t['latencyByStage']['total_s']['p99'])
+                  print('STAGE P99 (not additive)',{k:r['p99'] for k,r in t['latencyByStage'].items()})
+                  print('SLOWEST',json.dumps(t['slowestWorkflows'][:3]))
+          print('PASS: 600 completed workflows with 6 durable per-workflow traces')
+          PY
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os,json
+          from pathlib import Path
+          root=Path("scaling/observability/results/p99-100")
+          print("### Workflow latency: "+os.environ["CLAIM_STRATEGY"])
+          print("| Processors | Policy | Workflow p95 (s) | Workflow p99 (s) | Queue p95 (s) |")
+          print("|---:|---|---:|---:|---:|")
+          for n in (8,16):
+              for mode in ("unordered","partition","keyed"):
+                  data=json.loads((root/f"timeline-{n}-{mode}.json").read_text())["latencyByStage"]
+                  print(f"| {n} | {mode} | {data['total_s']['p95']} | {data['total_s']['p99']} | {data['activity_queue_s']['p95']} |")
+          PY
+          # Drain worker and Hub OTLP batches before validating the archive.
+          sleep 8
+          python3 .github/scripts/summarize_p99_otel.py
+      - name: Upload forensic results and raw k6 logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matching-two-hub-p99-100-${{ matrix.claim_strategy }}
+          path: |
+            scaling/observability/results/p99-100/*.json
+            scaling/observability/results/otel-p99/*.json
+            /tmp/p99-k6-*.log
+            /tmp/p99-waits-*.log
+          if-no-files-found: warn
+      - name: Print service logs on failures
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" logs --tail=200 hub hub-2 hub-lb postgres processor otel-collector tempo || true

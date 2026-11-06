@@ -17,11 +17,27 @@ public sealed class HubReadinessBroadcaster(
     private sealed record Subscriber(HashSet<string> Hubs, Channel<string> Channel);
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
 
-    public void Publish(string hub)
+    // Optional in-process matching subscriber; SSE remains available for fallback.
+    public event Action<string, string?, int>? TaskReady;
+
+    public void Publish(string hub, string? taskType = null, int version = 0)
+    {
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, taskType, version);
+        PublishLegacy(hub);
+    }
+
+    /// <summary>Old channel still feeds SSE; typed matching has its own channel.</summary>
+    public void PublishLegacy(string hub)
     {
         foreach (var client in _clients.Values)
             if (client.Hubs.Contains(hub) && client.Channel.Writer.TryWrite(hub))
                 HubTelemetry.SseNotifications.Add(1, HubTelemetry.HubTag(hub));
+    }
+
+    /// <summary>In-process hint for a task capability or a permit-release rescan.</summary>
+    public void PublishMatchingHint(string hub, string? type, int version)
+    {
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, type, version);
     }
 
     public async IAsyncEnumerable<string> Subscribe(

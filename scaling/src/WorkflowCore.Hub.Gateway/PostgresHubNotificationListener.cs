@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using System.Text.Json;
 using Npgsql;
 using WorkflowCore.Hub;
 
@@ -12,6 +13,8 @@ namespace WorkflowCore.Hub.Gateway;
 public sealed class PostgresHubNotificationListener : BackgroundService
 {
     public const string ChannelName = "wfc_hub_task_ready";
+    public const string MatchingChannelName = "wfc_hub_matching_ready";
+    private sealed record Hint(string Hub, string? Type, int Version, bool Legacy);
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
     private int _listening;
     public bool IsListening => Volatile.Read(ref _listening) == 1;
@@ -44,7 +47,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             try
             {
                 await using var connection = new NpgsqlConnection(_connectionString);
-                var hints = Channel.CreateBounded<string>(new BoundedChannelOptions(512)
+                var hints = Channel.CreateBounded<Hint>(new BoundedChannelOptions(512)
                 {
                     SingleReader = true,
                     SingleWriter = true,
@@ -55,12 +58,36 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                     if (args.Channel == ChannelName && args.Payload is { Length: > 0 and <= 80 })
                     {
                         HubTelemetry.PostgresHintsReceived.Add(1);
-                        hints.Writer.TryWrite(args.Payload);
+                        hints.Writer.TryWrite(new Hint(args.Payload, null, 0, true));
+                    }
+                    else if (args.Channel == MatchingChannelName && args.Payload.Length <= 512)
+                    {
+                        try
+                        {
+                            using var document = JsonDocument.Parse(args.Payload);
+                            var root = document.RootElement;
+                            var hub = root.GetProperty("hub").GetString();
+                            if (string.IsNullOrWhiteSpace(hub) || hub.Length > 80) return;
+                            string? type = root.TryGetProperty("type", out var kind) ?
+                                kind.GetString() : null;
+                            int version = root.TryGetProperty("version", out var ver) ?
+                                ver.GetInt32() : 0;
+                            if (type is { Length: > 80 } || (type is not null && version < 1))
+                                return;
+                            HubTelemetry.PostgresHintsReceived.Add(1);
+                            hints.Writer.TryWrite(new Hint(hub, type, version, false));
+                        }
+                        catch (JsonException)
+                        {
+                            // An advisory hint must never tear down LISTEN.
+                        }
                     }
                 };
 
                 await connection.OpenAsync(stoppingToken);
                 await using (var command = new NpgsqlCommand("LISTEN " + ChannelName, connection))
+                    await command.ExecuteNonQueryAsync(stoppingToken);
+                await using (var command = new NpgsqlCommand("LISTEN " + MatchingChannelName, connection))
                     await command.ExecuteNonQueryAsync(stoppingToken);
 
                 Volatile.Write(ref _listening, 1);
@@ -100,19 +127,28 @@ public sealed class PostgresHubNotificationListener : BackgroundService
         }
     }
 
-    private async Task PublishHintsAsync(ChannelReader<string> reader, CancellationToken ct)
+    private async Task PublishHintsAsync(ChannelReader<Hint> reader, CancellationToken ct)
     {
         while (await reader.WaitToReadAsync(ct))
         {
-            // Coalesce bursts (including multiple task rows in one workflow)
-            // without creating a REST claim per PostgreSQL notification.
+            // Coalesce committed notifications from multi-task transactions.
             await Task.Delay(CoalesceWindow, ct);
-            var hubs = new HashSet<string>(StringComparer.Ordinal);
-            while (reader.TryRead(out var hub))
-                hubs.Add(hub);
-            foreach (var hub in hubs)
+            var legacy = new HashSet<string>(StringComparer.Ordinal);
+            var typed = new HashSet<(string Hub, string? Type, int Version)>();
+            while (reader.TryRead(out var hint))
             {
-                _readiness.Publish(hub);
+                if (hint.Legacy) legacy.Add(hint.Hub);
+                else typed.Add((hint.Hub, hint.Type, hint.Version));
+            }
+            foreach (var hub in legacy)
+            {
+                // Legacy SSE (and external clients) continue receiving hub-wide hints.
+                _readiness.PublishLegacy(hub);
+                HubTelemetry.PostgresHintsForwarded.Add(1);
+            }
+            foreach (var hint in typed)
+            {
+                _readiness.PublishMatchingHint(hint.Hub, hint.Type, hint.Version);
                 HubTelemetry.PostgresHintsForwarded.Add(1);
             }
         }

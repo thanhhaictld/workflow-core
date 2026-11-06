@@ -18,6 +18,10 @@ public sealed class HubRuntimeOptions
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+    // Only enable against matching-capable, load-balanced Hub replicas.
+    // Polls wait server-side; failed long-poll requests retry with backoff.
+    public bool LongPollingEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_LONG_POLL_ENABLED") is "true" or "1" or "True";
     // Feature flag for controlled baseline/optimized benchmark runs.
     public bool AdaptiveClaimsEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
