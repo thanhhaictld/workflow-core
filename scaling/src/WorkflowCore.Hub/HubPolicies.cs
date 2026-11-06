@@ -7,10 +7,42 @@ namespace WorkflowCore.Hub;
 /// <summary>A code-first policy definition. Only the Hub resolves resource keys.
 /// Workers may not submit or alter concurrency rules.</summary>
 public sealed record HubResourceRule(string Key, int Capacity, bool StrictFifo);
+
+/// <summary>
+/// Activity admission/ordering semantics, independent from the Hub (management)
+/// and partition (placement). Workflow snapshots are always revision-fenced.
+/// Legacy retains pre-refactor implicit Hub/activity capacity permits.
+/// </summary>
+public enum HubActivityOrdering
+{
+    Legacy = 0,
+    Unordered = 1,
+    PartitionSerial = 2,
+    KeyedExclusive = 3,
+    KeyedFifo = 4,
+    KeyedBounded = 5
+}
+
 public sealed record HubPolicyView(string HubId, string TaskType, int Version,
     int PartitionCount, IReadOnlyList<string> Rules);
 public sealed record HubTaskRoute(string HubId, string TaskType, int Version,
-    int PartitionCount, IReadOnlyList<HubResourceRule> Resources);
+    int PartitionCount, IReadOnlyList<HubResourceRule> Resources,
+    HubActivityOrdering Ordering = HubActivityOrdering.Legacy)
+{
+    /// <summary>
+    /// Placement does not imply serialization: a per-partition FIFO permit is
+    /// materialized only by an explicit PartitionSerial policy. Keyed permits
+    /// remain global to the business Hub, across all workflow partitions.
+    /// </summary>
+    public IReadOnlyList<HubResourceRule> ResourcesForPartition(int partition)
+    {
+        if (partition < 0 || partition >= PartitionCount)
+            throw new ArgumentOutOfRangeException(nameof(partition));
+        if (Ordering != HubActivityOrdering.PartitionSerial) return Resources;
+        return Resources.Append(new HubResourceRule(
+            $"partition:{HubId}:{partition}", 1, true)).OrderBy(r => r.Key, StringComparer.Ordinal).ToArray();
+    }
+}
 
 internal sealed record PolicyRule(
     string Name, int Capacity, bool StrictFifo, Func<JsonElement, string?> Selector);
