@@ -221,10 +221,25 @@ public sealed class HubTaskStore : IAsyncDisposable
             if (_claimAdmissionEnabled)
             {
                 var waitStarted = Stopwatch.GetTimestamp();
-                await _claimGate.WaitAsync(ct);
-                gateAcquired = true;
-                HubTelemetry.ClaimAdmissionWait.Record(
-                    Stopwatch.GetElapsedTime(waitStarted).TotalSeconds);
+                using (var admission = HubTelemetry.Traces.StartActivity("hub.task.claim.admission_wait"))
+                {
+                    admission?.SetTag("matching.partition", matchPartition);
+                    admission?.SetTag("matching.partition_count", matchCount);
+                    await _claimGate.WaitAsync(ct);
+                    gateAcquired = true;
+                    var waitSeconds = Stopwatch.GetElapsedTime(waitStarted).TotalSeconds;
+                    admission?.SetTag("admission.wait_seconds", waitSeconds);
+                    span?.SetTag("claim.admission_wait_seconds", waitSeconds);
+                    span?.AddEvent(new ActivityEvent("claim.admission.acquired",
+                        tags: new ActivityTagsCollection {
+                            { "wait.seconds", waitSeconds },
+                            { "matching.partition", matchPartition },
+                            { "matching.partition_count", matchCount }
+                        }));
+                    HubTelemetry.ClaimAdmissionWait.Record(waitSeconds,
+                        new KeyValuePair<string, object?>("claim_path",
+                            matchingPartitionCount is > 1 ? "matching" : "legacy"));
+                }
             }
 
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
