@@ -107,7 +107,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         if(capabilities.Length==0)return;
         await startup.Published.WaitAsync(ct);
         var running=new List<Task>();
-        var listener=options.LongPollingEnabled ? Task.CompletedTask : Listen(ct);
+        // A matching poll requires one Hub namespace. Multi-hub workers retain
+        // the proven PR #18 SSE/adaptive path until per-Hub fan-out is added.
+        var matchingPoll=options.LongPollingEnabled &&
+            capabilities.Select(c => c.HubId).Distinct().Count() == 1;
+        var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
         var emptyClaims=0;
         long nextClaimAt=0;
         var hintPreempted=false;
@@ -117,13 +121,12 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             {
                 running.RemoveAll(t=>t.IsCompleted);
                 if(running.Count<concurrency &&
-                    (options.LongPollingEnabled || !options.AdaptiveClaimsEnabled ||
+                    (matchingPoll || !options.AdaptiveClaimsEnabled ||
                      Stopwatch.GetTimestamp()>=nextClaimAt))
                 {
                     try
                     {
-                        var endpoint = options.LongPollingEnabled &&
-                            capabilities.Select(c => c.HubId).Distinct().Count() == 1
+                        var endpoint = matchingPoll
                             ? "api/hub/workers/tasks:poll"
                             : "api/hub/workers/tasks:claim";
                         var leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
@@ -139,7 +142,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             hintPreempted=false;
                             continue;
                         }
-                        if(options.AdaptiveClaimsEnabled && !options.LongPollingEnabled)
+                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
                         {
                             emptyClaims=Math.Min(emptyClaims+1,8);
                             // Back off only after empty claims; successful work is claimed immediately.
@@ -158,15 +161,14 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
                             new KeyValuePair<string,object?>("outcome","error"));
                         logger.LogWarning(ex,"Hub claim failed; retrying");
-                        if(options.AdaptiveClaimsEnabled && !options.LongPollingEnabled)
+                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
                             nextClaimAt=Stopwatch.GetTimestamp()+
                                 (long)(Math.Max(1,options.PollInterval.TotalSeconds)*Stopwatch.Frequency);
-                        if(options.LongPollingEnabled)
+                        if(matchingPoll)
                             await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     }
                 }
-                if (options.LongPollingEnabled && running.Count < concurrency &&
-                    capabilities.Select(c => c.HubId).Distinct().Count() == 1)
+                if (matchingPoll && running.Count < concurrency)
                     continue; // next server-held poll; no local jitter/backoff
                 using var wait=CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var pollDelay=options.PollInterval;
