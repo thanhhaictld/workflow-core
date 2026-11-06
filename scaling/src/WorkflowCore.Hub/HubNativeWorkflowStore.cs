@@ -55,7 +55,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await cmd.ExecuteNonQueryAsync(ct);
         HubTelemetry.NativeEventLaneLockWait.Record(
             System.Diagnostics.Stopwatch.GetElapsedTime(lockStarted).TotalSeconds,
-            new KeyValuePair<string, object?>("operation", operation), HistoryModeTag);
+            new KeyValuePair<string, object?>("operation", operation),
+            HistoryModeTag, EventLaneModeTag);
     }
 
     public async Task<HubNativeRuntime?> GetRuntimeAsync(Guid id, CancellationToken ct)
