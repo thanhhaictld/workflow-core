@@ -1232,14 +1232,14 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, history_mode, operation) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
-          "legendFormat": "p95 {{history_mode}} {{operation}}",
+          "expr": "histogram_quantile(0.95, sum by (le, history_mode, operation, event_lane_mode) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{history_mode}} {{operation}} {{event_lane_mode}}",
           "range": true
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le, history_mode, operation) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
-          "legendFormat": "p99 {{history_mode}} {{operation}}",
+          "expr": "histogram_quantile(0.99, sum by (le, history_mode, operation, event_lane_mode) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{history_mode}} {{operation}} {{event_lane_mode}}",
           "range": true
         }
       ],
@@ -1448,6 +1448,105 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Native workflow row lock p95/p99",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 101,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{event_lane_mode}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Native commit p95/p99 by lock mode",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 101,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by(le,event_lane_mode)(rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{event_lane_mode}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99,sum by(le,event_lane_mode)(rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Native commit Hub event-lane bypass per second",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 109,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(event_lane_mode)(rate(workflow_hub_native_event_lane_bypass_total[2m]))",
+          "legendFormat": "bypassed {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
         },
         "overrides": []
       }
