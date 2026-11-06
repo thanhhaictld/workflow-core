@@ -52,6 +52,8 @@ jobs:
             k6-offboarding | tee /tmp/k6-legacy.log
           cp scaling/observability/results/k6-offboarding-summary.json \
             scaling/observability/results/ab/k6-legacy-summary.json
+          python3 scaling/observability/benchmark/collect_p0_metrics.py \
+            --mode legacy --output scaling/observability/results/ab/p0-legacy.json
 
       - name: Switch only Hub to batched history without changing processors
         run: |
@@ -75,6 +77,8 @@ jobs:
             k6-offboarding | tee /tmp/k6-batch.log
           cp scaling/observability/results/k6-offboarding-summary.json \
             scaling/observability/results/ab/k6-batch-summary.json
+          python3 scaling/observability/benchmark/collect_p0_metrics.py \
+            --mode batch --output scaling/observability/results/ab/p0-batch.json
 
       - name: Calculate p95 p99, throughput, and P0 DB-contention percentiles
         run: |
@@ -117,25 +121,11 @@ jobs:
               trace=get('http://127.0.0.1:5100/api/hub/workflows/'+wid+'/trace',True)
               assert {s['stepIndex'] for s in trace if any(
                   a.get('source')=='native-step' for a in s['attempts'])}=={0,1,2},trace
-          for metric, selector in (
-              ('eventLaneLock','workflow_hub_native_event_lane_lock_wait_seconds_bucket{operation="native_commit",history_mode="%s"}'),
-              ('claimLatency','workflow_hub_claim_duration_seconds_bucket'),
-              ('historyWrite','workflow_hub_native_history_write_duration_seconds_bucket{history_mode="%s"}'),
-              ('commitDuration','workflow_hub_native_commit_duration_seconds_bucket{history_mode="%s"}'),
-          ):
-              for mode in ('legacy','batch'):
-                  if '%s' not in selector and mode!='batch': continue
-                  series=selector%mode if '%s' in selector else selector
-                  for quantile in (0.95,0.99):
-                      query='histogram_quantile('+str(quantile)+',sum by (le) (rate('+series+'[10m])))'
-                      url='http://127.0.0.1:9090/api/v1/query?'+urllib.parse.urlencode({'query':query})
-                      result=get(url)
-                      values=result.get('data',{}).get('result',[])
-                      if values:
-                          try: value=float(values[0]['value'][1])
-                          except (TypeError,ValueError): value=float('nan')
-                          if math.isfinite(value):
-                              report[mode][metric+'P'+str(int(quantile*100))+'Seconds']=round(value,6)
+          # Snapshot each mode's histograms BEFORE the Hub is replaced.
+          # Aggregating after both phases may lose the retired Prometheus series.
+          for mode in ('legacy','batch'):
+              with open(out+'/p0-'+mode+'.json') as f:
+                  report[mode].update(json.load(f))
           result={
               'baseline':report['legacy'],
               'batched':report['batch'],
