@@ -41,6 +41,10 @@ public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long Activ
 public sealed class HubTaskStore : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
+    // Admission control reserves connections for completion, timers and writes.
+    // Unlike a global workflow lock, this only limits speculative claim SQL.
+    private readonly SemaphoreSlim _claimGate;
+    private readonly bool _claimAdmissionEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12)
@@ -50,6 +54,9 @@ public sealed class HubTaskStore : IAsyncDisposable
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
+        _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
+        _claimAdmissionEnabled =
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -195,6 +202,18 @@ public sealed class HubTaskStore : IAsyncDisposable
             maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
             lease > TimeSpan.FromMinutes(5))
             throw new ArgumentException("Invalid worker claim parameters");
+
+        var gateAcquired = false;
+        try
+        {
+            if (_claimAdmissionEnabled)
+            {
+                var waitStarted = Stopwatch.GetTimestamp();
+                await _claimGate.WaitAsync(ct);
+                gateAcquired = true;
+                HubTelemetry.ClaimAdmissionWait.Record(
+                    Stopwatch.GetElapsedTime(waitStarted).TotalSeconds);
+            }
 
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
@@ -433,6 +452,11 @@ public sealed class HubTaskStore : IAsyncDisposable
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         span?.SetTag("tasks.claim_amplification", results.Count == 0 ? scannedCandidates : (double)scannedCandidates / results.Count);
         return results;
+        }
+        finally
+        {
+            if (gateAcquired) _claimGate.Release();
+        }
     }
 
     public async Task<bool> IsManagedWorkflowStepAsync(Guid id, CancellationToken ct)
@@ -604,5 +628,9 @@ public sealed class HubTaskStore : IAsyncDisposable
     private static string HubPolicyDigest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _dataSource.DisposeAsync();
+        _claimGate.Dispose();
+    }
 }
