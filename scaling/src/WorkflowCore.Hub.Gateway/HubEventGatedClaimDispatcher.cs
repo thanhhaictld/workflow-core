@@ -50,19 +50,22 @@ public sealed class HubEventGatedClaimDispatcher
     private readonly ConcurrentDictionary<string, long> _lastCatchupProbe = new();
     private readonly bool _sharded;
     private readonly int _partitionCount;
+    private readonly TimeSpan _pollTimeout;
     private int _waiters;
     private const int MaxWaiters = 2048;
 
     public HubEventGatedClaimDispatcher(
         Func<HubClaimRequest, CancellationToken, Task<IReadOnlyList<HubLeasedTask>>> claim,
         Func<HubClaimRequest, CancellationToken, Task<bool>> stillOwns,
-        bool sharded, int partitionCount)
+        bool sharded, int partitionCount, TimeSpan? pollTimeout = null)
     {
         if (partitionCount is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(partitionCount));
         _claim = claim;
         _stillOwns = stillOwns;
         _sharded = sharded;
         _partitionCount = sharded ? partitionCount : 1;
+        _pollTimeout = pollTimeout ?? TimeSpan.FromSeconds(sharded ? 4 : 20);
+        if (_pollTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(pollTimeout));
     }
 
     public int PendingWaiters { get { lock (_gate) return _waiters; } }
@@ -143,7 +146,7 @@ public sealed class HubEventGatedClaimDispatcher
 
         var waiter = new Waiter(request);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(_sharded ? 4 : 20));
+        deadline.CancelAfter(_pollTimeout);
         lock (_gate)
         {
             if (_waiters >= MaxWaiters)
