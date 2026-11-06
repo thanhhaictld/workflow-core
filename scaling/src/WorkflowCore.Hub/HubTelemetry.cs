@@ -101,6 +101,8 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_worker_completion_http_duration_seconds", "s");
     public static readonly Histogram<double> ClaimConnectionWait =
         Meter.CreateHistogram<double>("workflow_hub_claim_db_connection_acquire_seconds", "s");
+    public static readonly Histogram<double> ClaimAdmissionWait =
+        Meter.CreateHistogram<double>("workflow_hub_claim_admission_wait_seconds", "s");
     public static readonly Histogram<double> ClaimCandidateQuery =
         Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
     public static readonly Histogram<double> ClaimPermitCheck =
