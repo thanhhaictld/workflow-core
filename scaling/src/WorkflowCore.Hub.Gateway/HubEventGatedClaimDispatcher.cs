@@ -179,7 +179,7 @@ public sealed class HubEventGatedClaimDispatcher
             lane.LastTouched = Stopwatch.GetTimestamp();
             lane.Waiters.AddLast(waiter);
             _waiters++;
-            if (lane.Pending.Count == 0 && ShouldProbe(request))
+            if (ShouldProbe(request))
             {
                 // Start-up / missed-NOTIFY recovery is capability-scoped.
                 foreach (var capability in request.Capabilities)
