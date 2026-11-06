@@ -476,8 +476,20 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     public async Task<bool> CompleteActivityAsync(Guid task,string worker,long epoch,JsonElement result,CancellationToken ct)
     {
         if(result.GetRawText().Length>65536)throw new ArgumentException("Native result exceeds limit");
+        using var span=HubTelemetry.Traces.StartActivity("hub.activity.complete");
+        span?.SetTag("task.id",task.ToString());
+        span?.SetTag("task.epoch",epoch);
+        var totalStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+        var poolStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using var db=await Source.OpenConnectionAsync(ct);
+        var poolSeconds=System.Diagnostics.Stopwatch.GetElapsedTime(poolStarted).TotalSeconds;
+        HubTelemetry.HubActivityConnectionWait.Record(poolSeconds);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.pool.acquired",
+            tags:new System.Diagnostics.ActivityTagsCollection {{"duration.seconds",poolSeconds}}));
         await using var tx=await db.BeginTransactionAsync(ct);
+        var workflowLockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         Guid id;string hub,status,pointer,dispatch;int partition,step;
         await using(var cmd=Command(db,tx,"""
             SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id
@@ -490,6 +502,12 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             id=r.GetGuid(0);hub=r.GetString(1);partition=r.GetInt32(2);status=r.GetString(3);
             pointer=r.GetString(4);dispatch=r.GetString(5);step=r.GetInt32(6);
         }
+        span?.SetTag("workflow.id",id.ToString());
+        var workflowLockSeconds=System.Diagnostics.Stopwatch.GetElapsedTime(workflowLockStarted).TotalSeconds;
+        HubTelemetry.HubActivityWorkflowRowLockWait.Record(workflowLockSeconds);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.workflow_row.locked",
+            tags:new System.Diagnostics.ActivityTagsCollection {{"duration.seconds",workflowLockSeconds}}));
+        var taskLockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using(var cmd=Command(db,tx,"""
             SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=@task FOR UPDATE
             """,("task",task)))
@@ -498,6 +516,10 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             if(r.GetInt16(0)==2 && !r.IsDBNull(1) && r.GetString(1)==worker && r.GetInt64(2)==epoch)
                 return !r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result);
         }
+        var taskLockSeconds=System.Diagnostics.Stopwatch.GetElapsedTime(taskLockStarted).TotalSeconds;
+        HubTelemetry.HubActivityTaskRowLockWait.Record(taskLockSeconds);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.task_row.locked",
+            tags:new System.Diagnostics.ActivityTagsCollection {{"duration.seconds",taskLockSeconds}}));
         if(status is "Complete" or "Terminated")return false;
         await using(var cmd=Command(db,tx,"""
             UPDATE wfc_scale.hub_task SET state=2,owner=NULL,lease_until=NULL,result_json=@result::jsonb,updated_at=now()
@@ -515,9 +537,19 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__","ActivityResultReceived",
             JsonSerializer.Serialize(new{executionPointerId=pointer,dispatchKey=dispatch}),ct);
         await WakeAsync(db,tx,id,hub,partition,ct);
-        await tx.CommitAsync(ct);
+        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+        using(var commitSpan=HubTelemetry.Traces.StartActivity("hub.activity.db_commit"))
+            await tx.CommitAsync(ct);
+        HubTelemetry.HubActivityCommitDuration.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds);
         HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
         return true;
+        }
+        finally
+        {
+            HubTelemetry.HubActivityCompletionDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(totalStarted).TotalSeconds);
+        }
     }
 
     private static async Task RetireAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,CancellationToken ct)
