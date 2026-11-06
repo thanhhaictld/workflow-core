@@ -29,6 +29,7 @@ jobs:
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
       WFC_HUB_ADAPTIVE_CLAIMS: "true"
       WFC_HUB_DB_POOL: "12"
+      WFC_HUB_MATCHING_EVENT_GATED: "true"
       # Query a surviving Gateway even when the original :5100 owner is down.
       WFC_HUB_VERIFY_URL: http://127.0.0.1:5110
     steps:
