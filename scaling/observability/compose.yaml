@@ -131,6 +131,8 @@ services:
       WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
       # Benchmark-only control: default is the new batched event journal.
       WFC_HUB_BATCH_HISTORY_ENABLED: "${WFC_HUB_BATCH_HISTORY_ENABLED:-true}"
+      # Default: event-free commits bypass Hub advisory lock; 'hub' is the A/B control.
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: "${WFC_HUB_NATIVE_EVENT_LANE_MODE:-subscriptions}"
       WorkflowHub__Scheduler__Enabled: "${HUB_SCHEDULER_ENABLED:-true}"
       WorkflowHub__Scheduler__PollIntervalMs: "500"
       WorkflowHub__Scheduler__BatchSize: "100"

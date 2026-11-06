@@ -59,6 +59,7 @@ public static class HubOpenTelemetryExtensions
                 metrics.AddView("workflow_hub_native_event_lane_lock_wait_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_claim_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_native_workflow_row_lock_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_history_write_duration_seconds", latencyBuckets);
 
                 metrics.AddOtlpExporter(options =>

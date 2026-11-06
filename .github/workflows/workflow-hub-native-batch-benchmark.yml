@@ -26,6 +26,9 @@ jobs:
     env:
       COMPOSE: scaling/observability/compose.yaml
       ENVFILE: scaling/observability/.env.example
+      # This inherited A/B compares history INSERT algorithms ONLY. Keep Hub
+      # lock policy constant in both phases; the new workflow tests lock policy.
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: hub
     steps:
       - uses: actions/checkout@v4
       - name: Start Hub, PostgreSQL, and Prometheus (legacy history mode)
