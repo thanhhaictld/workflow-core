@@ -14,7 +14,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
 {
     public const string ChannelName = "wfc_hub_task_ready";
     public const string MatchingChannelName = "wfc_hub_matching_ready";
-    private sealed record Hint(string Hub, string? Type, int Version, bool Legacy);
+    private sealed record Hint(string Hub, string? Type, int Version, bool Legacy, int? Partition = null);
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
     private int _listening;
     public bool IsListening => Volatile.Read(ref _listening) == 1;
@@ -74,8 +74,11 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                                 ver.GetInt32() : 0;
                             if (type is { Length: > 80 } || (type is not null && version < 1))
                                 return;
+                            int? partition = root.TryGetProperty("partition", out var p)
+                                ? p.GetInt32() : null;
+                            if (partition < 0) return;
                             HubTelemetry.PostgresHintsReceived.Add(1);
-                            hints.Writer.TryWrite(new Hint(hub, type, version, false));
+                            hints.Writer.TryWrite(new Hint(hub, type, version, false, partition));
                         }
                         catch (JsonException)
                         {
@@ -134,11 +137,11 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             // Coalesce committed notifications from multi-task transactions.
             await Task.Delay(CoalesceWindow, ct);
             var legacy = new HashSet<string>(StringComparer.Ordinal);
-            var typed = new HashSet<(string Hub, string? Type, int Version)>();
+            var typed = new HashSet<(string Hub, string? Type, int Version, int? Partition)>();
             while (reader.TryRead(out var hint))
             {
                 if (hint.Legacy) legacy.Add(hint.Hub);
-                else typed.Add((hint.Hub, hint.Type, hint.Version));
+                else typed.Add((hint.Hub, hint.Type, hint.Version, hint.Partition));
             }
             foreach (var hub in legacy)
             {
@@ -148,7 +151,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             }
             foreach (var hint in typed)
             {
-                _readiness.PublishMatchingHint(hint.Hub, hint.Type, hint.Version);
+                _readiness.PublishMatchingHint(hint.Hub, hint.Type, hint.Version, hint.Partition);
                 HubTelemetry.PostgresHintsForwarded.Add(1);
             }
         }
