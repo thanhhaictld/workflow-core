@@ -18,6 +18,10 @@ public static class HubGatewayEndpoints
         var maxConnections = int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_DB_POOL"), out var max)
             ? Math.Clamp(max, 1, 100) : 12;
         services.AddSingleton(new HubTaskStore(connectionString, maxConnections));
+        services.AddSingleton<HubMatchingLeaseStore>();
+        services.AddSingleton<HubMatchingOwnership>();
+        services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
+        services.AddSingleton<HubTaskMatcher>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -328,6 +332,66 @@ public static class HubGatewayEndpoints
         {
             var task = await store.GetAsync(id, ct);
             return task is null ? Results.NotFound() : Results.Ok(task);
+        });
+
+        // Temporal-inspired demand-driven task matching. An incoming request
+        // is routed to the active per-Hub owner, which parks the worker in memory
+        // and only claims PostgreSQL tasks when demand and readiness intersect.
+        routes.MapPost("/workers/tasks:poll", async (
+            HttpContext context, HubClaimRequest request,
+            HubMatchingOwnership ownership, HubTaskMatcher matcher, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled) return Results.NotFound();
+            // Multi-hub capability sets continue using the original claim API
+            // until explicit fan-out to multiple matching owners is implemented.
+            if (request.Hubs is not { Length: 1 } ||
+                request.Capabilities is not { Length: > 0 and <= 128 } ||
+                request.MaxTasks is < 1 or > 32 ||
+                string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length > 128 ||
+                string.IsNullOrWhiteSpace(request.Hubs[0]) || request.Hubs[0].Length > 80 ||
+                request.Capabilities.Any(c => c.HubId != request.Hubs[0] ||
+                    string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
+                    c.Version < 1))
+                return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            try
+            {
+                var owner = await ownership.ResolveAsync(request.Hubs[0], ct);
+                if (!ownership.IsLocal(owner))
+                {
+                    // One forwarding hop only. An owner transition is retried
+                    // by the worker through the load-balanced Gateway.
+                    if (context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded"))
+                        return Results.StatusCode(503);
+                    var leases = await ownership.ForwardAsync(owner, request,
+                        context.Request.Headers.Authorization.ToString(), ct);
+                    return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
+                }
+                if (!await ownership.StillOwnsAsync(request.Hubs[0], ct))
+                    return Results.StatusCode(503);
+                return Results.Ok(await matcher.LongPollAsync(request, ct));
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.StatusCode(503);
+            }
+            catch (HttpRequestException)
+            {
+                return Results.StatusCode(503);
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return Results.StatusCode(503);
+            }
+        });
+
+        routes.MapGet("/matching/owner/{hub}", async (string hub,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled) return Results.NotFound();
+            var lease = await ownership.ReadAsync(hub, ct);
+            return lease is null ? Results.NotFound() :
+                Results.Ok(new { lease.HubId, lease.OwnerId, lease.OwnerUrl,
+                    lease.Epoch, lease.LeaseUntil, ThisNode = ownership.NodeId });
         });
 
         routes.MapPost("/workers/tasks:claim", async (HubClaimRequest request,
