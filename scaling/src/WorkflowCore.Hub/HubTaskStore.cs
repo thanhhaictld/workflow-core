@@ -12,7 +12,7 @@ public sealed record HubWorkflowCapability(string HubId, string DefinitionId, in
 public sealed record HubLeasedTask(
     Guid Id, string HubId, int PartitionId, string TaskType, int Version,
     Guid? WorkflowId, JsonElement Payload, long Epoch, int Attempts,
-    DateTime LeaseUntil);
+    DateTime LeaseUntil, string? TraceParent = null);
 public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
@@ -339,7 +339,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     var epoch = reader.GetInt64(0);
                     var until = reader.GetDateTime(1);
                     found = new(id, hub, partition, taskType, version, workflow,
-                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until);
+                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until, span?.Id);
                 }
                 // A lease is a durable fencing epoch. Keep one actual claim
                 // timestamp per managed workflow activity attempt, including
