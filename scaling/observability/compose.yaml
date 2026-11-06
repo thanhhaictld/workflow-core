@@ -191,6 +191,8 @@ services:
       WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
       WFC_HUB_ALLOW_INSECURE_HTTP: "true"
       WORKFLOW_WORKERS: "${OFFBOARD_PROCESSOR_WORKERS:-16}"
+      ACTIVITY_WORKERS: "${POLICY_BENCH_ACTIVITY_WORKERS:-8}"
+      POLICY_BENCHMARK_ENABLED: "${POLICY_BENCHMARK_ENABLED:-false}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_METRIC_EXPORT_INTERVAL: "5000"
       WFC_OTEL_LOGS_ENABLED: "true"
@@ -279,6 +281,28 @@ services:
     command: ["run", "--out", "experimental-prometheus-rw", "/scripts/hub-workflows.js"]
 
   # On-demand submission-first offboarding benchmark.
+  k6-policy:
+    image: grafana/k6:1.8.2
+    profiles: ["policy-k6"]
+    depends_on:
+      hub:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    environment:
+      HUB_URL: http://hub:5100
+      HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
+      K6_POLICY_MODE: ${K6_POLICY_MODE:-unordered}
+      K6_POLICY_COUNT: ${K6_POLICY_COUNT:-300}
+      K6_POLICY_VUS: ${K6_POLICY_VUS:-60}
+      K6_POLICY_RUN_ID: ${K6_POLICY_RUN_ID:-}
+      K6_POLICY_TIMEOUT_SECONDS: ${K6_POLICY_TIMEOUT_SECONDS:-600}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+    volumes:
+      - ./k6:/scripts:ro
+      - ./results:/results
+    command: ["run", "--out", "experimental-prometheus-rw", "/scripts/partition-ordering.js"]
+
   k6-offboarding:
     image: grafana/k6:1.8.2
     profiles: ["offboarding-k6"]
