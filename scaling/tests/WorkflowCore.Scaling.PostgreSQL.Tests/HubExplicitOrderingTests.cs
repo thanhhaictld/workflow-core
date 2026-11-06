@@ -69,6 +69,55 @@ public sealed class HubExplicitOrderingTests
     }
 
     [Fact]
+    public async Task SingleScan_UnorderedBatchClaimsEveryTaskWithoutDuplicateLease()
+    {
+        var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (cs is null) return;
+        var setup = await SetupAsync(cs, HubActivityOrdering.Unordered, partitions: 1);
+        await using var producer = setup.Store;
+        await using var store = new HubTaskStore(cs, 20, singleScanEnabled: true);
+        for (var i = 0; i < 24; i++)
+            await Enqueue(producer, setup.Route, "same", i);
+
+        var first = await Claim(store, setup.Hub, "single-scan-worker", 16);
+        Assert.Equal(16, first.Count);
+        Assert.Equal(16, first.Select(t => t.Id).Distinct().Count());
+        Assert.All(first, t => Assert.Equal(1, t.Epoch));
+        foreach (var lease in first)
+            Assert.True(await store.CompleteAsync(lease.Id, "single-scan-worker", lease.Epoch, "{}", default));
+
+        var remaining = await Claim(store, setup.Hub, "single-scan-worker", 16);
+        Assert.Equal(8, remaining.Count);
+        Assert.Empty(first.Select(t => t.Id).Intersect(remaining.Select(t => t.Id)));
+        foreach (var lease in remaining)
+            Assert.True(await store.CompleteAsync(lease.Id, "single-scan-worker", lease.Epoch, "{}", default));
+        Assert.Empty(await Claim(store, setup.Hub, "single-scan-worker", 16));
+    }
+
+    [Fact]
+    public async Task SingleScan_PartitionSerialStillHonorsFifoPermits()
+    {
+        var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (cs is null) return;
+        var setup = await SetupAsync(cs, HubActivityOrdering.PartitionSerial, partitions: 4);
+        await using var producer = setup.Store;
+        await using var store = new HubTaskStore(cs, 20, singleScanEnabled: true);
+        for (var i = 0; i < 36; i++)
+            await Enqueue(producer, setup.Route, "same", i);
+
+        var admitted = await Claim(store, setup.Hub, "single-scan-worker", 16);
+        Assert.Equal(4, admitted.Count);
+        Assert.Equal(4, admitted.Select(x => x.PartitionId).Distinct().Count());
+        Assert.Empty(await Claim(store, setup.Hub, "competing-worker", 16));
+        foreach (var task in admitted)
+            Assert.True(await store.CompleteAsync(task.Id, "single-scan-worker", task.Epoch, "{}", default));
+
+        var next = await Claim(store, setup.Hub, "competing-worker", 16);
+        Assert.Equal(4, next.Count);
+        Assert.Equal(4, next.Select(x => x.PartitionId).Distinct().Count());
+    }
+
+    [Fact]
     public async Task PartitionSerialAdmitsOnlyOnePerPartitionButDifferentPartitionsRunTogether()
     {
         var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");

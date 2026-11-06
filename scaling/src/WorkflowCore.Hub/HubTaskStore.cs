@@ -45,9 +45,13 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Unlike a global workflow lock, this only limits speculative claim SQL.
     private readonly SemaphoreSlim _claimGate;
     private readonly bool _claimAdmissionEnabled;
+    // A/B optimization: one candidate query per claim RPC; preserve per-task
+    // transactions, permit locks, and lease-fencing semantics.
+    private readonly bool _singleScanEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
-    public HubTaskStore(string connectionString, int maxPoolSize = 12)
+    public HubTaskStore(string connectionString, int maxPoolSize = 12,
+        bool? singleScanEnabled = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -57,6 +61,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
         _claimAdmissionEnabled =
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
+        _singleScanEnabled = singleScanEnabled ??
+            (Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_SINGLE_SCAN_ENABLED") is ("true" or "1" or "True"));
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -224,42 +230,51 @@ public sealed class HubTaskStore : IAsyncDisposable
         var connectionWaitSeconds = Stopwatch.GetElapsedTime(connectionStarted).TotalSeconds;
         HubTelemetry.ClaimConnectionWait.Record(connectionWaitSeconds);
         span?.SetTag("db.connection_acquire_seconds", connectionWaitSeconds);
+        List<Guid>? cachedCandidates = null;
+        var candidateCursor = 0;
         for (var batch = 0; batch < maxTasks; batch++)
         {
-            var candidates = new List<Guid>();
-            var queryStarted = Stopwatch.GetTimestamp();
-            await using (var candidateQuery = new NpgsqlCommand("""
-                SELECT id FROM wfc_scale.hub_task
-                WHERE hub_id = ANY(@hubs)
-                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
-                      WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
-                  AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
-                  AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
-                    SELECT 1 FROM wfc_scale.hub_workflow w,
-                      jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
-                    WHERE w.id=workflow_id AND w.hub_id=p.hub
-                      AND w.definition_id=p.definition AND w.definition_version=p.version))
-                  AND attempts < max_attempts
-                  AND ((state = 0 AND due_at <= now()) OR
-                       (state = 1 AND lease_until < now()))
-                ORDER BY sequence LIMIT 96
-                """, db))
+            var candidates = cachedCandidates ?? new List<Guid>();
+            if (cachedCandidates is null)
             {
-                candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
-                candidateQuery.Parameters.AddWithValue("types", supported);
-                candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
-                await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
+                var queryStarted = Stopwatch.GetTimestamp();
+                await using (var candidateQuery = new NpgsqlCommand("""
+                    SELECT id FROM wfc_scale.hub_task
+                    WHERE hub_id = ANY(@hubs)
+                      AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
+                          WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
+                      AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
+                      AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
+                        SELECT 1 FROM wfc_scale.hub_workflow w,
+                          jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                        WHERE w.id=workflow_id AND w.hub_id=p.hub
+                          AND w.definition_id=p.definition AND w.definition_version=p.version))
+                      AND attempts < max_attempts
+                      AND ((state = 0 AND due_at <= now()) OR
+                           (state = 1 AND lease_until < now()))
+                    ORDER BY sequence LIMIT 96
+                    """, db))
+                {
+                    candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
+                    candidateQuery.Parameters.AddWithValue("types", supported);
+                    candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
+                    await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
+                    while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
+                }
+                var querySeconds = Stopwatch.GetElapsedTime(queryStarted).TotalSeconds;
+                HubTelemetry.ClaimCandidateQuery.Record(querySeconds);
+                span?.AddEvent(new ActivityEvent("claim.candidates.selected",
+                    tags: new ActivityTagsCollection { { "candidates", candidates.Count }, { "query.seconds", querySeconds } }));
+                scannedCandidates += candidates.Count;
+                if (_singleScanEnabled) cachedCandidates = candidates;
             }
-            var querySeconds = Stopwatch.GetElapsedTime(queryStarted).TotalSeconds;
-            HubTelemetry.ClaimCandidateQuery.Record(querySeconds);
-            span?.AddEvent(new ActivityEvent("claim.candidates.selected",
-                tags: new ActivityTagsCollection { { "candidates", candidates.Count }, { "query.seconds", querySeconds } }));
-            scannedCandidates += candidates.Count;
 
             HubLeasedTask? found = null;
-            foreach (var taskId in candidates)
+            // In single-scan mode continue after the previously examined task,
+            // rather than rechecking already-claimed/blocked candidates.
+            foreach (var taskId in _singleScanEnabled ? candidates.Skip(candidateCursor) : candidates)
             {
+                if (_singleScanEnabled) candidateCursor++;
                 await using var tx = await db.BeginTransactionAsync(ct);
                 Guid id; string hub; string taskType; int version, partition, attempts;
                 int? workflowStep;
