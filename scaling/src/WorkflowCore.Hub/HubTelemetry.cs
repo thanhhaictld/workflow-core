@@ -105,6 +105,10 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
     public static readonly Histogram<double> ClaimPermitCheck =
         Meter.CreateHistogram<double>("workflow_hub_claim_permit_check_seconds", "s");
+    public static readonly Counter<long> WorkerClaimRequests =
+        Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
+    public static readonly Histogram<double> WorkerEmptyClaimBackoff =
+        Meter.CreateHistogram<double>("workflow_hub_worker_empty_claim_backoff_seconds", "s");
 
     // These observable instruments are process-local, not estimates of
     // total machine / container memory. Resource service.instance.id disambiguates.
