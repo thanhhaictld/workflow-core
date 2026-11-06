@@ -1,0 +1,136 @@
+name: Workflow Hub P99 Root-Cause Diagnostic (100 workflows)
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/diagnose_workflow_p99.py'
+      - '.github/scripts/sample_postgres_waits.py'
+      - '.github/workflows/workflow-hub-p99-diagnostic.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-p99-100-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p99-root-cause:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      COUNT: "100"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate diagnostic scripts
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py
+          node --input-type=module --check < scaling/observability/k6/partition-ordering.js
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+      - name: Start Hub, PostgreSQL, and 8 policy processors
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5100/health/ready
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          mkdir -p scaling/observability/results/p99-100
+          chmod 0777 scaling/observability/results scaling/observability/results/p99-100
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/definitions >/tmp/policy-definitions.json && \
+              python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          print('PASS: native policy workflow definitions registered')
+          PY
+      - name: Diagnose 100 workflows per policy with 8 and 16 processors
+        run: |
+          set -euo pipefail
+          echo "Runner CPUs: $(nproc)"
+          free -h
+          for processors in 8 16; do
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 12
+            for mode in unordered partition keyed; do
+              run="ci-p99-${processors}-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "::group::P99 forensic test processors=$processors mode=$mode 100 workflows"
+              python3 .github/scripts/sample_postgres_waits.py \
+                --output "scaling/observability/results/p99-100/waits-${processors}-${mode}.json" \
+                >"/tmp/p99-waits-${processors}-${mode}.log" 2>&1 &
+              wait_pid=$!
+              set +e
+              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=480 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/p99-k6-${processors}-${mode}.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$wait_pid" 2>/dev/null || true
+              wait "$wait_pid" || true
+              test "$k6_rc" -eq 0
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/p99-100/k6-${processors}-${mode}.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/p99-100/verify-${processors}-${mode}.json"
+              python3 .github/scripts/diagnose_workflow_p99.py \
+                --mode "$mode" --stage "$processors" --run-id "$run" \
+                --output "scaling/observability/results/p99-100/timeline-${processors}-${mode}.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('scaling/observability/results/p99-100')
+          for mode in ('unordered','partition','keyed'):
+              for processors in (8,16):
+                  t=json.loads((root/f'timeline-{processors}-{mode}.json').read_text())
+                  v=json.loads((root/f'verify-{processors}-{mode}.json').read_text())
+                  assert t['workflows']==v['completed']==100
+                  print('P99 RESULT',processors,mode,'workflow_p99_s',t['latencyByStage']['total_s']['p99'])
+                  print('STAGE P99 (not additive)',{k:r['p99'] for k,r in t['latencyByStage'].items()})
+                  print('SLOWEST',json.dumps(t['slowestWorkflows'][:3]))
+          print('PASS: 600 completed workflows with 6 durable per-workflow traces')
+          PY
+      - name: Upload forensic results and raw k6 logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-p99-100-workflows
+          path: |
+            scaling/observability/results/p99-100/*.json
+            /tmp/p99-k6-*.log
+            /tmp/p99-waits-*.log
+          if-no-files-found: warn
+      - name: Print service logs on failures
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true
