@@ -13,6 +13,12 @@ on:
       - '.github/workflows/workflow-hub-native-batch-benchmark.yml'
   workflow_dispatch:
 
+# Keep only the latest A/B execution for this branch or PR, rather than
+# spending multiple runners on obsolete intermediate commits.
+concurrency:
+  group: native-history-ab-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   native-batch-benchmark:
     runs-on: ubuntu-latest
