@@ -88,7 +88,13 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             policy.ResourceCapacity is < 1 or > 100000 ||
             (policy.ResourceName is null) != (policy.ResourceField is null) ||
             policy.ResourceName?.Length > 80 || policy.ResourceField?.Length > 80 ||
-            policy.Contract?.GetRawText().Length > 65536)
+            policy.Contract?.GetRawText().Length > 65536 || !Enum.IsDefined(policy.Ordering) ||
+            ((policy.Ordering is HubActivityOrdering.KeyedExclusive or
+                HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded) &&
+             (string.IsNullOrWhiteSpace(policy.ResourceName) ||
+              string.IsNullOrWhiteSpace(policy.ResourceField))) ||
+            ((policy.Ordering is HubActivityOrdering.Unordered or HubActivityOrdering.PartitionSerial) &&
+             policy.ResourceName is not null))
             throw new ArgumentException("Invalid activity registration");
 
         await using var db = await Source.OpenConnectionAsync(ct);
@@ -98,17 +104,17 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         await using var cmd = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
             (hub_id,activity_type,version,partitions,hub_concurrency,
-             activity_concurrency,resource_name,resource_field,resource_capacity,resource_fifo,contract)
+             activity_concurrency,resource_name,resource_field,resource_capacity,resource_fifo,contract,execution_policy)
             VALUES (@hub,@type,@version,@partitions,
               COALESCE((SELECT hub_concurrency FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub LIMIT 1),@hubcap),
               COALESCE((SELECT activity_concurrency FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub AND activity_type=@type LIMIT 1),@cap),
               @resource,@field,
               COALESCE((SELECT resource_capacity FROM wfc_scale.hub_activity_registration WHERE hub_id=@hub AND resource_name=@resource LIMIT 1),@resourcecap),
-              @fifo,@contract)
+              @fifo,@contract,@policy)
             ON CONFLICT (hub_id,activity_type,version) DO UPDATE
             SET partitions=EXCLUDED.partitions,resource_name=EXCLUDED.resource_name,
                 resource_field=EXCLUDED.resource_field,resource_fifo=EXCLUDED.resource_fifo,
-                contract=EXCLUDED.contract
+                contract=EXCLUDED.contract,execution_policy=EXCLUDED.execution_policy
             RETURNING xmax=0
             """,db,tx);
         BindActivity(cmd, policy);
@@ -319,6 +325,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         cmd.Parameters.Add("field", NpgsqlDbType.Text).Value = (object?)p.ResourceField ?? DBNull.Value;
         cmd.Parameters.AddWithValue("resourcecap", p.ResourceCapacity);
         cmd.Parameters.AddWithValue("fifo", p.StrictFifo);
+        cmd.Parameters.AddWithValue("policy", p.Ordering.ToString());
         cmd.Parameters.Add("contract", NpgsqlDbType.Jsonb).Value =
             (object?)p.Contract?.GetRawText() ?? DBNull.Value;
     }
@@ -328,7 +335,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         await using var cmd=Source.CreateCommand("""
             SELECT hub_id,activity_type,version,partitions,hub_concurrency,
                    activity_concurrency,resource_name,resource_field,
-                   resource_capacity,resource_fifo,contract::text
+                   resource_capacity,resource_fifo,contract::text,execution_policy
             FROM wfc_scale.hub_activity_registration ORDER BY hub_id,activity_type,version
             """);
         var values=new List<HubActivityRegistration>();
@@ -338,7 +345,8 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
                 r.GetInt32(4),r.GetInt32(5),
                 r.IsDBNull(6)?null:r.GetString(6),r.IsDBNull(7)?null:r.GetString(7),
                 r.GetInt32(8),r.GetBoolean(9),r.IsDBNull(10)?null:
-                    JsonDocument.Parse(r.GetString(10)).RootElement.Clone()));
+                    JsonDocument.Parse(r.GetString(10)).RootElement.Clone(),
+                Enum.Parse<HubActivityOrdering>(r.GetString(11))));
         return values;
     }
 
@@ -350,7 +358,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             await LockPolicyHub(connection,transaction,hub,ct,shared:true);
         const string sql = """
             SELECT partitions,hub_concurrency,activity_concurrency,resource_name,
-                   resource_field,resource_capacity,resource_fifo
+                   resource_field,resource_capacity,resource_fifo,execution_policy
             FROM wfc_scale.hub_activity_registration
             WHERE hub_id=@hub AND activity_type=@type AND version=@version
             """;
@@ -368,23 +376,35 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         string? resource=reader.IsDBNull(3)?null:reader.GetString(3);
         string? field=reader.IsDBNull(4)?null:reader.GetString(4);
         int resourceLimit=reader.GetInt32(5); bool fifo=reader.GetBoolean(6);
-        var rules = new List<HubResourceRule>
+        var ordering = Enum.Parse<HubActivityOrdering>(reader.GetString(7));
+        // Hub identifies the policy owner and authorizes requests; it does not
+        // implicitly serialize business work for explicit scheduling modes.
+        var rules = new List<HubResourceRule>();
+        if(ordering == HubActivityOrdering.Legacy)
         {
-            new("hub:" + hub + ":" + Digest(hub), hubLimit, false),
-            new("activity:" + hub + ":" + activity + ":" + Digest(activity), activityLimit, false)
-        };
-        if (resource is not null && field is not null)
+            rules.Add(new("hub:" + hub + ":" + Digest(hub), hubLimit, false));
+            rules.Add(new("activity:" + hub + ":" + activity + ":" + Digest(activity), activityLimit, false));
+        }
+        if ((ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or
+            HubActivityOrdering.KeyedBounded) && (resource is null || field is null))
+            throw new InvalidOperationException("Keyed policy has no resource selector");
+        if ((ordering == HubActivityOrdering.Legacy && resource is not null && field is not null) ||
+             (ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded))
         {
             if (input.ValueKind != JsonValueKind.Object ||
                 !input.TryGetProperty(field, out var key) ||
                 key.ValueKind != JsonValueKind.String ||
                 string.IsNullOrWhiteSpace(key.GetString()))
                 throw new ArgumentException("Missing declarative policy resource field: " + field);
+            var capacity = ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo
+                ? 1 : resourceLimit;
+            var strictFifo = ordering == HubActivityOrdering.KeyedFifo ||
+                (ordering == HubActivityOrdering.Legacy && fifo);
             rules.Add(new("resource:" + hub + ":" + resource + ":" + Digest(key.GetString()!),
-                resourceLimit, fifo));
+                capacity, strictFifo));
         }
         return new(hub, activity, version, partitions,
-            rules.OrderBy(x => x.Key,StringComparer.Ordinal).ToArray());
+            rules.OrderBy(x => x.Key,StringComparer.Ordinal).ToArray(), ordering);
     }
 
     private static string Digest(string value) =>
