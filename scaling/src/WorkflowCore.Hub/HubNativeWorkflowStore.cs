@@ -476,8 +476,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     public async Task<bool> CompleteActivityAsync(Guid task,string worker,long epoch,JsonElement result,CancellationToken ct)
     {
         if(result.GetRawText().Length>65536)throw new ArgumentException("Native result exceeds limit");
+        using var span=HubTelemetry.Traces.StartActivity("hub.activity.complete.transaction");
+        span?.SetTag("task.id",task.ToString());
+        span?.SetTag("task.epoch",epoch);
+        var connStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using var db=await Source.OpenConnectionAsync(ct);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.connection.acquired",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(connStarted).TotalSeconds }}));
         await using var tx=await db.BeginTransactionAsync(ct);
+        var lockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         Guid id;string hub,status,pointer,dispatch;int partition,step;
         await using(var cmd=Command(db,tx,"""
             SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id
@@ -490,6 +498,10 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             id=r.GetGuid(0);hub=r.GetString(1);partition=r.GetInt32(2);status=r.GetString(3);
             pointer=r.GetString(4);dispatch=r.GetString(5);step=r.GetInt32(6);
         }
+        span?.SetTag("workflow.id",id.ToString());
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.workflow.row.locked",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(lockStarted).TotalSeconds }}));
         await using(var cmd=Command(db,tx,"""
             SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=@task FOR UPDATE
             """,("task",task)))
@@ -515,7 +527,11 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__","ActivityResultReceived",
             JsonSerializer.Serialize(new{executionPointerId=pointer,dispatchKey=dispatch}),ct);
         await WakeAsync(db,tx,id,hub,partition,ct);
+        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await tx.CommitAsync(ct);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
         HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
         return true;
     }
