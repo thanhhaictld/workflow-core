@@ -29,6 +29,7 @@ public sealed class HubTaskMatcher
 
     private readonly HubTaskStore _tasks;
     private readonly HubMatchingOwnership _ownership;
+    private readonly HubEventGatedClaimDispatcher? _eventGated;
     private readonly object _sync = new();
     private readonly Dictionary<(string Hub, int Partition), LinkedList<Waiter>> _pending = new();
     // An initial DB catch-up scan is necessary for existing backlog. Coalesce
@@ -43,14 +44,36 @@ public sealed class HubTaskMatcher
     {
         _tasks = tasks;
         _ownership = ownership;
+        if (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_EVENT_GATED") is "true" or "1" or "True")
+        {
+            _eventGated = new HubEventGatedClaimDispatcher(
+                (request, ct) => tasks.ClaimAsync(request.WorkerId,
+                    request.Hubs, request.Capabilities, request.MaxTasks,
+                    TimeSpan.FromSeconds(45), ct, request.Workflows,
+                    request.MatchingPartition, request.MatchingPartitionCount),
+                (request, ct) => ownership.Sharded
+                    ? ownership.StillOwnsPartitionAsync(request.Hubs[0],
+                        request.MatchingPartition!.Value, ct)
+                    : ownership.StillOwnsAsync(request.Hubs[0], ct),
+                ownership.Sharded, ownership.PartitionCount);
+        }
         readiness.TaskReady += NotifyReady;
     }
 
-    public int PendingCount { get { lock (_sync) return _count; } }
+    public int PendingCount => _eventGated is not null
+        ? _eventGated.PendingWaiters
+        : ReadPendingCount();
+
+    private int ReadPendingCount() { lock (_sync) return _count; }
 
     public void NotifyReady(string hub, string? type = null, int version = 0,
         int? taskPartitionId = null)
     {
+        if (_eventGated is not null)
+        {
+            _eventGated.NotifyReady(hub, type, version, taskPartitionId);
+            return;
+        }
         lock (_sync)
         {
             // Null partition means "permit released / recovery scan": any
@@ -102,6 +125,8 @@ public sealed class HubTaskMatcher
     public async Task<IReadOnlyList<HubLeasedTask>> LongPollAsync(
         HubClaimRequest request, CancellationToken ct)
     {
+        if (_eventGated is not null)
+            return await _eventGated.LongPollAsync(request, ct);
         var hub = request.Hubs[0];
         var shard = request.MatchingPartition ?? 0;
         var waiter = new Waiter(request);
