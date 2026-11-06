@@ -195,10 +195,15 @@ public sealed class HubTaskStore : IAsyncDisposable
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
         var results = new List<HubLeasedTask>(maxTasks);
         var scannedCandidates = 0;
+        var connectionStarted = Stopwatch.GetTimestamp();
         await using var db = await _dataSource.OpenConnectionAsync(ct);
+        var connectionWaitSeconds = Stopwatch.GetElapsedTime(connectionStarted).TotalSeconds;
+        HubTelemetry.ClaimConnectionWait.Record(connectionWaitSeconds);
+        span?.SetTag("db.connection_acquire_seconds", connectionWaitSeconds);
         for (var batch = 0; batch < maxTasks; batch++)
         {
             var candidates = new List<Guid>();
+            var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
                 WHERE hub_id = ANY(@hubs)
@@ -222,6 +227,10 @@ public sealed class HubTaskStore : IAsyncDisposable
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
             }
+            var querySeconds = Stopwatch.GetElapsedTime(queryStarted).TotalSeconds;
+            HubTelemetry.ClaimCandidateQuery.Record(querySeconds);
+            span?.AddEvent(new ActivityEvent("claim.candidates.selected",
+                tags: new ActivityTagsCollection { { "candidates", candidates.Count }, { "query.seconds", querySeconds } }));
             scannedCandidates += candidates.Count;
 
             HubLeasedTask? found = null;
@@ -282,6 +291,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                 // Canonical resource row lock ordering prevents deadlock when
                 // tasks require multiple independent concurrency permits.
                 var eligible = true;
+                var permitStarted = Stopwatch.GetTimestamp();
                 foreach (var constraint in constraints)
                 {
                     // Fetch current values *under* the permit lock, never from a stale candidate snapshot.
@@ -318,6 +328,13 @@ public sealed class HubTaskStore : IAsyncDisposable
                         eligible = false;
                         break;
                     }
+                }
+                if (constraints.Count > 0)
+                {
+                    var permitSeconds = Stopwatch.GetElapsedTime(permitStarted).TotalSeconds;
+                    HubTelemetry.ClaimPermitCheck.Record(permitSeconds);
+                    span?.AddEvent(new ActivityEvent("claim.permits.checked",
+                        tags: new ActivityTagsCollection { { "resources", constraints.Count }, { "admitted", eligible }, { "permit.seconds", permitSeconds } }));
                 }
                 if (!eligible) continue;
 
@@ -409,6 +426,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
+        span?.SetTag("tasks.claim_amplification", results.Count == 0 ? scannedCandidates : (double)scannedCandidates / results.Count);
         return results;
     }
 
