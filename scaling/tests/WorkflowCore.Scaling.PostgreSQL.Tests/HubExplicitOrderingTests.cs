@@ -35,7 +35,15 @@ public sealed class HubExplicitOrderingTests
         string key, int iteration)
     {
         var input = Input(key);
-        return await store.EnqueueAsync(route, input.GetRawText(), null,
+        // Each task must resolve its permit from its own business payload.
+        // Reusing a route already resolved for another resource would assign
+        // the wrong policy key, which is invalid caller behavior.
+        var actualRoute = route.Ordering is HubActivityOrdering.KeyedExclusive or
+            HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded
+            ? (await new HubDefinitionStore(store).ResolveAsync(
+                route.HubId, route.TaskType, route.Version, input, default))!
+            : route;
+        return await store.EnqueueAsync(actualRoute, input.GetRawText(), null,
             "order-" + iteration, default);
     }
 
@@ -97,8 +105,7 @@ public sealed class HubExplicitOrderingTests
         Assert.Equal(capacity + 1, first.Count);
         Assert.Equal(capacity, first.Count(t => t.Payload.GetProperty("resourceId").GetString() == "same"));
         Assert.Single(first, t => t.Payload.GetProperty("resourceId").GetString() == "other");
-        Assert.Equal(1, first.Where(t => t.Payload.GetProperty("resourceId").GetString() == "other")
-            .Select(t => t.PartitionId).Distinct().Count());
+        Assert.Single(first, t => t.Payload.GetProperty("resourceId").GetString() == "other");
         Assert.Empty(await Claim(store, setup.Hub, "other", 16));
         foreach (var t in first)
             Assert.True(await store.CompleteAsync(t.Id, "worker", t.Epoch, "{}", default));
