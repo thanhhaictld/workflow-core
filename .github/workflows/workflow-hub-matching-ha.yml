@@ -129,6 +129,7 @@ jobs:
           PY
           python3 scaling/observability/benchmark/verify_ordering.py \
             --mode partition --run-id "matching-ha-failover-$GITHUB_RUN_ID" --count 150 \
+            --max-extra-attempts 30 \
             --output scaling/observability/results/matching-ha/verify-partition.json
           # Recover the stopped Hub and check that completion and query history
           # remain visible regardless of the REST replica used.
