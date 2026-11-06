@@ -57,6 +57,18 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_native_event_lane_lock_wait_seconds", "s");
     public static readonly Histogram<double> ClaimDuration =
         Meter.CreateHistogram<double>("workflow_hub_claim_duration_seconds", "s");
+    // P0 diagnostics: low-cardinality mode and operation only. No workflow,
+    // worker, tenant or unbounded hub labels on histograms.
+    public static readonly Histogram<double> NativeCommitDuration =
+        Meter.CreateHistogram<double>("workflow_hub_native_commit_duration_seconds", "s");
+    public static readonly Histogram<double> NativeHistoryWriteDuration =
+        Meter.CreateHistogram<double>("workflow_hub_native_history_write_duration_seconds", "s");
+    public static readonly Histogram<int> NativeHistoryEventsPerCommit =
+        Meter.CreateHistogram<int>("workflow_hub_native_history_events_per_commit", "{event}");
+    public static readonly Histogram<int> ClaimCandidateCount =
+        Meter.CreateHistogram<int>("workflow_hub_claim_candidates_scanned", "{task}");
+    public static readonly Histogram<int> ClaimReturnedCount =
+        Meter.CreateHistogram<int>("workflow_hub_claim_tasks_returned", "{task}");
     public static readonly Histogram<double> StoreOperationDuration =
         Meter.CreateHistogram<double>("workflow_hub_store_duration_seconds", "s");
     public static readonly Counter<long> SseNotifications =
