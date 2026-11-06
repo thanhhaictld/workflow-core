@@ -166,6 +166,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         using var span=HubTelemetry.Traces.StartActivity(isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute");
         span?.SetTag("hub",task.HubId);span?.SetTag("activity.type",task.TaskType);
         span?.SetTag("workflow.id",task.WorkflowId?.ToString());
+        span?.SetTag("task.id",task.Id.ToString());
+        span?.SetTag("task.epoch",task.Epoch);
         var started=Stopwatch.GetTimestamp();var outcome="failure";
         if(isActivity)HubTelemetry.WorkerInflight.Add(1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType));
         using var execution=CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -174,13 +176,36 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var heartbeat=Heartbeat(task,execution,heartbeatStop.Token);
         try
         {
-            var result=await Execute(task,_owner,execution.Token);
+            object result;
+            using (var bodySpan = HubTelemetry.Traces.StartActivity("hub.worker.execute.body"))
+            {
+                bodySpan?.SetTag("task.id", task.Id.ToString());
+                bodySpan?.SetTag("workflow.id", task.WorkflowId?.ToString());
+                var bodyStarted = Stopwatch.GetTimestamp();
+                try { result = await Execute(task,_owner,execution.Token); }
+                finally
+                {
+                    var bodySeconds = Stopwatch.GetElapsedTime(bodyStarted).TotalSeconds;
+                    bodySpan?.SetTag("body.duration_seconds", bodySeconds);
+                    HubTelemetry.WorkerBodyDuration.Record(bodySeconds,
+                        HubTelemetry.ActivityTag(task.TaskType));
+                }
+            }
             // Transport failures retry the frozen result, never the body or decisions.
             for(var attempt=0;;attempt=Math.Min(attempt+1,5))
             {
                 try
                 {
+                    using var completionSpan=HubTelemetry.Traces.StartActivity("hub.worker.completion.http");
+                    completionSpan?.SetTag("task.id",task.Id.ToString());
+                    completionSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
+                    var completionStarted=Stopwatch.GetTimestamp();
                     using var response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token);
+                    var completionSeconds=Stopwatch.GetElapsedTime(completionStarted).TotalSeconds;
+                    completionSpan?.SetTag("http.response.status_code",(int)response.StatusCode);
+                    completionSpan?.SetTag("completion.duration_seconds",completionSeconds);
+                    HubTelemetry.WorkerCompletionDuration.Record(completionSeconds,
+                        HubTelemetry.ActivityTag(task.TaskType));
                     if(response.StatusCode==HttpStatusCode.Conflict){outcome="fenced";return;}
                     if((int)response.StatusCode>=500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
                         throw new HttpRequestException("Hub completion temporarily unavailable: "+response.StatusCode);

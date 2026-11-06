@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 35
     env:
       COMPOSE: scaling/observability/compose.yaml
+      OTEL_OVERRIDE: scaling/observability/compose.p99.yaml
       ENVFILE: scaling/observability/.env.example
       POLICY_BENCHMARK_ENABLED: "true"
       POLICY_BENCH_ACTIVITY_WORKERS: "8"
@@ -28,19 +29,21 @@ jobs:
       - name: Validate diagnostic scripts
         run: |
           set -euo pipefail
-          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py
+          python3 -m py_compile .github/scripts/diagnose_workflow_p99.py .github/scripts/sample_postgres_waits.py .github/scripts/summarize_p99_otel.py
           node --input-type=module --check < scaling/observability/k6/partition-ordering.js
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+          docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" config --quiet
       - name: Start Hub, PostgreSQL, and 8 policy processors
         run: |
           set -euo pipefail
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub
+          mkdir -p scaling/observability/results/otel-p99
+          chmod 0777 scaling/observability/results/otel-p99
+          docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" up -d --build hub tempo loki prometheus
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
             sleep 2
           done
           curl -fsS http://127.0.0.1:5100/health/ready
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+          docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
             --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
           mkdir -p scaling/observability/results/p99-100
           chmod 0777 scaling/observability/results scaling/observability/results/p99-100
@@ -70,9 +73,9 @@ jobs:
           echo "Runner CPUs: $(nproc)"
           free -h
           for processors in 8 16; do
-            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
               --profile offboarding-load up -d --no-deps --scale "processor=$processors" processor
-            active="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            active="$(docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
               --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
             test "$active" -eq "$processors"
             sleep 12
@@ -84,7 +87,7 @@ jobs:
                 >"/tmp/p99-waits-${processors}-${mode}.log" 2>&1 &
               wait_pid=$!
               set +e
-              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" \
                 --profile policy-k6 run --rm --no-deps \
                 -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
                 -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=480 \
@@ -120,6 +123,9 @@ jobs:
                   print('SLOWEST',json.dumps(t['slowestWorkflows'][:3]))
           print('PASS: 600 completed workflows with 6 durable per-workflow traces')
           PY
+          # Drain worker and Hub OTLP batches before validating the archive.
+          sleep 8
+          python3 .github/scripts/summarize_p99_otel.py
       - name: Upload forensic results and raw k6 logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,10 +133,11 @@ jobs:
           name: workflow-hub-p99-100-workflows
           path: |
             scaling/observability/results/p99-100/*.json
+            scaling/observability/results/otel-p99/*.json
             /tmp/p99-k6-*.log
             /tmp/p99-waits-*.log
           if-no-files-found: warn
       - name: Print service logs on failures
         if: failure()
         run: |
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true
+          docker compose -f "$COMPOSE" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor otel-collector tempo || true
