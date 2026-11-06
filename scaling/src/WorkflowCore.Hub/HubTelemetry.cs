@@ -51,6 +51,10 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_tasks_completed", "{task}");
     public static readonly Counter<long> TasksFailed =
         Meter.CreateCounter<long>("workflow_hub_tasks_failed", "{task}");
+    // PostgreSQL hub-scoped advisory lock wait; tracks implicit native-runtime
+    // coordination even if no activity-level FIFO/resource policy is configured.
+    public static readonly Histogram<double> NativeEventLaneLockWait =
+        Meter.CreateHistogram<double>("workflow_hub_native_event_lane_lock_wait_seconds", "s");
     public static readonly Histogram<double> ClaimDuration =
         Meter.CreateHistogram<double>("workflow_hub_claim_duration_seconds", "s");
     public static readonly Histogram<double> StoreOperationDuration =

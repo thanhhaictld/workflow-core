@@ -54,7 +54,7 @@ type HubDetailResponse = {
 };
 type Tab = "trace" | "history" | "state";
 
-const eventTone = (event: string) => event === "StepCompleted" || event === "TimerFired" || event === "WorkflowCompleted" ? "green" as const
+const eventTone = (event: string) => event === "StepCompleted" || event === "NativeStepSpan" || event === "TimerFired" || event === "WorkflowCompleted" ? "green" as const
   : event === "StepFailed" || event === "WorkflowError" ? "red" as const : "amber" as const;
 
 export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
@@ -99,6 +99,8 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
   const steps = useMemo(() => Array.from({ length: count }, (_, index) => {
     const events = history.filter(record => record.stepIndex === index);
     const last = events[events.length - 1];
+    const recordedAttempts = trace.filter(item => item.stepIndex === index)
+      .reduce((total, item) => total + item.attempts.length, 0);
     const declared = detail?.definition?.steps[index]?.activityType ?? detail?.definition?.steps[index]?.name;
     const completed = events.some(event => event.eventType === "StepCompleted" ||
       event.eventType === "TimerFired");
@@ -111,10 +113,10 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
       : "Ready";
     return {
       index, name: declared ?? last?.activityType ?? `Step ${index + 1}`,
-      state, events, attempts: last?.attempts ?? 0,
+      state, events, attempts: Math.max(recordedAttempts, last?.attempts ?? 0),
       completedAt: events.find(event => event.eventType === "StepCompleted")?.occurredAt,
     };
-  }), [count, history, detail?.definition, workflow?.nextStep, workflow?.state]);
+  }), [count, history, trace, detail?.definition, workflow?.nextStep, workflow?.state]);
 
   const active = steps[selectedStep] ?? null;
   const event = selectedEvent === null ? null : history[selectedEvent] ?? null;

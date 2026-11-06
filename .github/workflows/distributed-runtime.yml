@@ -65,6 +65,8 @@ jobs:
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
         run: dotnet build scaling/src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
+      - name: Build native-only offboarding processor
+        run: dotnet build scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj -c Release
       - name: Build standalone Hub gateway
         run: dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
       - name: Build benchmark API

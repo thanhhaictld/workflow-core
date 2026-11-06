@@ -39,9 +39,10 @@ COMPOSE ?= docker compose
 OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
+OFFBOARD_PROCESSORS ?= 8
 OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
 
-.PHONY: obs-setup obs-up obs-scale obs-stress-test obs-down obs-clean obs-ps
+.PHONY: obs-setup obs-up obs-scale obs-stress-test obs-down obs-clean obs-ps obs-offboarding-up obs-offboarding-test obs-offboarding-ps
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
 obs-up:
@@ -52,6 +53,17 @@ obs-scale:
 
 obs-stress-test:
 	$(OBS_COMPOSE) --profile load run --rm k6
+
+# Run exactly eight native-only offboarding processor containers; disable the
+# normal onboarding Provisioner replicas to make the test easy to interpret.
+obs-offboarding-up:
+	$(OBS_COMPOSE) --profile offboarding-load up -d --build --scale processor=$(OFFBOARD_PROCESSORS) --scale provisioner=0
+
+obs-offboarding-test:
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm k6-offboarding
+
+obs-offboarding-ps:
+	$(OBS_COMPOSE) --profile offboarding-load ps
 
 obs-down:
 	$(OBS_COMPOSE) down

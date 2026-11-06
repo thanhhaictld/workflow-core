@@ -29,7 +29,8 @@ public sealed record HubRecentRun(string RunId, long Total, long Ready, long Run
     long Completed, long Failed, DateTime LastCreatedAt);
 public sealed record HubWorkflowTraceAttempt(
     long Epoch, int AttemptNumber, string WorkerId,
-    DateTime ClaimedAt, DateTime? FinishedAt, string Outcome);
+    DateTime ClaimedAt, DateTime? FinishedAt, string Outcome,
+    string Source = "lease");
 public sealed record HubWorkflowTraceStep(
     int StepIndex, Guid TaskId, string ActivityType, int Version,
     string State, DateTime? ReadyAt,
@@ -487,7 +488,71 @@ public sealed class HubWorkflowStore(
                     reader.GetString(11)));
         }
         Flush();
-        return grouped;
+
+        // Native in-process steps never create a separate hub_task row. Their
+        // timed spans are recorded by the remote workflow executor as
+        // NativeStepSpan events with the *actual* worker-observed timestamps.
+        // Earlier runs retain StepCompleted events without duration metadata:
+        // render only an honest completion marker, never a made-up bar.
+        await using var native = DataSource.CreateCommand("""
+            SELECT e.step_index,COALESCE(e.task_id,'00000000-0000-0000-0000-000000000000'::uuid),
+                   e.activity_type,e.execution_pointer_id,e.attempt,e.event_type,
+                   e.payload::text,w.definition_version
+            FROM wfc_scale.hub_workflow_event e
+            JOIN wfc_scale.hub_workflow w ON w.id=e.workflow_id
+            WHERE e.workflow_id=@id AND w.execution_mode='native'
+              AND e.event_type IN ('NativeStepSpan','StepCompleted')
+            ORDER BY e.occurred_at,e.id
+            """);
+        native.Parameters.AddWithValue("id",id);
+        var nativeRows = new Dictionary<(int Step,string Pointer),
+            (Guid TaskId,string Name,int Version,List<HubWorkflowTraceAttempt> Attempts)>();
+        await using (var events = await native.ExecuteReaderAsync(ct))
+        {
+            while (await events.ReadAsync(ct))
+            {
+                var index=events.GetInt32(0);
+                var task=events.GetGuid(1);
+                var name=events.GetString(2);
+                var pointer=events.IsDBNull(3)?task.ToString("N"):events.GetString(3);
+                var key=(index,pointer);
+                // Remote activity dispatches already have a persisted lease
+                // trace. Do not create overlapping synthetic native spans.
+                if(grouped.Any(t=>t.StepIndex==index &&
+                    (t.DispatchKey is not null || t.ExecutionPointerId is null ||
+                     t.ExecutionPointerId==pointer)))
+                    continue;
+                if(!nativeRows.TryGetValue(key,out var entry))
+                    entry=(task,name,events.GetInt32(7),new List<HubWorkflowTraceAttempt>());
+                if(events.GetString(5)=="NativeStepSpan" && !events.IsDBNull(6))
+                {
+                    using var payload=JsonDocument.Parse(events.GetString(6));
+                    var json=payload.RootElement;
+                    if(json.TryGetProperty("startedAt",out var started) &&
+                       json.TryGetProperty("finishedAt",out var finished) &&
+                       json.TryGetProperty("workerId",out var worker) &&
+                       json.TryGetProperty("epoch",out var leaseEpoch) &&
+                       started.TryGetDateTime(out var startAt) &&
+                       finished.TryGetDateTime(out var finishAt) &&
+                       leaseEpoch.TryGetInt64(out var epoch) &&
+                       startAt<=finishAt && epoch>0)
+                    {
+                        var number=json.TryGetProperty("attemptNumber",out var attempt) &&
+                            attempt.TryGetInt32(out var retry)?retry:
+                            (events.IsDBNull(4)?1:events.GetInt32(4)+1);
+                        entry.Attempts.Add(new(epoch,Math.Max(1,number),
+                            worker.GetString()??"native",startAt.ToUniversalTime(),
+                            finishAt.ToUniversalTime(),"Completed","native-step"));
+                    }
+                }
+                nativeRows[key]=entry;
+            }
+        }
+        foreach(var ((index,pointer),entry) in nativeRows)
+            grouped.Add(new(index,entry.TaskId,entry.Name,entry.Version,
+                "Completed",null,entry.Attempts.ToArray(),pointer));
+        return grouped.OrderBy(s=>s.StepIndex).ThenBy(s=>s.ActivityType,StringComparer.Ordinal)
+            .ToArray();
     }
 
     public async Task<IReadOnlyList<HubWorkflowHistoryEntry>> HistoryAsync(Guid id,

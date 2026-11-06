@@ -13,6 +13,7 @@ export type HubTraceAttempt = {
   claimedAt: string;
   finishedAt: string | null;
   outcome: "Leased" | "Completed" | "RetryScheduled" | "Failed" | "LeaseExpired" | "Cancelled";
+  source?: "lease" | "native-step";
 };
 export type HubTraceStep = {
   stepIndex: number;
@@ -93,7 +94,9 @@ export function HubTraceWaterfall({
   ].sort((a, b) => a.stepIndex - b.stepIndex);
 
   const allAttempts = useMemo(() => trace.flatMap(step => step.attempts), [trace]);
-  const hasRecordedClaims = allAttempts.length > 0;
+  const hasRecordedTimings = allAttempts.length > 0;
+  const hasHistoricalEvents = history.some(event => event.eventType === "StepCompleted" || event.eventType === "StepFailed");
+  const isFinished = ["Complete", "Failed", "Terminated"].includes(workflow.state);
   const rootDuration = durationMs(workflow.createdAt, workflow.completedAt ?? new Date(now).toISOString());
 
   const bar = (from: string, to: string, className: string, title: string) =>
@@ -114,8 +117,8 @@ export function HubTraceWaterfall({
         <div>
           <p className="text-sm font-semibold">Distributed execution waterfall</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Hub lease spans are recorded at claim and committed completion.
-            Exact worker CPU/handler time is available in OpenTelemetry traces.
+            Activity bars use durable Hub claim/finish timestamps. Native-only step bars use
+            worker-observed start/finish times committed with workflow history.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-4">
@@ -183,7 +186,8 @@ export function HubTraceWaterfall({
           </div>;
         }
         const step = segment.step;
-        const folded = collapsed.includes(step.taskId);
+        const rowId = step.taskId + ":" + step.stepIndex + ":" + (step.executionPointerId ?? "");
+        const folded = collapsed.includes(rowId);
         const terminalEvent = eventTime(step);
         const finished = step.attempts.filter(x => x.finishedAt);
         const firstClaim = step.attempts[0]?.claimedAt;
@@ -191,14 +195,14 @@ export function HubTraceWaterfall({
           ? durationMs(step.readyAt, firstClaim) : null;
         const stateTone = step.state === "Completed" ? "green" as const
           : step.state === "Failed" ? "red" as const : "slate" as const;
-        return <div key={step.taskId}>
+        return <div key={rowId}>
           <div style={gridStyle} className={cn("grid items-center gap-3 border-b border-border/70 px-4 py-2.5",
             selectedStep === step.stepIndex ? "bg-blue-500/5" : "hover:bg-muted/35")}>
             <button type="button"
               onClick={() => {
                 onSelectStep(step.stepIndex);
-                setCollapsed(before => folded ? before.filter(n => n !== step.taskId)
-                  : [...before, step.taskId]);
+                setCollapsed(before => folded ? before.filter(n => n !== rowId)
+                  : [...before, rowId]);
               }}
               className="flex min-w-0 items-center gap-2 text-left">
               {folded ? <ChevronRight size={15}/> : <ChevronDown size={15}/>}
@@ -217,7 +221,7 @@ export function HubTraceWaterfall({
               {step.attempts.map(attempt => bar(attempt.claimedAt,
                 attempt.finishedAt ?? new Date(now).toISOString(),
                 attemptsTone[attempt.outcome].bar + "/70",
-                `Attempt ${attempt.attemptNumber}: ${attemptsTone[attempt.outcome].label}`))}
+                `${attempt.source === "native-step" ? "Native step" : "Lease attempt"} ${attempt.attemptNumber}: ${attemptsTone[attempt.outcome].label}`))}
               {!step.attempts.length && terminalEvent && <div
                 className="absolute top-[5px] h-5 w-0.5 bg-emerald-500"
                 style={{ left: offset(terminalEvent) + "%" }}
@@ -235,7 +239,7 @@ export function HubTraceWaterfall({
               </div>}
 
             {step.attempts.map(attempt => {
-              const key = step.taskId + ":" + attempt.epoch;
+              const key = rowId + ":" + attempt.epoch + ":" + attempt.attemptNumber;
               const active = selectedAttempt === key;
               const until = attempt.finishedAt ?? new Date(now).toISOString();
               const elapsed = durationMs(attempt.claimedAt, until);
@@ -250,7 +254,7 @@ export function HubTraceWaterfall({
                   style={gridStyle} className={cn("grid w-full items-center gap-3 border-b border-border/50 px-4 py-1.5 text-left",
                     active ? "bg-blue-500/10" : "hover:bg-muted/40")}>
                   <span className="flex min-w-0 items-center gap-2 pl-8 text-xs">
-                    <span className="truncate">↳ Attempt {attempt.attemptNumber}</span>
+                    <span className="truncate">↳ {attempt.source === "native-step" ? "Native execution" : "Lease attempt"} {attempt.attemptNumber}</span>
                     <Badge tone={tone.tone}>{tone.label}</Badge>
                   </span>
                   <span className="text-xs tabular-nums text-muted-foreground">{formatDuration(elapsed)}</span>
@@ -260,9 +264,9 @@ export function HubTraceWaterfall({
                 {active && <div className="grid grid-cols-2 gap-3 border-b border-border bg-muted/40 p-4 pl-12 text-xs lg:grid-cols-4">
                   <div><p className="text-muted-foreground">Worker</p>
                     <p className="mt-1 break-all font-mono">{attempt.workerId}</p></div>
-                  <div><p className="text-muted-foreground">Claimed</p>
+                  <div><p className="text-muted-foreground">{attempt.source === "native-step" ? "Step started" : "Claimed"}</p>
                     <p className="mt-1 font-medium">{formatTime(attempt.claimedAt)}</p></div>
-                  <div><p className="text-muted-foreground">Finished</p>
+                  <div><p className="text-muted-foreground">{attempt.source === "native-step" ? "Step finished" : "Finished"}</p>
                     <p className="mt-1 font-medium">{formatTime(attempt.finishedAt)}</p></div>
                   <div><p className="text-muted-foreground">Fence epoch</p>
                     <p className="mt-1 font-medium">{attempt.epoch} · {shortId(step.taskId)}</p></div>
@@ -288,12 +292,13 @@ export function HubTraceWaterfall({
         <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-rose-500"/>Failed</span>
         <span><span className="mr-1 inline-block h-2 w-4 rounded-sm bg-violet-500"/>Durable timer wait</span>
         <span className="inline-flex items-center gap-1"><AlertTriangle size={13}/>
-          Lease expiry means the Hub reclaimed ownership, not proof of stopped side effects.
+          Native spans measure worker-observed step duration; lease bars include dispatch and transport delay.
         </span>
       </div>
-      {!hasRecordedClaims && <p className="px-4 py-3 text-xs text-amber-700 dark:text-amber-300">
-        This execution predates the durable attempt journal. Historical events are displayed as markers,
-        but missing start/end timestamps are intentionally not reconstructed.
+      {!hasRecordedTimings && isFinished && hasHistoricalEvents && <p className="px-4 py-3 text-xs text-amber-700 dark:text-amber-300">
+        No recorded step-duration spans are available for this execution. Older native workflows
+        and historical activities may only have durable completion events; exact start/end
+        timestamps are not inferred from commit times.
       </p>}
     </div>
   </div>;

@@ -30,9 +30,12 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
 
     private static async Task EventLane(NpgsqlConnection db, NpgsqlTransaction tx, string hub, CancellationToken ct)
     {
+        var lockStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var cmd = Command(db, tx,
             "SELECT pg_advisory_xact_lock(hashtextextended(@hub,12012))", ("hub", hub));
         await cmd.ExecuteNonQueryAsync(ct);
+        HubTelemetry.NativeEventLaneLockWait.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(lockStarted).TotalSeconds);
     }
 
     public async Task<HubNativeRuntime?> GetRuntimeAsync(Guid id, CancellationToken ct)

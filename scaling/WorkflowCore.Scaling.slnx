@@ -17,6 +17,9 @@
     <Project Path="sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj" />
     <Project Path="sample/onboarding/WorkflowCore.Provisioner.Workflows/WorkflowCore.Provisioner.Workflows.csproj" />
   </Folder>
+  <Folder Name="/sample/offboarding/">
+    <Project Path="sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj" />
+  </Folder>
   <Folder Name="/monitor/">
     <Project Path="monitor/api/WorkflowCore.Scaling.Api.csproj" />
   </Folder>
