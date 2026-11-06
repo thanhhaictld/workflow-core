@@ -113,6 +113,64 @@ public sealed class HubExplicitOrderingTests
     }
 
     [Fact]
+    public async Task MatchingShardsClaimOnlyTheirOwnTaskPartitions()
+    {
+        var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (cs is null) return;
+        var setup = await SetupAsync(cs, HubActivityOrdering.Unordered, partitions: 4);
+        await using var store = setup.Store;
+        for (var i = 0; i < 32; i++)
+            await Enqueue(store, setup.Route, "key-" + i, i);
+
+        var all = new List<HubLeasedTask>();
+        for (var shard = 0; shard < 4; shard++)
+        {
+            var claimed = await store.ClaimAsync(
+                "worker-" + shard, [setup.Hub], [new HubCapability(setup.Hub, "do-work", 1)],
+                32, TimeSpan.FromSeconds(60), default,
+                matchingPartition: shard, matchingPartitionCount: 4);
+            Assert.All(claimed, t => Assert.Equal(shard, t.PartitionId % 4));
+            all.AddRange(claimed);
+        }
+        Assert.Equal(32, all.Count);
+        Assert.Equal(32, all.Select(x => x.Id).Distinct().Count());
+        foreach (var leased in all)
+            Assert.True(await store.CompleteAsync(
+                leased.Id, "worker-" + (leased.PartitionId % 4),
+                leased.Epoch, "{}", default));
+    }
+
+    [Fact]
+    public async Task MatchingShardsDoNotBypassCrossPartitionKeyedFifo()
+    {
+        var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (cs is null) return;
+        var setup = await SetupAsync(cs, HubActivityOrdering.KeyedFifo, partitions: 4);
+        await using var store = setup.Store;
+        for (var i = 0; i < 20; i++)
+            await Enqueue(store, setup.Route, "same", i);
+
+        var claimed = new List<HubLeasedTask>();
+        for (var shard = 0; shard < 4; shard++)
+            claimed.AddRange(await store.ClaimAsync(
+                "worker-" + shard, [setup.Hub], [new HubCapability(setup.Hub, "do-work", 1)],
+                16, TimeSpan.FromSeconds(60), default,
+                matchingPartition: shard, matchingPartitionCount: 4));
+        Assert.Single(claimed);
+        var first = claimed[0];
+        Assert.True(await store.CompleteAsync(
+            first.Id, "worker-" + (first.PartitionId % 4), first.Epoch, "{}", default));
+
+        var next = new List<HubLeasedTask>();
+        for (var shard = 0; shard < 4; shard++)
+            next.AddRange(await store.ClaimAsync(
+                "next-" + shard, [setup.Hub], [new HubCapability(setup.Hub, "do-work", 1)],
+                16, TimeSpan.FromSeconds(60), default,
+                matchingPartition: shard, matchingPartitionCount: 4));
+        Assert.Single(next);
+    }
+
+    [Fact]
     public async Task LegacyActivityPermitsStayUnchangedAfterMigration()
     {
         var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
