@@ -124,3 +124,23 @@ The PR runs:
   service identity, scoped Hub RBAC, and strict internal peer allowlisting.
 - This is one leased matching partition per Hub namespace, not Temporal's
   multi-partition task-queue forwarding implementation.
+
+
+## Second-pass latency investigation
+
+The first two-Gateway A/B run (GitHub Actions 42230394264) completed all
+600 workflows per configuration, but the naive matcher regressed on most
+p95/p99 scenarios. It made **2636 claim RPCs / 1473 empty**, versus
+**2477 / 1361** under PR #18 adaptive polling. The most likely causes
+were non-capability-aware wakeups and one immediate DB claim on every
+long-poll re-registration. Subsequent changes add:
+
+- `wfc_hub_matching_ready` typed, committed PostgreSQL hints (migration 017).
+  Legacy SSE's original hub-only notification channel remains untouched.
+- Capability-matched in-memory wakeups so workflow and activity workers
+  do not indiscriminately wake each other.
+- One coalesced catch-up probe per Hub + worker capability lane per 5 seconds
+  instead of one initial claim per individual HTTP long poll.
+
+These are new hypotheses and require a fresh A/B run; they are not
+established improvements until measured.
