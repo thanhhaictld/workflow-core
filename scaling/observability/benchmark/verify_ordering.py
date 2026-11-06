@@ -25,7 +25,11 @@ definition = {
     "partition": "policy-partition-fifo",
     "keyed": "policy-keyed-fifo",
 }[args.mode]
-tasktype = definition + "-step"
+tasktype = {
+    "unordered": "policy-unordered-step",
+    "partition": "policy-partition-step",
+    "keyed": "policy-keyed-step",
+}[args.mode]
 
 # All interpolated variables are strictly validated; SQL executes in a
 # short-lived GitHub CI database, not in the live application.
