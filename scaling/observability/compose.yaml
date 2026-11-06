@@ -44,6 +44,7 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/014_hub_work_ready_notifications.sql
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/015_explicit_activity_ordering.sql
         PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/016_hub_matching_ownership.sql
+        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/017_hub_matching_capability_hints.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.
