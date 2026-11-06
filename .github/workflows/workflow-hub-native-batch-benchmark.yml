@@ -50,14 +50,20 @@ jobs:
       - name: Baseline — old per-event INSERTs (1000 workflows)
         run: |
           set -euo pipefail
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-k6 run --rm \
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED | tr -d '\\r')" = "false"
+          # --no-deps is essential: 'compose run' otherwise recreates the Hub
+          # with default batch=true, silently invalidating the control arm.
+          WFC_HUB_BATCH_HISTORY_ENABLED=false docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
             -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
             -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
             -e K6_OFFBOARD_RUN_ID=ci-legacy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
             k6-offboarding | tee /tmp/k6-legacy.log
           cp scaling/observability/results/k6-offboarding-summary.json \
             scaling/observability/results/ab/k6-legacy-summary.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED | tr -d '\\r')" = "false"
           python3 scaling/observability/benchmark/collect_p0_metrics.py \
             --mode legacy --output scaling/observability/results/ab/p0-legacy.json
 
@@ -71,18 +77,22 @@ jobs:
             sleep 2
           done
           curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED | tr -d '\\r')" = "true"
 
       - name: Treatment — new ordered batched INSERTs (1000 workflows)
         run: |
           set -euo pipefail
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-k6 run --rm \
+          WFC_HUB_BATCH_HISTORY_ENABLED=true docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
             -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
             -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
             -e K6_OFFBOARD_RUN_ID=ci-batch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
             k6-offboarding | tee /tmp/k6-batch.log
           cp scaling/observability/results/k6-offboarding-summary.json \
             scaling/observability/results/ab/k6-batch-summary.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED | tr -d '\\r')" = "true"
           python3 scaling/observability/benchmark/collect_p0_metrics.py \
             --mode batch --output scaling/observability/results/ab/p0-batch.json
 
