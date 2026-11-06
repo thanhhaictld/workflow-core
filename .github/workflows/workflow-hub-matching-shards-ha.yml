@@ -114,6 +114,7 @@ jobs:
             K6_POLICY_MODE=partition docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
               --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=partition \
               -e K6_POLICY_COUNT=150 -e K6_POLICY_VUS=60 \
+              -e K6_POLICY_FAULT_INJECTION=true \
               -e K6_POLICY_TIMEOUT_SECONDS=300 \
               -e K6_POLICY_RUN_ID="matching-shards-ha-failover-$GITHUB_RUN_ID" k6-policy \
               >scaling/observability/results/matching-shards-ha/k6-failover.log 2>&1
