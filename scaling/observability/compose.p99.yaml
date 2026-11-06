@@ -1,0 +1,5 @@
+services:
+  otel-collector:
+    volumes:
+      - ./otel-collector.p99.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./results/otel-p99:/results
