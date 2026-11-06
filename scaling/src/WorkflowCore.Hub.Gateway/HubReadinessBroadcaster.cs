@@ -17,8 +17,12 @@ public sealed class HubReadinessBroadcaster(
     private sealed record Subscriber(HashSet<string> Hubs, Channel<string> Channel);
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
 
+    // Optional in-process matching subscriber; SSE remains available for fallback.
+    public event Action<string>? TaskReady;
+
     public void Publish(string hub)
     {
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub);
         foreach (var client in _clients.Values)
             if (client.Hubs.Contains(hub) && client.Channel.Writer.TryWrite(hub))
                 HubTelemetry.SseNotifications.Add(1, HubTelemetry.HubTag(hub));
