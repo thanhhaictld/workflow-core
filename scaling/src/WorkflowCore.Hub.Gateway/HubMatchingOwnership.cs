@@ -15,9 +15,10 @@ public sealed class HubMatchingOwnership : BackgroundService
     private readonly HubMatchingPartitionLeaseStore _partitions;
     private readonly ILogger<HubMatchingOwnership> _logger;
     private readonly ConcurrentDictionary<string, HubMatchingLease> _owned = new();
+    private readonly ConcurrentDictionary<string, byte> _configured = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string Hub, int Partition), HubMatchingPartitionLease>
         _partitionOwned = new();
-    private readonly HttpClient _forwarder = new(new HttpClientHandler {
+    private readonly HttpClient _forwarder = new(new SocketsHttpHandler {
         AllowAutoRedirect = false,
         ConnectTimeout = TimeSpan.FromSeconds(2)
     }) { Timeout = TimeSpan.FromSeconds(27) };
@@ -91,7 +92,11 @@ public sealed class HubMatchingOwnership : BackgroundService
         string hub, int partition, CancellationToken ct)
     {
         ValidatePartition(partition);
-        await _partitions.EnsureConfigAsync(hub, PartitionCount, ct);
+        if (!_configured.ContainsKey(hub))
+        {
+            await _partitions.EnsureConfigAsync(hub, PartitionCount, ct);
+            _configured.TryAdd(hub, 0);
+        }
         var current = await _partitions.ReadAsync(hub, partition, ct);
         if (current is not null && current.LeaseUntil > DateTime.UtcNow)
         {
