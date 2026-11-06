@@ -26,20 +26,20 @@ public sealed class HubMatchingLeaseStore(HubTaskStore tasks)
         // One atomic statement. An unexpired owner cannot be displaced.
         // Recovering an expired lease increments its fencing generation.
         await using var cmd = Source.CreateCommand("""
-            INSERT INTO wfc_scale.hub_matching_owner
+            INSERT INTO wfc_scale.hub_matching_owner AS current_owner
                 (hub_id,owner_id,owner_url,epoch,lease_until)
             VALUES (@hub,@owner,@url,1,clock_timestamp()+@duration)
             ON CONFLICT (hub_id) DO UPDATE SET
                 owner_id=EXCLUDED.owner_id,
                 owner_url=EXCLUDED.owner_url,
-                epoch=CASE WHEN wfc_scale.hub_matching_owner.owner_id=EXCLUDED.owner_id
-                                 AND wfc_scale.hub_matching_owner.lease_until>clock_timestamp()
-                           THEN wfc_scale.hub_matching_owner.epoch
-                           ELSE wfc_scale.hub_matching_owner.epoch+1 END,
+                epoch=CASE WHEN current_owner.owner_id=EXCLUDED.owner_id
+                                 AND current_owner.lease_until>clock_timestamp()
+                           THEN current_owner.epoch
+                           ELSE current_owner.epoch+1 END,
                 lease_until=clock_timestamp()+@duration,
                 updated_at=clock_timestamp()
-            WHERE wfc_scale.hub_matching_owner.lease_until<=clock_timestamp()
-               OR wfc_scale.hub_matching_owner.owner_id=EXCLUDED.owner_id
+            WHERE current_owner.lease_until<=clock_timestamp()
+               OR current_owner.owner_id=EXCLUDED.owner_id
             RETURNING hub_id,owner_id,owner_url,epoch,lease_until
             """);
         cmd.Parameters.AddWithValue("hub", hub);
