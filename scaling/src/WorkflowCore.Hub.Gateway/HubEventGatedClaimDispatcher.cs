@@ -37,6 +37,7 @@ public sealed class HubEventGatedClaimDispatcher
 
     private sealed class Lane
     {
+        public long LastTouched { get; set; } = Stopwatch.GetTimestamp();
         public LinkedList<Waiter> Waiters { get; } = new();
         public HashSet<Hint> Pending { get; } = new();
         public Waiter? Selected { get; set; }
@@ -53,6 +54,8 @@ public sealed class HubEventGatedClaimDispatcher
     private readonly TimeSpan _pollTimeout;
     private int _waiters;
     private const int MaxWaiters = 2048;
+    private const int MaxCachedLanes = 4096;
+    private long _lastCacheTrim;
 
     public HubEventGatedClaimDispatcher(
         Func<HubClaimRequest, CancellationToken, Task<IReadOnlyList<HubLeasedTask>>> claim,
@@ -93,11 +96,31 @@ public sealed class HubEventGatedClaimDispatcher
 
     private void AddHint(Key key, Hint hint)
     {
-        // No worker can consume the notification? Drop the ephemeral hint.
-        // Every new capability lane has a coalesced catch-up probe.
-        if (!_lanes.TryGetValue(key, out var lane)) return;
+        var now = Stopwatch.GetTimestamp();
+        // Retain bounded readiness hints across worker shard rotation. A
+        // successful batch may leave more tasks behind after its last waiter
+        // returns; discarding that drain token stranded ready activities.
+        if (!_lanes.TryGetValue(key, out var lane))
+        {
+            if (_lanes.Count >= MaxCachedLanes ||
+                _lastCacheTrim == 0 ||
+                Stopwatch.GetElapsedTime(_lastCacheTrim, now).TotalSeconds >= 30)
+                TrimIdle(now);
+            if (_lanes.Count >= MaxCachedLanes) return; // periodic DB scan recovers
+            _lanes[key] = lane = new Lane();
+        }
+        lane.LastTouched = now;
         lane.Pending.Add(hint);
         WakeOne(lane);
+    }
+
+    private void TrimIdle(long now)
+    {
+        _lastCacheTrim = now;
+        foreach (var (key, lane) in _lanes.ToArray())
+            if (!lane.Claiming && lane.Waiters.Count == 0 &&
+                Stopwatch.GetElapsedTime(lane.LastTouched, now).TotalSeconds > 30)
+                _lanes.Remove(key);
     }
 
     private static void WakeOne(Lane lane)
@@ -153,9 +176,10 @@ public sealed class HubEventGatedClaimDispatcher
                 throw new InvalidOperationException("Matching waiter capacity exceeded");
             if (!_lanes.TryGetValue(waiter.Key, out var lane))
                 _lanes[waiter.Key] = lane = new Lane();
+            lane.LastTouched = Stopwatch.GetTimestamp();
             lane.Waiters.AddLast(waiter);
             _waiters++;
-            if (ShouldProbe(request))
+            if (lane.Pending.Count == 0 && ShouldProbe(request))
             {
                 // Start-up / missed-NOTIFY recovery is capability-scoped.
                 foreach (var capability in request.Capabilities)
@@ -255,8 +279,11 @@ public sealed class HubEventGatedClaimDispatcher
                     }
                     _waiters--;
                     WakeOne(lane);
-                    // Do not retain arbitrary Hub IDs after worker disconnects.
-                    if (lane.Waiters.Count == 0 && !lane.Claiming)
+                    // Keep pending work signals even if the final worker just
+                    // rotated to another shard; a later poller must see them.
+                    lane.LastTouched = Stopwatch.GetTimestamp();
+                    if (lane.Waiters.Count == 0 && !lane.Claiming &&
+                        lane.Pending.Count == 0)
                         _lanes.Remove(waiter.Key);
                 }
             }
