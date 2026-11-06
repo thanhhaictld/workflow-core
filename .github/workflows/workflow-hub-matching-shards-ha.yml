@@ -1,0 +1,188 @@
+name: Workflow Hub Partitioned Matching HA (2 Hubs, 4 Shards)
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/sql/018_hub_matching_partition_ownership.sql'
+      - 'scaling/sql/019_hub_matching_partition_hints.sql'
+      - 'scaling/observability/compose.matching-shards.yaml'
+      - 'scaling/observability/nginx.matching-ha.conf'
+      - '.github/workflows/workflow-hub-matching-shards-ha.yml'
+  workflow_dispatch:
+
+jobs:
+  partitioned-owner-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "true"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
+      WFC_HUB_ADAPTIVE_CLAIMS: "true"
+      WFC_HUB_DB_POOL: "12"
+      # Query a surviving Gateway even when the original :5100 owner is down.
+      WFC_HUB_VERIFY_URL: http://127.0.0.1:5110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate two-hub topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py
+      - name: Start PostgreSQL, two Hub gateways and load balancer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results
+          chmod 0777 scaling/observability/results
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb prometheus
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" --profile offboarding-load \
+            up -d --build --no-deps --scale processor=8 processor
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+               http://127.0.0.1:5110/api/hub/definitions >/tmp/matching-definitions.json && \
+               python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/matching-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+              {d['definitionId'] for d in x if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/matching-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+              {d['definitionId'] for d in x if d['hubId']=='policy-benchmark'})
+          PY
+          echo 'PASS: two Gateway processes and matching-enabled processor registered'
+      - name: Test normal operation and kill current matching owner mid-load
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/matching-shards-ha
+          chmod 0777 scaling/observability/results/matching-shards-ha
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          # Force real worker demand on all shards before crashing an owner.
+          # With the 8-processor fleet each shard should have at least one
+          # long poll; verify actual SQL owners rather than assumed pinning.
+          for i in {1..75}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/matching/partitions/policy-benchmark \
+              >/tmp/matching-owner-before.json && \
+              python3 - <<'PY'
+          import json,sys
+          data=json.load(open('/tmp/matching-owner-before.json'))
+          owners=data.get('owners',[])
+          active=[o for o in owners if o['active']]
+          assert data['partitions']==4
+          assert len(active)==4,owners
+          assert len({o['ownerId'] for o in active})==2,owners
+          print('PASS: four shards have active owners distributed across two Hubs',owners)
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/matching-owner-before.json'))
+          owners=data['owners']
+          assert len(owners)==4 and all(x['active'] for x in owners)
+          assert len({x['ownerId'] for x in owners})==2,owners
+          PY
+          owner="$(python3 -c "import json; d=json.load(open('/tmp/matching-owner-before.json')); print(d['owners'][0]['ownerId'])")"
+          if [ "$owner" = "hub-a" ]; then stopped=hub; survivor=hub-2; else stopped=hub-2; survivor=hub; fi
+          echo "Killing elected shard-0 owner service=$stopped; survivor=$survivor"
+          (
+            K6_POLICY_MODE=partition docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=partition \
+              -e K6_POLICY_COUNT=150 -e K6_POLICY_VUS=60 \
+              -e K6_POLICY_TIMEOUT_SECONDS=300 \
+              -e K6_POLICY_RUN_ID="matching-shards-ha-failover-$GITHUB_RUN_ID" k6-policy \
+              >scaling/observability/results/matching-shards-ha/k6-failover.log 2>&1
+          ) &
+          k6_pid=$!
+          sleep 4
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" kill -s SIGKILL "$stopped"
+          set +e
+          wait "$k6_pid"
+          result=$?
+          set -e
+          cat scaling/observability/results/matching-shards-ha/k6-failover.log | tail -100
+          test "$result" -eq 0
+          # Every shard owned by the dead Hub must be recovered by survivor,
+          # with a strictly higher epoch. Healthy shards remain unchanged.
+          for i in {1..40}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/matching/partitions/policy-benchmark \
+              >/tmp/matching-owner-after.json && \
+              python3 - <<'PY'
+          import json,sys
+          owners=json.load(open('/tmp/matching-owner-after.json'))['owners']
+          assert len(owners)==4 and all(x['active'] for x in owners)
+          assert len({x['ownerId'] for x in owners})==1,owners
+          PY
+            then break; fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json
+          before={x['partition']:x for x in json.load(open('/tmp/matching-owner-before.json'))['owners']}
+          after={x['partition']:x for x in json.load(open('/tmp/matching-owner-after.json'))['owners']}
+          assert set(before)==set(after)==set(range(4)),(before,after)
+          assert len({x['ownerId'] for x in after.values()})==1,(before,after)
+          lost={p for p,x in before.items() if x['ownerId']!=next(iter(after.values()))['ownerId']}
+          assert lost,(before,after)
+          for p in lost:
+              assert after[p]['epoch']>before[p]['epoch'],(p,before[p],after[p])
+          print('PASS: independent matching shard takeover',before,'=>',after)
+          PY
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode partition --run-id "matching-shards-ha-failover-$GITHUB_RUN_ID" --count 150 \
+            --max-extra-attempts 30 \
+            --output scaling/observability/results/matching-shards-ha/verify-partition.json
+          # Recover the stopped Hub and check that completion and query history
+          # remain visible regardless of the REST replica used.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" start "$stopped"
+          sleep 10
+          curl -fsS http://127.0.0.1:5110/health/ready
+          K6_POLICY_MODE=keyed docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=keyed \
+            -e K6_POLICY_COUNT=100 -e K6_POLICY_VUS=60 \
+            -e K6_POLICY_TIMEOUT_SECONDS=300 \
+            -e K6_POLICY_RUN_ID="matching-shards-ha-recovered-$GITHUB_RUN_ID" k6-policy \
+            | tee scaling/observability/results/matching-shards-ha/k6-recovered.log
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode keyed --run-id "matching-shards-ha-recovered-$GITHUB_RUN_ID" --count 100 \
+            --output scaling/observability/results/matching-shards-ha/verify-keyed.json
+          cp /tmp/matching-owner-before.json scaling/observability/results/matching-shards-ha/owner-before.json
+          cp /tmp/matching-owner-after.json scaling/observability/results/matching-shards-ha/owner-after.json
+      - name: Upload matching HA results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matching-partitioned-ha-two-gateways
+          path: scaling/observability/results/matching-shards-ha/**
+          if-no-files-found: warn
+      - name: Print logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" logs --tail=200 hub hub-2 hub-lb postgres processor || true
