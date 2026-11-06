@@ -144,3 +144,42 @@ long-poll re-registration. Subsequent changes add:
 
 These are new hypotheses and require a fresh A/B run; they are not
 established improvements until measured.
+
+
+## Second-pass measured A/B — capability-aware matching
+
+[Successful two-Gateway A/B run 42232321936](https://github.com/thanhhaictld/workflow-core/actions/runs/42232321936)
+tested the updated capability-aware matcher against PR #18 adaptive claims on
+the same two-Hub container topology, 600/600 successful workflows per mode.
+
+| Processors | Policy | Adaptive p95 / p99 (s) | Matching p95 / p99 (s) |
+| ---: | --- | ---: | ---: |
+| 8 | unordered | 14.084 / 14.126 | 13.710 / 13.813 |
+| 8 | partition | 12.726 / 13.269 | 11.707 / 11.840 |
+| 8 | keyed | 9.351 / 9.406 | 8.356 / 8.432 |
+| 16 | unordered | 14.438 / 14.614 | 14.830 / 15.068 |
+| 16 | partition | 13.767 / 14.318 | 11.197 / 11.509 |
+| 16 | keyed | 10.604 / 10.734 | 8.411 / 8.446 |
+
+The matcher improved FIFO p95, especially at 16 workers: partition 18.7%
+and keyed 20.7%; however, 16-worker unordered p95 regressed by 2.7%.
+Matching generated **2678 claims / 1490 empty** versus adaptive
+**2478 claims / 1322 empty**. Claim p99 also rose from **2.833s to
+4.366s**. Thus the primary goal of lowering DB claim overhead is
+**not achieved**. This is one concurrent-runner measurement and must be
+repeated under dedicated resources. Matching stays opt-in.
+
+## Crash recovery retries and correctness
+
+Run 42232321971 terminated the elected owner during 150 partition FIFO
+workflows. 150/150 completed, zero workflow failures and zero overlapping
+resource leases, while the epoch advanced from 1 to 2. A strict verifier
+assertion failed because there were **153** durable activity attempts for
+150 logical activity tasks (3 retries during deliberate crash).
+The updated verifier checks 150 distinct logical tasks, all attempts closed,
+zero FIFO overlap and a bounded `--max-extra-attempts 30` **only** in the
+crash workload. Post-recovery tests and ordinary benchmarks retain zero
+extra attempts as their default acceptance criterion. Retried activity
+side-effects still require application idempotency.
+
+Do not enable long polling as the default on these results alone.
