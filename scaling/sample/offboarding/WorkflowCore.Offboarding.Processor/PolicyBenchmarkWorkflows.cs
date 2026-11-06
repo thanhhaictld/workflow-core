@@ -58,6 +58,6 @@ public abstract class PolicyBenchmarkStep : StepBodyAsync
     }
 }
 
-public sealed class PolicyUnorderedStep : PolicyBenchmarkStep;
-public sealed class PolicyPartitionStep : PolicyBenchmarkStep;
-public sealed class PolicyKeyedStep : PolicyBenchmarkStep;
+public sealed class PolicyUnorderedStep : PolicyBenchmarkStep { }
+public sealed class PolicyPartitionStep : PolicyBenchmarkStep { }
+public sealed class PolicyKeyedStep : PolicyBenchmarkStep { }
