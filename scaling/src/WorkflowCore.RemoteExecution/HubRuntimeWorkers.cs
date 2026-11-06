@@ -112,6 +112,10 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var matchingPoll=options.LongPollingEnabled &&
             capabilities.Select(c => c.HubId).Distinct().Count() == 1;
         var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        // Rotating one outstanding long poll per worker lane avoids racing
+        // multiple matching partitions into leasing more tasks than slots.
+        // A 4-second server hold bounds discovery when a shard has no pollers.
+        var matchingPartition = Random.Shared.Next(options.MatchingPartitions);
         var emptyClaims=0;
         long nextClaimAt=0;
         var hintPreempted=false;
@@ -131,7 +135,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             : "api/hub/workers/tasks:claim";
                         var leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
                             new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
-                                Math.Min(16,concurrency-running.Count),workflows),ct);
+                                Math.Min(16,concurrency-running.Count),workflows,
+                                matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
+                                matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                        if (matchingPoll && options.MatchingPartitions > 1)
+                            matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
                             new KeyValuePair<string,object?>("outcome",leases.Length>0?"claimed":"empty"));
                         foreach(var lease in leases)running.Add(Run(lease,ct));
@@ -165,7 +173,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             nextClaimAt=Stopwatch.GetTimestamp()+
                                 (long)(Math.Max(1,options.PollInterval.TotalSeconds)*Stopwatch.Frequency);
                         if(matchingPoll)
+                        {
+                            if (options.MatchingPartitions > 1)
+                                matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
                             await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                        }
                     }
                 }
                 if (matchingPoll && running.Count < concurrency)
