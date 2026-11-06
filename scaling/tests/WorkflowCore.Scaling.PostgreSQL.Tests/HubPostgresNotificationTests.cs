@@ -71,14 +71,14 @@ public sealed class HubPostgresNotificationTests
             NullLogger<HubReadinessBroadcaster>.Instance);
         var a = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var b = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        readyA.TaskReady += (observed, type, version) =>
+        readyA.TaskReady += (observed, type, version, partition) =>
         {
-            if (observed == hub && type == "notify-test" && version == 1)
+            if (observed == hub && type == "notify-test" && version == 1 && partition == 0)
                 a.TrySetResult();
         };
-        readyB.TaskReady += (observed, type, version) =>
+        readyB.TaskReady += (observed, type, version, partition) =>
         {
-            if (observed == hub && type == "notify-test" && version == 1)
+            if (observed == hub && type == "notify-test" && version == 1 && partition == 0)
                 b.TrySetResult();
         };
         using var listenerA = new PostgresHubNotificationListener(Database, readyA,
