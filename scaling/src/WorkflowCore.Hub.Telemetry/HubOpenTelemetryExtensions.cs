@@ -45,6 +45,22 @@ public static class HubOpenTelemetryExtensions
                 if (httpServer)
                     metrics.AddAspNetCoreInstrumentation();
 
+                // P0: default OTEL histogram boundaries are too coarse to
+                // distinguish 1ms from 10ms PostgreSQL lock/claim waits.
+                // Fixed sub-ms-to-minute buckets retain accurate tail estimates
+                // without introducing high-cardinality series.
+                var latencyBuckets = new ExplicitBucketHistogramConfiguration
+                {
+                    Boundaries = new double[] {
+                        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025,
+                        0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60
+                    }
+                };
+                metrics.AddView("workflow_hub_native_event_lane_lock_wait_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_claim_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_native_history_write_duration_seconds", latencyBuckets);
+
                 metrics.AddOtlpExporter(options =>
                 {
                     options.Protocol = OtlpExportProtocol.HttpProtobuf;
