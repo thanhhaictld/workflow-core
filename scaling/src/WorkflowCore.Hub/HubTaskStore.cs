@@ -395,12 +395,17 @@ public sealed class HubTaskStore : IAsyncDisposable
                 HubTelemetry.ActivityTag(found.TaskType));
         }
         var outcome = results.Count == 0 ? "empty" : "claimed";
+        // Stable process-level label separates the two benchmark modes without
+        // cardinality from hubs, workflow IDs or worker IDs.
+        var mode = string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"),
+            "false", StringComparison.OrdinalIgnoreCase) ||
+            Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") == "0" ? "legacy" : "batch";
+        var modeTag = new KeyValuePair<string, object?>("history_mode", mode);
+        var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
         HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
-            new KeyValuePair<string, object?>("outcome", outcome));
-        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates,
-            new KeyValuePair<string, object?>("outcome", outcome));
-        HubTelemetry.ClaimReturnedCount.Record(results.Count,
-            new KeyValuePair<string, object?>("outcome", outcome));
+            outcomeTag, modeTag);
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag);
+        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         return results;
