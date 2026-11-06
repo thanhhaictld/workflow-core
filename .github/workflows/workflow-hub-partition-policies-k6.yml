@@ -1,0 +1,120 @@
+name: Workflow Hub Explicit Partition/Key Ordering K6
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-partition-policies-k6.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-policy-k6-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  explicit-policy-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      COUNT: "500"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate benchmark syntax and Compose configuration
+        run: |
+          set -euo pipefail
+          node --input-type=module --check < scaling/observability/k6/partition-ordering.js
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+      - name: Start Hub, PostgreSQL, telemetry and 8 policy processors
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5100/health/ready
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+          mkdir -p scaling/observability/results/policy
+          chmod 0777 scaling/observability/results scaling/observability/results/policy
+          # Policy definitions are published through Hub REST, not DB access
+          # by workers; wait until they are all durably registered.
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/definitions >/tmp/policy-definitions.json &&
+              python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          print('PASS: three execution-policy definitions registered through Hub REST')
+          PY
+
+      - name: k6 three equal-cost routed workflow loads; verify constraints from PostgreSQL
+        run: |
+          set -euo pipefail
+          for mode in unordered partition keyed; do
+            echo "=== E2E mode=$mode workflows=$COUNT ==="
+            run="ci-policy-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile policy-k6 run --rm --no-deps \
+              -e K6_POLICY_MODE="$mode" \
+              -e K6_POLICY_COUNT="$COUNT" \
+              -e K6_POLICY_VUS=60 \
+              -e K6_POLICY_TIMEOUT_SECONDS=900 \
+              -e K6_POLICY_RUN_ID="$run" \
+              k6-policy | tee "/tmp/k6-policy-${mode}.log"
+            cp scaling/observability/results/k6-policy-summary.json \
+              "scaling/observability/results/policy/k6-${mode}.json"
+            python3 scaling/observability/benchmark/verify_ordering.py \
+              --mode "$mode" --run-id "$run" --count "$COUNT" \
+              --output "scaling/observability/results/policy/${mode}.json"
+          done
+          python3 - <<'PY'
+          import json
+          root='scaling/observability/results/policy/'
+          rows=[json.load(open(root+mode+'.json')) for mode in ('unordered','partition','keyed')]
+          assert all(r['completed']==r['workflows']==500 and r['failed']==0 for r in rows)
+          assert rows[0]['activityConstraints']==0
+          assert rows[1]['overlappingLeasesWithinPolicyScope']==0
+          assert rows[2]['overlappingLeasesWithinPolicyScope']==0
+          assert rows[2]['resourceKeysAcrossPartitions']>0
+          with open(root+'comparison.json','w') as f:json.dump(rows,f,indent=2)
+          print('PASS: 1500 completed E2E workflows, partition/keyed FIFO verified')
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - name: Upload measured benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-explicit-policies-k6
+          path: |
+            scaling/observability/results/policy/*.json
+            /tmp/k6-policy-unordered.log
+            /tmp/k6-policy-partition.log
+            /tmp/k6-policy-keyed.log
+          if-no-files-found: warn
+      - name: Print logs on failures
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true
