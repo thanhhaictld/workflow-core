@@ -27,6 +27,8 @@ jobs:
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
       WFC_HUB_ADAPTIVE_CLAIMS: "true"
       WFC_HUB_DB_POOL: "12"
+      # Query a surviving Gateway even when the original :5100 owner is down.
+      WFC_HUB_VERIFY_URL: http://127.0.0.1:5110
     steps:
       - uses: actions/checkout@v4
       - name: Validate two-hub topology
@@ -39,7 +41,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb
+          mkdir -p scaling/observability/results
+          chmod 0777 scaling/observability/results
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb prometheus
           for i in {1..90}; do
             if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
             sleep 2
@@ -72,6 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p scaling/observability/results/matching-ha
+          chmod 0777 scaling/observability/results/matching-ha
           token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
           for i in {1..30}; do
             if curl -fsS -H "Authorization: Bearer $token" \
