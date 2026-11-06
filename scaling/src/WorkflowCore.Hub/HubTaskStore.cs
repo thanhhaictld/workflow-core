@@ -16,6 +16,11 @@ public sealed record HubLeasedTask(
 public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
+
+// Completion routing is immutable task metadata. Resolve once instead of making
+// three independent classification queries and reloading task metadata after ACK.
+public enum HubCompletionKind { Standalone, Managed, Remote, Native }
+public sealed record HubCompletionRoute(string HubId, HubCompletionKind Kind);
 public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
     HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null);
 public sealed record HubEnqueueRequest(string HubId, string TaskType, int Version,
@@ -453,6 +458,25 @@ public sealed class HubTaskStore : IAsyncDisposable
         command.Parameters.AddWithValue("epoch", epoch);
         command.Parameters.Add("lease", NpgsqlDbType.Interval).Value = lease;
         return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<HubCompletionRoute?> GetCompletionRouteAsync(Guid id, CancellationToken ct)
+    {
+        await using var cmd = _dataSource.CreateCommand("""
+            SELECT t.hub_id,
+                   CASE WHEN t.dispatch_key IS NOT NULL THEN 3
+                        WHEN w.execution_mode='remote' AND t.workflow_step IS NOT NULL
+                             AND t.task_type<>'__workflow__' THEN 2
+                        WHEN t.workflow_step IS NOT NULL THEN 1
+                        ELSE 0 END
+            FROM wfc_scale.hub_task t
+            LEFT JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+            WHERE t.id=@id
+            """);
+        cmd.Parameters.AddWithValue("id", id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new(reader.GetString(0), (HubCompletionKind)reader.GetInt32(1));
     }
 
     public async Task<bool> CompleteAsync(Guid id, string worker, long epoch,
