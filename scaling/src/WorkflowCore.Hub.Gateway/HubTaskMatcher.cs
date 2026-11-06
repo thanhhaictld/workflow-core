@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Channels;
 using WorkflowCore.Hub;
@@ -6,15 +6,19 @@ using WorkflowCore.Hub;
 namespace WorkflowCore.Hub.Gateway;
 
 /// <summary>
-/// Waiters live in memory; only an actual admitted claim writes a durable lease.
-/// Readiness signals (PostgreSQL NOTIFY or recovery sweep) wake one compatible
-/// waiter. No time-based worker claim loop runs while an HTTP request is parked.
+/// In-memory worker demand, with PostgreSQL remaining the authority for task
+/// admission and durable leases. Capability-aware hints avoid waking a
+/// workflow poller for an activity (or vice versa).
 /// </summary>
 public sealed class HubTaskMatcher
 {
-    private sealed class Waiter(string hub)
+    private sealed class Waiter(HubClaimRequest claim)
     {
-        public string Hub { get; } = hub;
+        public string Hub { get; } = claim.Hubs[0];
+        private readonly HashSet<(string Type, int Version)> _types =
+            claim.Capabilities.Select(c => (c.TaskType, c.Version)).ToHashSet();
+        public bool Supports(string? type, int version) =>
+            type is null || _types.Contains((type, version));
         public Channel<bool> Signal { get; } = Channel.CreateBounded<bool>(
             new BoundedChannelOptions(1) {
                 SingleReader = true, SingleWriter = false,
@@ -26,6 +30,9 @@ public sealed class HubTaskMatcher
     private readonly HubMatchingOwnership _ownership;
     private readonly object _sync = new();
     private readonly Dictionary<string, LinkedList<Waiter>> _pending = new(StringComparer.Ordinal);
+    // An initial DB catch-up scan is necessary for existing backlog. Coalesce
+    // many identical worker registrations into one probe per capability lane.
+    private readonly ConcurrentDictionary<string, long> _lastProbe = new();
     private int _count;
     private const int MaxPending = 2048;
     public const int WaitSeconds = 20;
@@ -40,16 +47,39 @@ public sealed class HubTaskMatcher
 
     public int PendingCount { get { lock (_sync) return _count; } }
 
-    public void NotifyReady(string hub)
+    public void NotifyReady(string hub, string? type = null, int version = 0)
     {
         lock (_sync)
         {
             if (!_pending.TryGetValue(hub, out var waiters) || waiters.Count == 0) return;
-            // Round-robin instead of waking every pending worker.
-            var selected = waiters.First!.Value;
-            waiters.RemoveFirst();
-            waiters.AddLast(selected);
-            selected.Signal.Writer.TryWrite(true);
+            for (var node = waiters.First; node is not null; node = node.Next)
+            {
+                if (!node.Value.Supports(type, version)) continue;
+                var selected = node.Value;
+                waiters.Remove(node);
+                waiters.AddLast(selected); // round-robin among compatible workers
+                selected.Signal.Writer.TryWrite(true);
+                break;
+            }
+        }
+    }
+
+    private bool ShouldProbe(HubClaimRequest request)
+    {
+        var key = request.Hubs[0] + "|" + string.Join(",",
+            request.Capabilities
+                .Select(c => c.TaskType + ":" + c.Version)
+                .OrderBy(x => x, StringComparer.Ordinal));
+        var now = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            if (!_lastProbe.TryGetValue(key, out var previous))
+            {
+                if (_lastProbe.TryAdd(key, now)) return true;
+                continue;
+            }
+            if (Stopwatch.GetElapsedTime(previous).TotalSeconds < 5) return false;
+            if (_lastProbe.TryUpdate(key, now, previous)) return true;
         }
     }
 
@@ -57,7 +87,7 @@ public sealed class HubTaskMatcher
         HubClaimRequest request, CancellationToken ct)
     {
         var hub = request.Hubs[0];
-        var waiter = new Waiter(hub);
+        var waiter = new Waiter(request);
         lock (_sync)
         {
             if (_count >= MaxPending)
@@ -72,29 +102,32 @@ public sealed class HubTaskMatcher
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(WaitSeconds));
+            var shouldClaim = ShouldProbe(request);
             while (!deadline.IsCancellationRequested)
             {
                 if (!await _ownership.StillOwnsAsync(hub, ct))
                     throw new InvalidOperationException("Matching owner lease was lost");
 
-                var claimed = await _tasks.ClaimAsync(request.WorkerId,
-                    request.Hubs, request.Capabilities, request.MaxTasks,
-                    TimeSpan.FromSeconds(45), ct, request.Workflows);
-                if (claimed.Count > 0)
+                if (shouldClaim)
                 {
-                    // Another pending worker may be able to claim the remaining
-                    // backlog. Deregister first so the wakeup is not wasted.
-                    Remove(waiter);
-                    NotifyReady(hub);
-                    return claimed;
+                    var claimed = await _tasks.ClaimAsync(request.WorkerId,
+                        request.Hubs, request.Capabilities, request.MaxTasks,
+                        TimeSpan.FromSeconds(45), ct, request.Workflows);
+                    if (claimed.Count > 0)
+                    {
+                        // Another compatible waiter can drain remaining backlog.
+                        Remove(waiter);
+                        var example = claimed[0];
+                        NotifyReady(hub, example.TaskType, example.Version);
+                        return claimed;
+                    }
                 }
-                // A signal received during the claim remains buffered.
-                // With no signal, this waits in memory; no database polling.
                 try
                 {
                     if (!await waiter.Signal.Reader.WaitToReadAsync(deadline.Token))
                         break;
                     while (waiter.Signal.Reader.TryRead(out _)) { }
+                    shouldClaim = true;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
