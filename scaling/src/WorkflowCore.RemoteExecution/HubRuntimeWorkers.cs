@@ -207,7 +207,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 try
                 {
                     var httpStarted=Stopwatch.GetTimestamp();
-                    using var completeSpan=HubTelemetry.Traces.StartActivity("hub.worker.completion_http");
+                    using var completeSpan=HubTelemetry.Traces.StartActivity(
+                        isActivity?"hub.worker.activity.completion_http":"hub.worker.workflow.completion_http");
                     completeSpan?.SetTag("retry.attempt",attempt);
                     completeSpan?.SetTag("activity.type",task.TaskType);
                     completeSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
