@@ -93,6 +93,62 @@ public sealed class HubEventGatedClaimDispatcherTests
     }
 
     [Fact]
+    public async Task ReadyHintSurvivesUntilNextWorkerRotatesIntoShard()
+    {
+        var count = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (req, ct) =>
+            {
+                var number = Interlocked.Increment(ref count);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>(
+                    number == 2 ? [Lease(2)] : []);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(140));
+
+        // First poll probes SQL and finds no task. It leaves no waiters.
+        Assert.Empty(await dispatcher.LongPollAsync(
+            Request("first-worker", 2), CancellationToken.None));
+        Assert.Equal(1, count);
+
+        // A committed notification may arrive while every worker is polling
+        // another matching shard. It must not be forgotten.
+        dispatcher.NotifyReady("test-hub", "do-work", 1, 2);
+        Assert.Single(await dispatcher.LongPollAsync(
+            Request("rotated-worker", 2), CancellationToken.None));
+        Assert.Equal(2, count);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
+    [Fact]
+    public async Task SuccessfulDrainHintSurvivesTheLastWaiterDisconnecting()
+    {
+        var count = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (req, ct) =>
+            {
+                Interlocked.Increment(ref count);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([Lease(3)]);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(180));
+
+        // One worker receives a batch and immediately leaves the shard;
+        // there is no other waiter to receive its follow-up drain signal.
+        Assert.Single(await dispatcher.LongPollAsync(
+            Request("worker-a", 3), CancellationToken.None));
+        Assert.Equal(1, count);
+        // A second worker arriving before its 5-second catch-up budget
+        // expires must consume the retained drain token immediately.
+        Assert.Single(await dispatcher.LongPollAsync(
+            Request("worker-b", 3), CancellationToken.None));
+        Assert.Equal(2, count);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
+    [Fact]
     public async Task LostReadyHintIsRecoveredByInitialCapabilityProbe()
     {
         var called = 0;
