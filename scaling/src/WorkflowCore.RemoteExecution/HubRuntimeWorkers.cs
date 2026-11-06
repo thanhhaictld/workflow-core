@@ -163,9 +163,20 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     private async Task Run(HubLeasedTask task,CancellationToken shutdown)
     {
         var isActivity=task.TaskType is not ("__workflow__" or "__native_workflow__");
-        using var span=HubTelemetry.Traces.StartActivity(isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute");
+        // A durable claim crosses an HTTP/task-queue boundary. The Hub returns
+        // the W3C claim context so the worker and its completion HTTP call
+        // belong to the same distributed trace (without retaining a live span).
+        var hasParent=ActivityContext.TryParse(task.TraceParent,null,out var parent);
+        using var span=hasParent
+            ? HubTelemetry.Traces.StartActivity(
+                isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute",
+                ActivityKind.Consumer,parent)
+            : HubTelemetry.Traces.StartActivity(
+                isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute");
         span?.SetTag("hub",task.HubId);span?.SetTag("activity.type",task.TaskType);
         span?.SetTag("workflow.id",task.WorkflowId?.ToString());
+        span?.SetTag("task.id",task.Id.ToString());
+        span?.SetTag("task.epoch",task.Epoch);
         var started=Stopwatch.GetTimestamp();var outcome="failure";
         if(isActivity)HubTelemetry.WorkerInflight.Add(1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType));
         using var execution=CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -174,19 +185,44 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var heartbeat=Heartbeat(task,execution,heartbeatStop.Token);
         try
         {
-            var result=await Execute(task,_owner,execution.Token);
+            object result;
+            var bodyStarted=Stopwatch.GetTimestamp();
+            using(var bodySpan=HubTelemetry.Traces.StartActivity(
+                isActivity?"hub.worker.activity.body":"hub.worker.workflow.body"))
+            {
+                try { result=await Execute(task,_owner,execution.Token); }
+                finally
+                {
+                    var seconds=Stopwatch.GetElapsedTime(bodyStarted).TotalSeconds;
+                    bodySpan?.SetTag("duration.seconds",seconds);
+                    if(isActivity) HubTelemetry.WorkerBodyDuration.Record(seconds,HubTelemetry.ActivityTag(task.TaskType));
+                }
+            }
             // Transport failures retry the frozen result, never the body or decisions.
             for(var attempt=0;;attempt=Math.Min(attempt+1,5))
             {
                 try
                 {
-                    using var response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token);
+                    var httpStarted=Stopwatch.GetTimestamp();
+                    using var completeSpan=HubTelemetry.Traces.StartActivity("hub.worker.completion_http");
+                    completeSpan?.SetTag("retry.attempt",attempt);
+                    HttpResponseMessage response;
+                    try { response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token); }
+                    finally
+                    {
+                        var seconds=Stopwatch.GetElapsedTime(httpStarted).TotalSeconds;
+                        completeSpan?.SetTag("duration.seconds",seconds);
+                        if(isActivity) HubTelemetry.WorkerCompletionHttpDuration.Record(seconds,HubTelemetry.ActivityTag(task.TaskType));
+                    }
+                    using(response)
+                    {
                     if(response.StatusCode==HttpStatusCode.Conflict){outcome="fenced";return;}
                     if((int)response.StatusCode>=500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
                         throw new HttpRequestException("Hub completion temporarily unavailable: "+response.StatusCode);
                     if(!response.IsSuccessStatusCode)
                         throw new InvalidOperationException("Hub rejected the completion contract: "+response.StatusCode);
                     outcome="success";return;
+                    }
                 }
                 catch(Exception ex)when(ex is HttpRequestException or TaskCanceledException && !execution.IsCancellationRequested)
                 { await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(2000,100*(1<<attempt))),execution.Token); }
