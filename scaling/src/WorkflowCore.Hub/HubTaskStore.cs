@@ -52,12 +52,13 @@ public sealed class HubTaskStore : IAsyncDisposable
     {
         var id = Guid.NewGuid();
         var partition = HubPartitionRouter.ForWorkflow(workflowId ?? id, route.PartitionCount);
+        var constraints = route.ResourcesForPartition(partition);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
 
         // Serialize against operator policy changes. Re-resolve declarative routes
         // inside the transaction after acquiring the registration lock.
-        if (route.Resources.Any(r => r.Key.StartsWith("hub:" + route.HubId + ":", StringComparison.Ordinal) &&
+        if (constraints.Any(r => r.Key.StartsWith("hub:" + route.HubId + ":", StringComparison.Ordinal) &&
                                      r.Key.EndsWith(":" + HubPolicyDigest(route.HubId), StringComparison.Ordinal)))
         {
             await HubDefinitionStore.LockPolicyHub(db,tx,route.HubId,ct,shared:true);
@@ -85,7 +86,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     var hubCapacity=reader.GetInt32(0);
                     var activityCapacity=reader.GetInt32(1);
                     var resourceCapacity=reader.GetInt32(2);
-                    if(route.Resources.Any(r=>r.Key.StartsWith("hub:",StringComparison.Ordinal) && r.Capacity!=hubCapacity
+                    if(constraints.Any(r=>r.Key.StartsWith("hub:",StringComparison.Ordinal) && r.Capacity!=hubCapacity
                         || r.Key.StartsWith("activity:",StringComparison.Ordinal) && r.Capacity!=activityCapacity
                         || r.Key.StartsWith("resource:",StringComparison.Ordinal) && r.Capacity!=resourceCapacity))
                         throw new InvalidOperationException("Activity policy changed while enqueue was preparing; retry with the current policy");
@@ -95,7 +96,7 @@ public sealed class HubTaskStore : IAsyncDisposable
 
         // Also serialize enqueues for the same FIFO resource. Thus sequence
         // order is consistent with commit order for each ordering key.
-        foreach (var resource in route.Resources)
+        foreach (var resource in constraints)
         {
             await using (var upsert = new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_resource(resource_key, capacity, strict_fifo)
@@ -164,7 +165,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                 return (Guid)previous;
             }
         }
-        foreach (var resource in route.Resources)
+        foreach (var resource in constraints)
         {
             await using var constraint = new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
