@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -366,24 +367,27 @@ public static class HubGatewayEndpoints
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
-            var remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
-            var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
-            var nativeActivity=await native.IsActivityAsync(id,ct);
-            var done = nativeActivity
-                ? await native.CompleteActivityAsync(id,request.WorkerId,request.Epoch,request.Result,ct)
-                : remoteActivity
-                ? await remote.CompleteActivityAsync(id,request.WorkerId,
-                    request.Epoch,request.Result.GetRawText(),ct)
-                : managed
-                    ? await workflows.CompleteAsync(id, request.WorkerId, request.Epoch,
-                        request.Result.GetRawText(), ct)
-                    : await store.CompleteAsync(id, request.WorkerId, request.Epoch,
-                        request.Result.GetRawText(), ct);
-            if (done)
+            using var completionSpan = HubTelemetry.Traces.StartActivity("hub.gateway.activity.complete");
+            var routingStarted = Stopwatch.GetTimestamp();
+            var route = await store.GetCompletionRouteAsync(id, ct);
+            completionSpan?.AddEvent(new ActivityEvent("completion.route.resolved",
+                tags: new ActivityTagsCollection {
+                    { "elapsed.seconds", Stopwatch.GetElapsedTime(routingStarted).TotalSeconds },
+                    { "route.kind", route?.Kind.ToString() ?? "NotFound" } }));
+            if (route is null)
+                return Results.Conflict(new { error = "Task is stale or lease expired" });
+            var done = route.Kind switch
             {
-                var task = await store.GetAsync(id, ct);
-                if (task is not null) readiness.Publish(task.HubId);
-            }
+                HubCompletionKind.Native => await native.CompleteActivityAsync(
+                    id, request.WorkerId, request.Epoch, request.Result, ct),
+                HubCompletionKind.Remote => await remote.CompleteActivityAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct),
+                HubCompletionKind.Managed => await workflows.CompleteAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct),
+                _ => await store.CompleteAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct)
+            };
+            if (done) readiness.Publish(route.HubId);
             return done ? Results.NoContent() :
                 Results.Conflict(new { error = "Task is stale or lease expired" });
         });
