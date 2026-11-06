@@ -131,6 +131,7 @@ services:
       WFC_PG: Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12}
       WFC_HUB_DB_POOL: ${WFC_HUB_DB_POOL:-12}
       WFC_HUB_CLAIM_ADMISSION_ENABLED: "${WFC_HUB_CLAIM_ADMISSION_ENABLED:-false}"
+      WFC_HUB_CLAIM_SINGLE_SCAN_ENABLED: "${WFC_HUB_CLAIM_SINGLE_SCAN_ENABLED:-false}"
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"
       # Benchmark-only control: default is the new batched event journal.
       WFC_HUB_BATCH_HISTORY_ENABLED: "${WFC_HUB_BATCH_HISTORY_ENABLED:-true}"
