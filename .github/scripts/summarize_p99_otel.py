@@ -87,7 +87,8 @@ def percentile(values,pct):
 
 important=["hub.worker.activity.execute","hub.worker.workflow.execute",
            "hub.worker.execute.body","hub.worker.completion.http",
-           "hub.task.claim","hub.activity.complete.transaction"]
+           "hub.task.claim","hub.task.claim.admission_wait",
+           "hub.matching.claim_drain","hub.activity.complete.transaction"]
 stats={k:{"count":len([x for x in v if x is not None]),
           "p50":percentile(v,.5),"p95":percentile(v,.95),"p99":percentile(v,.99),
           "max":max((x for x in v if x is not None),default=None)}
