@@ -37,6 +37,9 @@ public sealed class HubActivityOptions<TStep> where TStep : class, IStepBody
     public string? ResourceField { get; set; }
     public int ResourceCapacity { get; set; } = 1;
     public bool StrictFifo { get; set; }
+    // New definitions should opt in explicitly. Legacy preserves older
+    // registrations until they can be migrated without policy drift.
+    public HubActivityOrdering Ordering { get; set; } = HubActivityOrdering.Legacy;
     public HubActivityOptions<TStep> Input<T>(Expression<Func<TStep,T>> property) { Inputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> Output<T>(Expression<Func<TStep,T>> property) { Outputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> SequentialOutput<T>(Expression<Func<TStep,T>> property) { SequentialOutputs.Add(Property(property));return this; }
@@ -107,7 +110,8 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
         var options=new HubActivityOptions<TStep>();configure(options);
         if(string.IsNullOrWhiteSpace(hubId)||hubId.Length>80||string.IsNullOrWhiteSpace(name)||name.Length>80||
            name.StartsWith("__",StringComparison.Ordinal)||version<1||options.Partitions is <1 or >4096||
-           options.Concurrency<1||options.HubConcurrency<1||options.ResourceCapacity<1)
+           options.Concurrency<1||options.HubConcurrency<1||options.ResourceCapacity<1||
+           !Enum.IsDefined(options.Ordering))
             throw new ArgumentException("Invalid typed activity registration");
         if(options.Inputs.Distinct().Count()!=options.Inputs.Count || options.Outputs.Distinct().Count()!=options.Outputs.Count ||
            options.SequentialOutputs.Distinct().Count()!=options.SequentialOutputs.Count)
@@ -116,6 +120,14 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
             throw new ArgumentException("ActivityParameters maps the entire native Activity input to one declared property");
         if(options.ResourceField is not null && !options.Inputs.Any(p=>HubTypedActivity.PropertyName(p)==options.ResourceField))
             throw new ArgumentException("Resource field must be a declared activity input");
+        var keyed = options.Ordering is HubActivityOrdering.KeyedExclusive or
+            HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded;
+        if(keyed && (string.IsNullOrWhiteSpace(options.ResourceName) ||
+                     string.IsNullOrWhiteSpace(options.ResourceField)))
+            throw new ArgumentException("Keyed activity ordering requires ResourceName and ResourceField");
+        if((options.Ordering is HubActivityOrdering.Unordered or HubActivityOrdering.PartitionSerial) &&
+           (options.ResourceName is not null || options.ResourceField is not null))
+            throw new ArgumentException("Resource fields are invalid for unordered/partition policy");
         var contract=JsonSerializer.SerializeToElement(new{
             inputs=options.Inputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
             outputs=options.Outputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
@@ -126,7 +138,7 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
         services.TryAddTransient<TStep>();
         services.AddSingleton(new HubTypedActivity(typeof(TStep),new(hubId,name,version,options.Partitions,
             options.HubConcurrency,options.Concurrency,options.ResourceName,options.ResourceField,
-            options.ResourceCapacity,options.StrictFifo,contract),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
+            options.ResourceCapacity,options.StrictFifo,contract,options.Ordering),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
             options.SequentialOutputs.ToArray()));
         return this;
     }

@@ -429,7 +429,8 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         Guid taskId,Guid workflow,string hub,int partition,int? step,HubTaskRoute route,
         string payload,CancellationToken ct)
     {
-        await LockActivityResourcesAsync(db,tx,route.Resources,ct);
+        var constraints = route.ResourcesForPartition(partition);
+        await LockActivityResourcesAsync(db,tx,constraints,ct);
         await using(var insert=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
@@ -447,7 +448,7 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             insert.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
             await insert.ExecuteNonQueryAsync(ct);
         }
-        foreach(var resource in route.Resources)
+        foreach(var resource in constraints)
         {
             await using var attach=new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)

@@ -9,7 +9,8 @@ public sealed record HubDefinitionRegistration(string HubId, string DefinitionId
 public sealed record HubActivityRegistration(string HubId, string ActivityType,
     int Version, int Partitions, int HubConcurrency, int ActivityConcurrency,
     string? ResourceName = null, string? ResourceField = null,
-    int ResourceCapacity = 1, bool StrictFifo = false, JsonElement? Contract = null);
+    int ResourceCapacity = 1, bool StrictFifo = false, JsonElement? Contract = null,
+    HubActivityOrdering Ordering = HubActivityOrdering.Legacy);
 public sealed record HubWorkflowRuntime(Guid Id, string HubId, string DefinitionId,
     int Version, int PartitionId, long Revision, string State,
     int NextStep, int StepCount, string? WaitingFor, JsonElement Input,
