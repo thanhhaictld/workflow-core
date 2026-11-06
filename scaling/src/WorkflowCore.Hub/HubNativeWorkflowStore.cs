@@ -10,6 +10,13 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
 {
     private NpgsqlDataSource Source => tasks.DataSource;
     private static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
+    // Fixed per Hub process; false selects the original per-event insert for A/B tests.
+    private static readonly bool BatchHistoryEnabled =
+        !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
+        && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    private const int HistoryBatchChunkSize = 256;
+    private static KeyValuePair<string, object?> HistoryModeTag =>
+        new("history_mode", BatchHistoryEnabled ? "batch" : "legacy");
 
     internal static NpgsqlCommand Command(NpgsqlConnection db, NpgsqlTransaction tx,
         string sql, params (string Name, object? Value)[] values)
@@ -28,14 +35,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private static async Task EventLane(NpgsqlConnection db, NpgsqlTransaction tx, string hub, CancellationToken ct)
+    private static async Task EventLane(NpgsqlConnection db, NpgsqlTransaction tx, string hub,
+        string operation, CancellationToken ct)
     {
         var lockStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var cmd = Command(db, tx,
             "SELECT pg_advisory_xact_lock(hashtextextended(@hub,12012))", ("hub", hub));
         await cmd.ExecuteNonQueryAsync(ct);
         HubTelemetry.NativeEventLaneLockWait.Record(
-            System.Diagnostics.Stopwatch.GetElapsedTime(lockStarted).TotalSeconds);
+            System.Diagnostics.Stopwatch.GetElapsedTime(lockStarted).TotalSeconds,
+            new KeyValuePair<string, object?>("operation", operation), HistoryModeTag);
     }
 
     public async Task<HubNativeRuntime?> GetRuntimeAsync(Guid id, CancellationToken ct)
@@ -72,6 +81,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
 
     public async Task<HubTransitionResult?> CommitAsync(Guid id, HubNativeCommit request, CancellationToken ct)
     {
+        var commitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if(request.ProtocolVersion!=1 || request.TaskId==Guid.Empty || request.Epoch<1 || request.ExpectedRevision<0 ||
            string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length>128 ||
            request.Status is not ("Runnable" or "Suspended" or "Complete" or "Terminated") ||
@@ -91,7 +101,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using(var lookup=Command(db,tx,"SELECT hub_id FROM wfc_scale.hub_workflow WHERE id=@id AND execution_mode='native'",("id",id)))
         { hub=await lookup.ExecuteScalarAsync(ct) as string ?? ""; }
         if(hub.Length==0)return null;
-        await EventLane(db,tx,hub,ct);
+        await EventLane(db,tx,hub,"native_commit",ct);
         int partition;long revision;string status;
         await using(var cmd=Command(db,tx,"""
             SELECT partition_id,revision,native_status FROM wfc_scale.hub_workflow
@@ -205,14 +215,56 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 """,ct,("timer",timerId),("id",id),("hub",hub),("partition",partition),("step",request.Timer?.StepId??0),
                 ("revision",revision+1),("due",deadline.ToUniversalTime()),("pointer",request.Timer?.PointerId));
         }
-        foreach(var history in request.History)
-            await Execute(db,tx,"""
-                INSERT INTO wfc_scale.hub_workflow_event(workflow_id,step_index,task_id,activity_type,event_type,
-                    execution_pointer_id,parent_pointer_id,scope,attempt,payload)
-                VALUES(@id,@step,@task,COALESCE(@activity,'__native_workflow__'),@event,@pointer,@parent,@scope::jsonb,@attempt,@payload::jsonb)
-                """,ct,("id",id),("step",history.StepId),("task",request.TaskId),("event",history.EventType),
-                ("pointer",history.PointerId),("parent",history.ParentId),("scope",JsonSerializer.Serialize(history.Scope)),
-                ("attempt",history.Attempt),("payload",history.Payload?.GetRawText()),("activity",history.ActivityType));
+        var historyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (BatchHistoryEnabled)
+        {
+            // Ordering is preserved with WITH ORDINALITY (also across chunks).
+            // All writes remain in the existing task-lease-fenced transaction.
+            for (var offset = 0; offset < request.History.Length; offset += HistoryBatchChunkSize)
+            {
+                var values = JsonSerializer.Serialize(request.History.Skip(offset).Take(HistoryBatchChunkSize)
+                    .Select(history => new
+                    {
+                        step = history.StepId,
+                        task = request.TaskId,
+                        activity = history.ActivityType,
+                        eventType = history.EventType,
+                        pointer = history.PointerId,
+                        parent = history.ParentId,
+                        scope = history.Scope,
+                        attempt = history.Attempt,
+                        payload = history.Payload
+                    }));
+                await Execute(db, tx, """
+                    INSERT INTO wfc_scale.hub_workflow_event
+                        (workflow_id,step_index,task_id,activity_type,event_type,
+                         execution_pointer_id,parent_pointer_id,scope,attempt,payload)
+                    SELECT @id,(item->>'step')::integer,
+                           (item->>'task')::uuid,
+                           COALESCE(item->>'activity','__native_workflow__'),
+                           item->>'eventType',item->>'pointer',item->>'parent',
+                           item->'scope',(item->>'attempt')::integer,
+                           NULLIF(item->'payload','null'::jsonb)
+                    FROM jsonb_array_elements(@history::jsonb) WITH ORDINALITY AS h(item, ordinal)
+                    ORDER BY ordinal
+                    """, ct, ("id", id), ("history", values));
+            }
+        }
+        else
+        {
+            // Exact original path retained temporarily as a performance control.
+            foreach (var history in request.History)
+                await Execute(db,tx,"""
+                    INSERT INTO wfc_scale.hub_workflow_event(workflow_id,step_index,task_id,activity_type,event_type,
+                        execution_pointer_id,parent_pointer_id,scope,attempt,payload)
+                    VALUES(@id,@step,@task,COALESCE(@activity,'__native_workflow__'),@event,@pointer,@parent,@scope::jsonb,@attempt,@payload::jsonb)
+                    """,ct,("id",id),("step",history.StepId),("task",request.TaskId),("event",history.EventType),
+                    ("pointer",history.PointerId),("parent",history.ParentId),("scope",JsonSerializer.Serialize(history.Scope)),
+                    ("attempt",history.Attempt),("payload",history.Payload?.GetRawText()),("activity",history.ActivityType));
+        }
+        HubTelemetry.NativeHistoryWriteDuration.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(historyStarted).TotalSeconds, HistoryModeTag);
+        HubTelemetry.NativeHistoryEventsPerCommit.Record(request.History.Length, HistoryModeTag);
         var nextStatus=request.Status;
         await Execute(db,tx,"""
             UPDATE wfc_scale.hub_workflow SET native_snapshot=@snapshot::jsonb,native_status=@status,
@@ -238,6 +290,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         else if(nextStatus is "Complete" or "Terminated")
             await RetireAsync(db,tx,id,ct);
         await tx.CommitAsync(ct);
+        HubTelemetry.NativeCommitDuration.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds, HistoryModeTag);
         if(nextStatus=="Complete")HubTelemetry.WorkflowsCompleted.Add(1,HubTelemetry.HubTag(hub));
         if(nextStatus=="Terminated")HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
         return new(id,revision+1,nextStatus,false);
@@ -282,7 +336,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             throw new ArgumentException("Invalid native event");
         await using var db=await Source.OpenConnectionAsync(ct);
         await using var tx=await db.BeginTransactionAsync(ct);
-        await EventLane(db,tx,hub,ct);
+        await EventLane(db,tx,hub,"publish_event",ct);
         await Execute(db,tx,"""
             INSERT INTO wfc_scale.hub_native_event(hub_id,event_name,event_key,data,effective_at,request_key)
             VALUES(@hub,@name,@key,@data::jsonb,COALESCE(@at::timestamptz,clock_timestamp()),@request)
@@ -351,7 +405,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         {
             await using var db=await tasks.DataSource.OpenConnectionAsync(ct);
             await using var tx=await db.BeginTransactionAsync(ct);
-            await EventLane(db,tx,candidate.Hub,ct);
+            await EventLane(db,tx,candidate.Hub,"reconcile",ct);
             int partition;
             await using(var cmd=Command(db,tx,"""
                 SELECT partition_id FROM wfc_scale.hub_workflow WHERE id=@id
