@@ -14,23 +14,23 @@ concurrency:
 jobs:
   explicit-policy-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       COMPOSE: scaling/observability/compose.yaml
       ENVFILE: scaling/observability/.env.example
       POLICY_BENCHMARK_ENABLED: "true"
       POLICY_BENCH_ACTIVITY_WORKERS: "8"
       OFFBOARD_PROCESSOR_WORKERS: "4"
-      COUNT: "500"
+      COUNT: "1000"
     steps:
       - uses: actions/checkout@v4
       - name: Validate benchmark syntax and Compose configuration
         run: |
           set -euo pipefail
           node --input-type=module --check < scaling/observability/k6/partition-ordering.js
-          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py scaling/observability/benchmark/compare_processor_scaling.py
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
-      - name: Start Hub, PostgreSQL, telemetry and 8 policy processors
+      - name: Start Hub, PostgreSQL, telemetry and baseline 8 policy processors
         run: |
           set -euo pipefail
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub prometheus
@@ -69,50 +69,57 @@ jobs:
           print('PASS: three execution-policy definitions registered through Hub REST')
           PY
 
-      - name: k6 three equal-cost routed workflow loads; verify constraints from PostgreSQL
+      - name: Bracket 16 processors with identical 8-processor k6 controls
         run: |
           set -euo pipefail
-          for mode in unordered partition keyed; do
-            echo "=== E2E mode=$mode workflows=$COUNT ==="
-            run="ci-policy-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-              --profile policy-k6 run --rm --no-deps \
-              -e K6_POLICY_MODE="$mode" \
-              -e K6_POLICY_COUNT="$COUNT" \
-              -e K6_POLICY_VUS=60 \
-              -e K6_POLICY_TIMEOUT_SECONDS=900 \
-              -e K6_POLICY_RUN_ID="$run" \
-              k6-policy | tee "/tmp/k6-policy-${mode}.log"
-            cp scaling/observability/results/k6-policy-summary.json \
-              "scaling/observability/results/policy/k6-${mode}.json"
-            python3 scaling/observability/benchmark/verify_ordering.py \
-              --mode "$mode" --run-id "$run" --count "$COUNT" \
-              --output "scaling/observability/results/policy/${mode}.json"
+          echo "Runner CPUs: $(nproc); memory:"
+          free -h
+          echo "Same Hub, PostgreSQL, 60 k6 VUs, 1000 workflows per mode/phase"
+          mkdir -p scaling/observability/results/policy-scaling
+          chmod 0777 scaling/observability/results/policy-scaling
+          for stage in 8a 16 8b; do
+            case "$stage" in
+              8a|8b) processors=8 ;;
+              16) processors=16 ;;
+            esac
+            echo "::group::Processor stage $stage (desired replicas: $processors)"
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors" || { echo "ERROR: got $active replicas, expected $processors"; exit 1; }
+            # Allow newly added processors to register and subscribe; same wait
+            # for all stages ensures startup isn't counted inside the test.
+            sleep 15
+            for mode in unordered partition keyed; do
+              run="ci-scale-${stage}-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "=== E2E $stage / $mode : $COUNT workflows; $processors processors ==="
+              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" \
+                -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 \
+                -e K6_POLICY_TIMEOUT_SECONDS=900 \
+                -e K6_POLICY_RUN_ID="$run" \
+                k6-policy | tee "/tmp/k6-policy-${stage}-${mode}.log"
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/policy-scaling/k6-${stage}-${mode}.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/policy-scaling/${stage}-${mode}.json"
+              echo "Verified $COUNT completed, no failed workflows; mode=$mode stage=$stage"
+            done
+            echo "::endgroup::"
           done
-          python3 - <<'PY'
-          import json
-          root='scaling/observability/results/policy/'
-          rows=[json.load(open(root+mode+'.json')) for mode in ('unordered','partition','keyed')]
-          assert all(r['completed']==r['workflows']==500 and r['failed']==0 for r in rows)
-          assert rows[0]['activityConstraints']==0
-          assert rows[1]['overlappingLeasesWithinPolicyScope']==0
-          assert rows[2]['overlappingLeasesWithinPolicyScope']==0
-          assert rows[2]['resourceKeysAcrossPartitions']>0
-          with open(root+'comparison.json','w') as f:json.dump(rows,f,indent=2)
-          print('PASS: 1500 completed E2E workflows, partition/keyed FIFO verified')
-          print(json.dumps(rows,indent=2))
-          PY
-
-      - name: Upload measured benchmark results
+          python3 scaling/observability/benchmark/compare_processor_scaling.py
+      - name: Upload 8 versus 16 scaling reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: workflow-hub-explicit-policies-k6
+          name: workflow-hub-8-vs-16-processors-scaling
           path: |
-            scaling/observability/results/policy/*.json
-            /tmp/k6-policy-unordered.log
-            /tmp/k6-policy-partition.log
-            /tmp/k6-policy-keyed.log
+            scaling/observability/results/policy-scaling/*.json
+            /tmp/k6-policy-*.log
           if-no-files-found: warn
       - name: Print logs on failures
         if: failure()
