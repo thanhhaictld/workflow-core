@@ -202,8 +202,16 @@ public sealed class HubEventGatedClaimDispatcher
                     span?.SetTag("matching.partition", waiter.Key.Partition);
                     span?.SetTag("matching.partition_count", _partitionCount);
                     span?.SetTag("matching.capability_count", request.Capabilities.Length);
+                    var started = Stopwatch.GetTimestamp();
                     leases = await _claim(request, ct);
+                    var seconds = Stopwatch.GetElapsedTime(started).TotalSeconds;
                     span?.SetTag("tasks.claimed", leases.Count);
+                    HubTelemetry.MatchingDispatchDuration.Record(seconds,
+                        new KeyValuePair<string, object?>("outcome",
+                            leases.Count > 0 ? "leased" : "empty"));
+                    HubTelemetry.MatchingDispatchAttempts.Add(1,
+                        new KeyValuePair<string, object?>("outcome",
+                            leases.Count > 0 ? "leased" : "empty"));
                     completed = true;
                 }
                 finally
