@@ -18,6 +18,17 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static KeyValuePair<string, object?> HistoryModeTag =>
         new("history_mode", BatchHistoryEnabled ? "batch" : "legacy");
 
+    // Temporary benchmark/rollback switch. The default path only takes the
+    // Hub event lane when a native commit installs or removes subscriptions.
+    // It is NOT safe to remove the lane for subscription commits: doing so
+    // races a concurrent PublishEvent and can permanently lose wakeups.
+    private static readonly bool AlwaysLockHubForNativeCommit =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_EVENT_LANE_MODE"),
+            "hub", StringComparison.OrdinalIgnoreCase);
+
+    private static KeyValuePair<string, object?> EventLaneModeTag =>
+        new("event_lane_mode", AlwaysLockHubForNativeCommit ? "hub" : "subscriptions");
+
     internal static NpgsqlCommand Command(NpgsqlConnection db, NpgsqlTransaction tx,
         string sql, params (string Name, object? Value)[] values)
     {
@@ -98,11 +109,38 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         string hub;
-        await using(var lookup=Command(db,tx,"SELECT hub_id FROM wfc_scale.hub_workflow WHERE id=@id AND execution_mode='native'",("id",id)))
-        { hub=await lookup.ExecuteScalarAsync(ct) as string ?? ""; }
-        if(hub.Length==0)return null;
-        await EventLane(db,tx,hub,"native_commit",ct);
+        bool hasExistingSubscriptions;
+        // A single query avoids an extra DB round trip on the hot path. New
+        // subscriptions are declared by the commit request; old subscriptions
+        // must be protected too, because this commit replaces/removes them.
+        await using(var lookup=Command(db,tx,"""
+            SELECT w.hub_id, EXISTS (
+                SELECT 1 FROM wfc_scale.hub_native_subscription s
+                WHERE s.workflow_id=w.id
+            )
+            FROM wfc_scale.hub_workflow w
+            WHERE w.id=@id AND w.execution_mode='native'
+            """,("id",id)))
+        {
+            await using var reader=await lookup.ExecuteReaderAsync(ct);
+            if(!await reader.ReadAsync(ct))return null;
+            hub=reader.GetString(0);
+            hasExistingSubscriptions=reader.GetBoolean(1);
+        }
+        var requiresEventLane = AlwaysLockHubForNativeCommit ||
+            hasExistingSubscriptions || request.Subscriptions.Length>0;
+        // Lock order for event-sensitive commits is unchanged:
+        // event lane -> workflow row -> task row. Without subscriptions,
+        // the workflow row + fenced task lease alone serialize this workflow,
+        // while other workflows in the same Hub may commit independently.
+        if(requiresEventLane)
+            await EventLane(db,tx,hub,"native_commit",ct);
+        else
+            HubTelemetry.NativeEventLaneBypass.Add(1,
+                new KeyValuePair<string, object?>("operation","native_commit"),
+                EventLaneModeTag);
         int partition;long revision;string status;
+        var rowLockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using(var cmd=Command(db,tx,"""
             SELECT partition_id,revision,native_status FROM wfc_scale.hub_workflow
             WHERE id=@id FOR UPDATE
@@ -112,6 +150,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             if(!await r.ReadAsync(ct))return null;
             partition=r.GetInt32(0);revision=r.GetInt64(1);status=r.GetString(2);
         }
+        HubTelemetry.NativeWorkflowRowLockDuration.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(rowLockStarted).TotalSeconds,
+            EventLaneModeTag);
         await using(var cmd=Command(db,tx,"""
             SELECT state,owner,last_owner,epoch,lease_until,result_json::text
             FROM wfc_scale.hub_task WHERE id=@task AND workflow_id=@id
@@ -291,7 +332,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             await RetireAsync(db,tx,id,ct);
         await tx.CommitAsync(ct);
         HubTelemetry.NativeCommitDuration.Record(
-            System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds, HistoryModeTag);
+            System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds,
+            HistoryModeTag, EventLaneModeTag);
         if(nextStatus=="Complete")HubTelemetry.WorkflowsCompleted.Add(1,HubTelemetry.HubTag(hub));
         if(nextStatus=="Terminated")HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
         return new(id,revision+1,nextStatus,false);
