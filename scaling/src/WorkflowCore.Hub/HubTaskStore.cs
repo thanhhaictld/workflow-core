@@ -45,9 +45,13 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Unlike a global workflow lock, this only limits speculative claim SQL.
     private readonly SemaphoreSlim _claimGate;
     private readonly bool _claimAdmissionEnabled;
+    // A/B optimization: one candidate query per claim RPC; preserve per-task
+    // transactions, permit locks, and lease-fencing semantics.
+    private readonly bool _singleScanEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
-    public HubTaskStore(string connectionString, int maxPoolSize = 12)
+    public HubTaskStore(string connectionString, int maxPoolSize = 12,
+        bool? singleScanEnabled = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -57,6 +61,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
         _claimAdmissionEnabled =
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
+        _singleScanEnabled = singleScanEnabled ??
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_SINGLE_SCAN_ENABLED") is ("true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -224,9 +230,13 @@ public sealed class HubTaskStore : IAsyncDisposable
         var connectionWaitSeconds = Stopwatch.GetElapsedTime(connectionStarted).TotalSeconds;
         HubTelemetry.ClaimConnectionWait.Record(connectionWaitSeconds);
         span?.SetTag("db.connection_acquire_seconds", connectionWaitSeconds);
+        List<Guid>? cachedCandidates = null;
+        var candidateCursor = 0;
         for (var batch = 0; batch < maxTasks; batch++)
         {
-            var candidates = new List<Guid>();
+            var candidates = cachedCandidates ?? new List<Guid>();
+            if (cachedCandidates is null)
+            {
             var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
                 SELECT id FROM wfc_scale.hub_task
@@ -256,10 +266,15 @@ public sealed class HubTaskStore : IAsyncDisposable
             span?.AddEvent(new ActivityEvent("claim.candidates.selected",
                 tags: new ActivityTagsCollection { { "candidates", candidates.Count }, { "query.seconds", querySeconds } }));
             scannedCandidates += candidates.Count;
+                if (_singleScanEnabled) cachedCandidates = candidates;
+            }
 
             HubLeasedTask? found = null;
-            foreach (var taskId in candidates)
+            // In single-scan mode continue after the previously examined task,
+            // rather than rechecking already-claimed/blocked candidates.
+            foreach (var taskId in _singleScanEnabled ? candidates.Skip(candidateCursor) : candidates)
             {
+                if (_singleScanEnabled) candidateCursor++;
                 await using var tx = await db.BeginTransactionAsync(ct);
                 Guid id; string hub; string taskType; int version, partition, attempts;
                 int? workflowStep;
