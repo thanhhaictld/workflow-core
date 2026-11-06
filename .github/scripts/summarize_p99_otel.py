@@ -33,7 +33,10 @@ def attr(sp,key):
     for item in sp.get("attributes",[]):
         if item.get("key")==key:
             v=item.get("value",{})
-            return v.get("stringValue") or v.get("intValue") or v.get("doubleValue")
+            # OTLP intValue may be numeric zero, which is a valid claimed=0 value.
+            for field in ("stringValue","intValue","doubleValue","boolValue"):
+                if field in v:
+                    return v[field]
     return None
 
 def parse_time(ns):
