@@ -354,6 +354,9 @@ public static class HubGatewayEndpoints
                     string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
                     c.Version < 1))
                 return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            if (!ownership.Sharded &&
+                (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
+                return Results.Conflict(new { error = "Matching partition topology mismatch" });
             if (ownership.Sharded &&
                 (request.MatchingPartitionCount != ownership.PartitionCount ||
                  request.MatchingPartition is null ||
