@@ -61,6 +61,11 @@ public static class HubTelemetry
     // worker, tenant or unbounded hub labels on histograms.
     public static readonly Histogram<double> NativeCommitDuration =
         Meter.CreateHistogram<double>("workflow_hub_native_commit_duration_seconds", "s");
+    // Bounded cardinality diagnostic for the native, event-free fast path.
+    public static readonly Counter<long> NativeEventLaneBypass =
+        Meter.CreateCounter<long>("workflow_hub_native_event_lane_bypass", "{commit}");
+    public static readonly Histogram<double> NativeWorkflowRowLockDuration =
+        Meter.CreateHistogram<double>("workflow_hub_native_workflow_row_lock_duration_seconds", "s");
     public static readonly Histogram<double> NativeHistoryWriteDuration =
         Meter.CreateHistogram<double>("workflow_hub_native_history_write_duration_seconds", "s");
     public static readonly Histogram<int> NativeHistoryEventsPerCommit =
