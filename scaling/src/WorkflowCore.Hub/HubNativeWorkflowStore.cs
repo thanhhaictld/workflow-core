@@ -223,7 +223,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             // Lock the whole batch in canonical order. Locking per activity
             // could take a hub permit before another activity's permit while
             // a concurrent claim holds those resources in the opposite order.
-            await HubRemoteWorkflowStore.LockActivityResourcesAsync(db,tx,dispatches.SelectMany(d=>d.Route.Resources),ct);
+            await HubRemoteWorkflowStore.LockActivityResourcesAsync(db,tx,
+                dispatches.SelectMany(d=>d.Route.ResourcesForPartition(partition)),ct);
             foreach(var (activity,route) in dispatches)
             {
                 var task=Guid.NewGuid();
