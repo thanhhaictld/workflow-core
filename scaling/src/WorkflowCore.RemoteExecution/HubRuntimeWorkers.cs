@@ -97,6 +97,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     protected HubRestClient Client => client;
     private readonly string _owner=Environment.MachineName+":"+Guid.NewGuid().ToString("N");
     private readonly Channel<bool> _hints=Channel.CreateBounded<bool>(new BoundedChannelOptions(1){FullMode=BoundedChannelFullMode.DropWrite});
+    private readonly KeyValuePair<string, object?> _lane =
+        new("lane", workflows is null ? "activity" : "workflow");
     protected abstract Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct);
     protected abstract string ResultPath(HubLeasedTask task);
 
@@ -106,30 +108,81 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         await startup.Published.WaitAsync(ct);
         var running=new List<Task>();
         var listener=Listen(ct);
+        var emptyClaims=0;
+        long nextClaimAt=0;
+        var hintPreempted=false;
         try
         {
             while(!ct.IsCancellationRequested)
             {
                 running.RemoveAll(t=>t.IsCompleted);
-                if(running.Count<concurrency)
+                if(running.Count<concurrency &&
+                    (!options.AdaptiveClaimsEnabled || Stopwatch.GetTimestamp()>=nextClaimAt))
                 {
                     try
                     {
                         var leases=await client.PostAsync<HubLeasedTask[]>("api/hub/workers/tasks:claim",
                             new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
                                 Math.Min(16,concurrency-running.Count),workflows),ct);
+                        HubTelemetry.WorkerClaimRequests.Add(1,_lane,
+                            new KeyValuePair<string,object?>("outcome",leases.Length>0?"claimed":"empty"));
                         foreach(var lease in leases)running.Add(Run(lease,ct));
-                        if(leases.Length>0)continue;
+                        if(leases.Length>0)
+                        {
+                            emptyClaims=0;
+                            nextClaimAt=0;
+                            hintPreempted=false;
+                            continue;
+                        }
+                        if(options.AdaptiveClaimsEnabled)
+                        {
+                            emptyClaims=Math.Min(emptyClaims+1,8);
+                            // Back off only after empty claims; successful work is claimed immediately.
+                            // Jitter keeps different hosts from waking together on the periodic sweep.
+                            var baseMilliseconds=Math.Max(1000,options.PollInterval.TotalMilliseconds);
+                            var milliseconds=Math.Min(8000,baseMilliseconds*(1<<Math.Min(emptyClaims-1,3)));
+                            var backoff=TimeSpan.FromMilliseconds(milliseconds*(0.8+Random.Shared.NextDouble()*0.4));
+                            nextClaimAt=Stopwatch.GetTimestamp()+(long)(backoff.TotalSeconds*Stopwatch.Frequency);
+                            hintPreempted=false;
+                            HubTelemetry.WorkerEmptyClaimBackoff.Record(backoff.TotalSeconds,_lane);
+                        }
                     }
                     catch(OperationCanceledException)when(ct.IsCancellationRequested){break;}
-                    catch(Exception ex){logger.LogWarning(ex,"Hub claim failed; retrying");}
+                    catch(Exception ex)
+                    {
+                        HubTelemetry.WorkerClaimRequests.Add(1,_lane,
+                            new KeyValuePair<string,object?>("outcome","error"));
+                        logger.LogWarning(ex,"Hub claim failed; retrying");
+                        if(options.AdaptiveClaimsEnabled)
+                            nextClaimAt=Stopwatch.GetTimestamp()+
+                                (long)(Math.Max(1,options.PollInterval.TotalSeconds)*Stopwatch.Frequency);
+                    }
                 }
                 using var wait=CancellationTokenSource.CreateLinkedTokenSource(ct);
-                var poll=Task.Delay(options.PollInterval,wait.Token);
+                var pollDelay=options.PollInterval;
+                if(options.AdaptiveClaimsEnabled && running.Count<concurrency)
+                {
+                    var ticksRemaining=nextClaimAt-Stopwatch.GetTimestamp();
+                    if(ticksRemaining>0)
+                        pollDelay=TimeSpan.FromSeconds((double)ticksRemaining/Stopwatch.Frequency);
+                }
+                var poll=Task.Delay(pollDelay,wait.Token);
                 var hint=_hints.Reader.WaitToReadAsync(wait.Token).AsTask();
                 await Task.WhenAny(running.Append(poll).Append(hint));
                 await wait.CancelAsync();
-                while(_hints.Reader.TryRead(out _)) { }
+                var hinted=false;
+                while(_hints.Reader.TryRead(out _)) hinted=true;
+                if(hinted && options.AdaptiveClaimsEnabled && emptyClaims>0 &&
+                    running.Count<concurrency && !hintPreempted)
+                {
+                    // A fresh readiness hint may preempt one long empty-queue backoff,
+                    // but never triggers an immediate, unbounded claim stampede.
+                    var minHintMilliseconds=Math.Max(250,Math.Min(500,options.PollInterval.TotalMilliseconds/2));
+                    var due=Stopwatch.GetTimestamp()+
+                        (long)(minHintMilliseconds*Stopwatch.Frequency/1000);
+                    nextClaimAt=Math.Min(nextClaimAt,due);
+                    hintPreempted=true;
+                }
             }
         }
         finally
