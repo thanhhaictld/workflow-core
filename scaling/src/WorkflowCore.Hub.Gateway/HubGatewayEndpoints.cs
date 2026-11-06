@@ -151,7 +151,7 @@ public static class HubGatewayEndpoints
                 var def=await registry.GetAsync(request.HubId,request.DefinitionId,request.Version,ct);
                 var id = def is null ? await workflows.StartAsync(request, ct)
                     : await remote.StartAsync(request,ct);
-                readiness.Publish(request.HubId, request.TaskType, request.Version);
+                readiness.Publish(request.HubId);
                 return Results.Accepted($"/api/hub/workflows/{id}", new { workflowId = id });
             }
             catch (KeyNotFoundException)
@@ -318,7 +318,7 @@ public static class HubGatewayEndpoints
             {
                 var id = await store.EnqueueAsync(route, request.Payload.GetRawText(),
                     request.WorkflowId, request.IdempotencyKey, ct);
-                readiness.Publish(request.HubId);
+                readiness.Publish(request.HubId, request.TaskType, request.Version);
                 return Results.Accepted($"/api/hub/tasks/{id}", new { taskId = id });
             }
             catch (InvalidOperationException ex)
