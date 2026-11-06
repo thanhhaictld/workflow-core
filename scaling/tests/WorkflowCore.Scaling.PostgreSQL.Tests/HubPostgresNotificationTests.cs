@@ -56,6 +56,54 @@ public sealed class HubPostgresNotificationTests
     }
 
     [Fact]
+    public async Task CommittedMatchingHintsCarryCapabilityAcrossTwoHubReplicas()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var storeA = new HubTaskStore(Database, 3);
+        await using var storeB = new HubTaskStore(Database, 3);
+        using var readyA = new HubReadinessBroadcaster(storeA,
+            new HubWorkflowStore(storeA, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            NullLogger<HubReadinessBroadcaster>.Instance);
+        using var readyB = new HubReadinessBroadcaster(storeB,
+            new HubWorkflowStore(storeB, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            NullLogger<HubReadinessBroadcaster>.Instance);
+        var a = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var b = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        readyA.TaskReady += (observed, type, version) =>
+        {
+            if (observed == hub && type == "notify-test" && version == 1)
+                a.TrySetResult();
+        };
+        readyB.TaskReady += (observed, type, version) =>
+        {
+            if (observed == hub && type == "notify-test" && version == 1)
+                b.TrySetResult();
+        };
+        using var listenerA = new PostgresHubNotificationListener(Database, readyA,
+            NullLogger<PostgresHubNotificationListener>.Instance);
+        using var listenerB = new PostgresHubNotificationListener(Database, readyB,
+            NullLogger<PostgresHubNotificationListener>.Instance);
+        await listenerA.StartAsync(lifetime.Token);
+        await listenerB.StartAsync(lifetime.Token);
+        try
+        {
+            while (!listenerA.IsListening || !listenerB.IsListening)
+                await Task.Delay(25, lifetime.Token);
+            await using var writer = new NpgsqlConnection(Database);
+            await writer.OpenAsync(lifetime.Token);
+            await InsertTaskAsync(writer, hub);
+            await Task.WhenAll(a.Task.WaitAsync(lifetime.Token), b.Task.WaitAsync(lifetime.Token));
+        }
+        finally
+        {
+            await listenerA.StopAsync(CancellationToken.None);
+            await listenerB.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task CommitNotifiesAllHubReplicaListeners()
     {
         if (Database is null) return;
