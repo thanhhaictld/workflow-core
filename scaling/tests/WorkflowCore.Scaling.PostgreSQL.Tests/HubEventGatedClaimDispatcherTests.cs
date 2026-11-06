@@ -79,16 +79,16 @@ public sealed class HubEventGatedClaimDispatcherTests
         await Task.WhenAll(
             dispatcher.LongPollAsync(Request("warm-0", 0), CancellationToken.None),
             dispatcher.LongPollAsync(Request("warm-1", 1), CancellationToken.None));
-        var baseline = attempts.Count;
+        var baselineZero = attempts.Count(x => x.Partition == 0);
+        var baselineOne = attempts.Count(x => x.Partition == 1);
         var polls = new[] {
             dispatcher.LongPollAsync(Request("worker-0", 0), CancellationToken.None),
             dispatcher.LongPollAsync(Request("worker-1", 1), CancellationToken.None)
         };
         dispatcher.NotifyReady("test-hub", "do-work", 1, 0);
         await Task.WhenAll(polls);
-        var extra = attempts.ToArray().Skip(baseline).ToArray();
-        Assert.Single(extra);
-        Assert.Equal(0, extra[0].Partition);
+        Assert.Equal(baselineZero + 1, attempts.Count(x => x.Partition == 0));
+        Assert.Equal(baselineOne, attempts.Count(x => x.Partition == 1));
         Assert.Equal(0, dispatcher.PendingWaiters);
     }
 
