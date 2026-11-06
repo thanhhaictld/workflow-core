@@ -88,7 +88,8 @@ SELECT COUNT(*) FROM (
 
 token = next(v.split("=", 1)[1].strip() for v in
     open("scaling/observability/.env.example") if v.startswith("WFC_HUB_AUTH_TOKEN="))
-url = ("http://127.0.0.1:5100/api/hub/runs/" +
+url = (os.environ.get("WFC_HUB_VERIFY_URL", "http://127.0.0.1:5100").rstrip("/") +
+       "/api/hub/runs/" +
        urllib.parse.quote(args.run_id, safe="") + "/summary")
 with urllib.request.urlopen(urllib.request.Request(url,
     headers={"Authorization": "Bearer " + token}), timeout=40) as resp:
