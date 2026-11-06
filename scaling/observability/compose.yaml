@@ -203,7 +203,9 @@ services:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
-      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./${OTEL_COLLECTOR_CONFIG:-otel-collector.yaml}:/etc/otelcol-contrib/config.yaml:ro
+      # Dedicated benchmark collector config optionally writes OTLP JSONL here.
+      - ./results:/results
     ports:
       - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
 
