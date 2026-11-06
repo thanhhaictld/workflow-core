@@ -193,6 +193,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         var supported = capabilities.Select(c => $"{c.HubId}|{c.TaskType}|{c.Version}").ToArray();
         var pins=workflows is null?null:JsonSerializer.Serialize(workflows.Select(w=>new{hub=w.HubId,definition=w.DefinitionId,version=w.Version}));
         var results = new List<HubLeasedTask>(maxTasks);
+        var scannedCandidates = 0;
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         for (var batch = 0; batch < maxTasks; batch++)
         {
@@ -220,6 +221,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct)) candidates.Add(reader.GetGuid(0));
             }
+            scannedCandidates += candidates.Count;
 
             HubLeasedTask? found = null;
             foreach (var taskId in candidates)
@@ -392,8 +394,15 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(found.HubId),
                 HubTelemetry.ActivityTag(found.TaskType));
         }
-        HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds);
+        var outcome = results.Count == 0 ? "empty" : "claimed";
+        HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
+            new KeyValuePair<string, object?>("outcome", outcome));
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates,
+            new KeyValuePair<string, object?>("outcome", outcome));
+        HubTelemetry.ClaimReturnedCount.Record(results.Count,
+            new KeyValuePair<string, object?>("outcome", outcome));
         span?.SetTag("tasks.claimed", results.Count);
+        span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         return results;
     }
 
