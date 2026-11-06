@@ -66,12 +66,12 @@ services:
   processor:
     environment:
       WFC_HUB_URL: http://hub-lb:5100
-      WFC_HUB_LONG_POLL_ENABLED: "true"
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
 
   provisioner:
     environment:
       WFC_HUB_URL: http://hub-lb:5100
-      WFC_HUB_LONG_POLL_ENABLED: "true"
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
 
   monitor:
     environment:
