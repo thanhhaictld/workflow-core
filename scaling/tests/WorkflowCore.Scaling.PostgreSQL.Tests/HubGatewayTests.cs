@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Npgsql;
 using WorkflowCore.Hub;
 using Xunit;
@@ -375,6 +376,36 @@ public sealed class HubGatewayTests
             registration with {StrictFifo=true},CancellationToken.None));
         Assert.False(await definitions.RegisterActivityAsync(
             registration with {Contract=JsonSerializer.SerializeToElement(new {changed=true})},CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ScheduledTraceContextSurvivesPostgresEnqueueAndClaim()
+    {
+        if (Database is null) return;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == HubTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = (ref ActivityCreationOptions<string> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var schedule = HubTelemetry.Traces.StartActivity("test.enqueue", ActivityKind.Producer);
+        Assert.NotNull(schedule);
+        var hub = Key();
+        var policy = Registry(hub, 1, fifo: false);
+        await using var store = new HubTaskStore(Database, 3);
+        var id = await Create(store, policy, hub, "trace");
+        var leased = Assert.Single(await Claim(store, hub, "trace-worker"));
+        Assert.Equal(id, leased.Id);
+        Assert.Equal(schedule.Id, leased.TraceParent);
+        Assert.True(leased.CreatedAt <= DateTime.UtcNow);
+
+        using var executing = HubTraceCorrelation.StartWorkerExecution("test.worker", leased);
+        Assert.NotNull(executing);
+        Assert.Equal(schedule.TraceId, executing.TraceId);
+        Assert.Equal(schedule.SpanId, executing.ParentSpanId);
     }
 
 }
