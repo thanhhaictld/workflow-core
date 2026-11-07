@@ -271,10 +271,10 @@ public sealed class HubTaskStore : IAsyncDisposable
         var initialBatchCount = results.Count;
         if (_unconstrainedBatchClaimsEnabled)
         {
-            var outcome = initialBatchCount == maxTasks ? "full" :
+            var batchOutcome = initialBatchCount == maxTasks ? "full" :
                 initialBatchCount == 0 ? "empty" : "partial";
             HubTelemetry.ClaimBatchOutcome.Add(1,
-                new KeyValuePair<string, object?>("outcome", outcome));
+                new KeyValuePair<string, object?>("outcome", batchOutcome));
         }
         var fallbackStarted = Stopwatch.GetTimestamp();
         for (var batch = results.Count; batch < maxTasks; batch++)
