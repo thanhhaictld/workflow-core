@@ -247,14 +247,14 @@ public sealed class HubEventGatedClaimDispatcherTests
         typedDispatcher.NotifyReady("test-hub", "beta", 1, 0);
         await typedDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
         Assert.True(typed.TryPeek(out var typedCapabilities));
-        Assert.Equal(["beta"], typedCapabilities);
+        Assert.Equal(new[] { "beta" }, typedCapabilities);
 
         var generic = new ConcurrentQueue<string[]>();
         var genericDispatcher = Create(generic);
         genericDispatcher.NotifyReady("test-hub", null, 0, 0);
         await genericDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
         Assert.True(generic.TryPeek(out var recoveryCapabilities));
-        Assert.Equal(["alpha", "beta"], recoveryCapabilities);
+        Assert.Equal(new[] { "alpha", "beta" }, recoveryCapabilities);
     }
 
 }
