@@ -31,6 +31,16 @@ public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
 public sealed record HubTaskHeartbeatRequest(string WorkerId, long Epoch);
 public sealed record HubTaskFailureRequest(string WorkerId, long Epoch,
     string Error, int RetryDelaySeconds = 2);
+
+/// <summary>
+/// Transient backpressure signal for demand-matched claims only. The matching
+/// dispatcher must retain the readiness hint and retry; no task is leased.
+/// Never expose this as a permanent empty-queue result.
+/// </summary>
+public sealed class HubClaimAdmissionDeferredException : Exception
+{
+    public HubClaimAdmissionDeferredException() : base("Matching claim deferred while PostgreSQL claim capacity is occupied") { }
+}
 public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long ActiveDbConnections,
     long ReadyTasks, long LeasedTasks, long DeadTasks);
 
@@ -46,6 +56,11 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Unlike a global workflow lock, this only limits speculative claim SQL.
     private readonly SemaphoreSlim _claimGate;
     private readonly bool _claimAdmissionEnabled;
+    // Demand-aware mode leaves only a small number of claims waiting behind
+    // active SQL. Extra event-matched claims stay in memory, preserving hints.
+    // This never throttles completion/heartbeat/failure database operations.
+    private readonly bool _demandAwareAdmissionEnabled;
+    private readonly SemaphoreSlim _claimWaitSlots;
     // Opt-in: atomically lease batches of tasks without any resource constraints.
     // Constrained tasks retain the original task -> resource row lock path.
     private readonly bool _unconstrainedBatchClaimsEnabled;
@@ -59,8 +74,32 @@ public sealed class HubTaskStore : IAsyncDisposable
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
-        _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
-        _claimAdmissionEnabled =
+        var admissionMode = Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MODE");
+        _demandAwareAdmissionEnabled = string.Equals(admissionMode, "demand",
+            StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(admissionMode) &&
+            admissionMode is not ("queue" or "QUEUE" or "Queue") &&
+            !_demandAwareAdmissionEnabled)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_MODE must be queue or demand");
+
+        // A shared data source is used for claims and completions. Reserve at
+        // least one, normally four, pooled connections for non-claim traffic.
+        var effectivePoolSize = Math.Clamp(maxPoolSize, 1, 100);
+        var reservedConnections = Math.Min(4, Math.Max(1, effectivePoolSize - 1));
+        var maximumClaimConnections = Math.Max(1, effectivePoolSize - reservedConnections);
+        var configuredLimit = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_LIMIT"),
+            out var claimLimit) ? claimLimit : Math.Max(1, effectivePoolSize / 4);
+        if (configuredLimit < 1)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_LIMIT must be positive");
+        _claimGate = new SemaphoreSlim(Math.Clamp(configuredLimit, 1, maximumClaimConnections));
+        var maxQueued = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS"),
+            out var maxWaiting) ? maxWaiting : 1;
+        if (maxQueued is < 0 or > 128)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS must be 0..128");
+        _claimWaitSlots = new SemaphoreSlim(maxQueued, Math.Max(1, maxQueued));
+        _claimAdmissionEnabled = _demandAwareAdmissionEnabled ||
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
         _unconstrainedBatchClaimsEnabled = enableUnconstrainedBatchClaims ??
             (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
@@ -201,7 +240,8 @@ public sealed class HubTaskStore : IAsyncDisposable
     public async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
         int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null,
-        int? matchingPartition = null, int? matchingPartitionCount = null)
+        int? matchingPartition = null, int? matchingPartitionCount = null,
+        bool deferWhenBusy = false)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
@@ -222,6 +262,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         span?.SetTag("matching.partition_count", matchCount);
 
         var gateAcquired = false;
+        var queuedSlotAcquired = false;
         try
         {
             if (_claimAdmissionEnabled)
@@ -231,8 +272,39 @@ public sealed class HubTaskStore : IAsyncDisposable
                 {
                     admission?.SetTag("matching.partition", matchPartition);
                     admission?.SetTag("matching.partition_count", matchCount);
-                    await _claimGate.WaitAsync(ct);
-                    gateAcquired = true;
+                    if (_demandAwareAdmissionEnabled && deferWhenBusy)
+                    {
+                        if (_claimGate.Wait(0))
+                            gateAcquired = true;
+                        else if (_claimWaitSlots.Wait(0))
+                        {
+                            queuedSlotAcquired = true;
+                            HubTelemetry.ClaimAdmissionQueued.Add(1);
+                            try
+                            {
+                                await _claimGate.WaitAsync(ct);
+                                gateAcquired = true;
+                            }
+                            finally
+                            {
+                                HubTelemetry.ClaimAdmissionQueued.Add(-1);
+                                _claimWaitSlots.Release();
+                                queuedSlotAcquired = false;
+                            }
+                        }
+                        else
+                        {
+                            HubTelemetry.ClaimAdmissionDeferred.Add(1);
+                            admission?.SetTag("admission.deferred", true);
+                            throw new HubClaimAdmissionDeferredException();
+                        }
+                    }
+                    else
+                    {
+                        await _claimGate.WaitAsync(ct);
+                        gateAcquired = true;
+                    }
+                    HubTelemetry.ClaimAdmissionActive.Add(1);
                     var waitSeconds = Stopwatch.GetElapsedTime(waitStarted).TotalSeconds;
                     admission?.SetTag("admission.wait_seconds", waitSeconds);
                     span?.SetTag("claim.admission_wait_seconds", waitSeconds);
@@ -521,7 +593,16 @@ public sealed class HubTaskStore : IAsyncDisposable
         }
         finally
         {
-            if (gateAcquired) _claimGate.Release();
+            if (queuedSlotAcquired)
+            {
+                HubTelemetry.ClaimAdmissionQueued.Add(-1);
+                _claimWaitSlots.Release();
+            }
+            if (gateAcquired)
+            {
+                HubTelemetry.ClaimAdmissionActive.Add(-1);
+                _claimGate.Release();
+            }
         }
     }
 
@@ -862,5 +943,6 @@ public sealed class HubTaskStore : IAsyncDisposable
     {
         await _dataSource.DisposeAsync();
         _claimGate.Dispose();
+        _claimWaitSlots.Dispose();
     }
 }
