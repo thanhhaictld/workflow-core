@@ -113,6 +113,14 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_claim_db_connection_acquire_seconds", "s");
     public static readonly Histogram<double> ClaimAdmissionWait =
         Meter.CreateHistogram<double>("workflow_hub_claim_admission_wait_seconds", "s");
+    // Demand-matched claims can be deferred without consuming a DB connection,
+    // but their readiness signal remains parked in the matcher.
+    public static readonly Counter<long> ClaimAdmissionDeferred =
+        Meter.CreateCounter<long>("workflow_hub_claim_admission_deferred", "{claim}");
+    public static readonly UpDownCounter<long> ClaimAdmissionQueued =
+        Meter.CreateUpDownCounter<long>("workflow_hub_claim_admission_queued", "{claim}");
+    public static readonly UpDownCounter<long> ClaimAdmissionActive =
+        Meter.CreateUpDownCounter<long>("workflow_hub_claim_admission_active", "{claim}");
     public static readonly Histogram<double> ClaimCandidateQuery =
         Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
     public static readonly Histogram<double> ClaimPermitCheck =
