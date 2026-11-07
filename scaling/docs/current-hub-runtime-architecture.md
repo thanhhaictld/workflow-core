@@ -84,6 +84,72 @@ flowchart LR
 
 The optional two-Hub load-balancer and sharded matching configuration are enabled through Compose overlays, not by the base Compose stack. The two DB nodes above represent **logical ownership/schema boundaries**; the supplied local observability Compose stack actually uses **one PostgreSQL container**.
 
+### Performance bottleneck overlay — current code and measured telemetry
+
+This is the same **Gateway → Task Matching → Task Claim → PostgreSQL** architecture with explicit pressure points. This overlay represents a **single logical Hub Gateway**; the HA overlay replicates these components on Hub A and B, but both use the same PostgreSQL primary. No separate durable task-matching service is deployed.
+
+```mermaid
+flowchart TB
+    WF["Workflow processor lane"]
+    AW["Activity worker lane"]
+    LB["Hub load balancer"]
+    DB[("PostgreSQL: durable tasks / permits / workflow state")]
+    EXT["External side effects"]
+
+    subgraph H["Hub Gateway process — repeat for Hub A / Hub B"]
+      API["REST Gateway"]
+      OWN["Matching shard owner + forwarding"]
+      MATCH["B2 — Task Matching / event-gated drain\n58% claim RPCs empty across tested mode"]
+      ADMIT["B1 — Claim admission semaphore\np95 wait 669 ms"]
+      CAND["B3 — Candidate scanning + task lease\nper-candidate SQL / transactions"]
+      POLICY["B4 — Resource permits + FIFO\nintentional blocking + repeated checks"]
+      READY["PostgreSQL LISTEN/NOTIFY + recovery"]
+      SCHED["Embedded timer scheduler"]
+      WFSTORE["Native workflow state + revisioned commit"]
+      API --> OWN
+      OWN --> MATCH
+      MATCH --> ADMIT
+      API -. "adaptive direct claim bypass" .-> ADMIT
+      ADMIT --> CAND
+      CAND --> POLICY
+      READY --> MATCH
+      API --> WFSTORE
+    end
+
+    WF <-->|"poll / native commits"| LB
+    AW <-->|"poll / completion"| LB
+    AW --> EXT
+    LB <--> API
+    OWN <--> DB
+    POLICY <--> DB
+    WFSTORE <--> DB
+    SCHED <--> DB
+    DB -. "committed readiness hints" .-> READY
+
+    classDef measured fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d,stroke-width:2px
+    classDef suspect fill:#fff4d6,stroke:#d97706,color:#7c2d12,stroke-width:2px
+    classDef neutral fill:#eef2f6,stroke:#64748b,color:#1f2937
+    class ADMIT,MATCH measured
+    class CAND,POLICY suspect
+    class DB suspect
+```
+
+**Legend:** red = direct telemetry evidence of a slow / inefficient stage; amber = source-supported mechanism or shared physical constraint **not yet isolated as the dominant saturation cause**. A red matcher shows **total claim RPC inefficiency in the event-gated benchmark**, not a proof that only matcher-issued claims were empty.
+
+| Marker | Component / code | Evidence | Causal confidence / next check |
+|---|---|---|---|
+| **B1 — confirmed latency** | `HubTaskStore._claimGate` and `hub.task.claim.admission_wait` | Event-gated three-way CI: **p95 669 ms**, **p99 1,203 ms** waiting at admission; claim p95 978 ms | Directly measured wait. Test reducing speculative contenders and gate occupancy **before** raising pool size or semaphore |
+| **B2 — confirmed wasted work** | `HubTaskMatcher`, `HubEventGatedClaimDispatcher`, legacy/adaptive claim fallback | **2,813 claim RPCs / 1,632 empty (58%)** across the event-gated six-scenario OTel archive, for 2,400 leased tasks | Counts cover **both matching and adaptive paths**; separate metric by lane/shard/outcome to assign blame precisely. Capability and FIFO-successor readiness could reduce redundant drains |
+| **B3 — source-supported candidate-work amplifier** | `HubTaskStore.ClaimAsync`: selects up to **96** candidates and opens task/permit transactions repeatedly | Per-candidate SQL and `FOR UPDATE SKIP LOCKED` observed in source; earlier forensic report found first candidate query p95 about **29 ms**, much less than end-to-end successful claim waits | Workload-specific contribution unproven. Measure candidate rows scanned, DB reads and time per successful lease; try atomic **unordered-only** batch claim |
+| **B4 — some intentional serialization** | `hub_resource`, `hub_task_constraint`, `PartitionSerial` / `KeyedFifo` | Event-gated **16-processor** durable timeline p99 activity queue **4.665 s partition**, **3.604 s keyed** | Queue time mixes required FIFO resource waiting with matching/claim overhead. Split `eligible_at → claimed_at` from `created_at → eligible_at` before weakening policy |
+| **Additional orchestration latency** | Native worker decision + Hub native commit + workflow wake | Event-gated 16-processor unordered p99 initial processing to activity creation **5.146 s** | Durable stage includes multiple sub-operations. Trace native execution vs HTTP commit vs DB transaction independently |
+| **Shared capacity — not proven bottleneck** | One shared PostgreSQL primary; per-Hub Npgsql pools; all containers on a **four-vCPU** CI runner | 8→16 processors: unordered 9.59→8.70 workflows/sec, partition 10.57→10.74, keyed 10.33→13.73 | Sublinear scaling observed, but **not proof of PostgreSQL CPU, lock or WAL saturation**. Profile `pg_stat_activity`/waits, CPU, IO, connections and repeat on dedicated compute |
+| **Matching coverage gap** | `HubRuntimeWorker`: uses long poll only for single-Hub capability sets | Mixed-Hub worker capabilities use adaptive `tasks:claim` rather than sharded matching | Confirmed in code, throughput impact not separately isolated; benchmark per-Hub worker lanes before rollout |
+
+The **first fix target is B1 plus B2**: stop paying for speculative, unsuccessful claims that hold up useful claims. Keep business FIFO semantics. The next test is B3's **unordered** batched claim, not a global increase in lock scope. In particular, do not label the PostgreSQL instance itself “the proven bottleneck” without DB CPU/WAL/wait attribution.
+
+Evidence: [November 7 A/B telemetry (run 42323417533)](https://github.com/thanhhaictld/workflow-core/actions/runs/42323417533), [prior activity claim forensic report in PR #21](https://github.com/thanhhaictld/workflow-core/pull/21#issuecomment-6688755424), [event-gated matcher results in PR #22](https://github.com/thanhhaictld/workflow-core/pull/22#issuecomment-6689630983).
+
 ## 2. Repository and deployment inventory
 
 | Component | Source of truth | Deployed process / responsibility |
