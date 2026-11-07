@@ -240,9 +240,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     private async Task Run(HubLeasedTask task,CancellationToken shutdown)
     {
         var isActivity=task.TaskType is not ("__workflow__" or "__native_workflow__");
-        using var span=HubTelemetry.Traces.StartActivity(isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute");
+        using var span=HubTraceCorrelation.StartWorkerExecution(
+            isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute",task);
         span?.SetTag("hub",task.HubId);span?.SetTag("activity.type",task.TaskType);
         span?.SetTag("workflow.id",task.WorkflowId?.ToString());
+        span?.SetTag("workflow.instance_id",task.WorkflowId?.ToString());
         span?.SetTag("task.id",task.Id.ToString());
         span?.SetTag("task.epoch",task.Epoch);
         var started=Stopwatch.GetTimestamp();var outcome="failure";
