@@ -347,6 +347,15 @@ jobs:
           )
           assert all(s['readyAt'] is not None for s in spans)
           assert all(s['executionPointerId'] and s['dispatchKey'] for s in spans)
+          # One trace per bounded execution segment, linked at async boundaries.
+          # The durable waterfall exposes exact trace/span IDs for Grafana drilldown.
+          import re
+          linked=[a for s in spans for a in s['attempts'] if a.get('source','lease')=='lease']
+          assert linked, spans
+          assert all(re.fullmatch(r'[0-9a-f]{32}', a.get('traceId') or '') for a in linked), linked
+          assert all(re.fullmatch(r'[0-9a-f]{16}', a.get('spanId') or '') for a in linked), linked
+          assert result['grafana']['tempoUid']=='tempo', result.get('grafana')
+          print('PASS: durable Hub attempts expose valid OTel trace/span references')
           print('PASS: Hub waterfall has real claim/finish durations across 3 activities')
           print('PASS: Hub workflow opens in existing detail route with named, ordered history')
           PY
