@@ -50,7 +50,7 @@ public sealed class HubUnconstrainedBatchClaimTests
             .Select(i => Claim(store, hub, "batch-worker-" + i, 16, "unconstrained")));
         var actual = batches.SelectMany(items => items).ToArray();
         Assert.Equal(48, actual.Length);
-        Assert.Equal(expected, actual.Select(t => t.Id).ToHashSet());
+        Assert.True(expected.SetEquals(actual.Select(t => t.Id)));
         Assert.All(actual, t => Assert.Equal(1L, t.Epoch));
 
         await using (var db = new NpgsqlConnection(Database))
@@ -93,8 +93,8 @@ public sealed class HubUnconstrainedBatchClaimTests
 
         var leased = await Claim(store, hub, "A", 16, "serialized", "free");
         Assert.Equal(9, leased.Count);
-        Assert.Equal(free.ToHashSet(), leased.Where(t => t.TaskType == "free")
-            .Select(t => t.Id).ToHashSet());
+        Assert.True(free.ToHashSet().SetEquals(leased.Where(t => t.TaskType == "free")
+            .Select(t => t.Id)));
         Assert.Equal(constrained[0], Assert.Single(leased.Where(t =>
             t.TaskType == "serialized")).Id);
         Assert.Empty(await Claim(store, hub, "B", 16, "serialized", "free"));
