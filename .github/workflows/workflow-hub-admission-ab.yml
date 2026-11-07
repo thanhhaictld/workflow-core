@@ -1,0 +1,155 @@
+name: Workflow Hub Demand-Aware Admission A/B
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/HubTaskStore.cs'
+      - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/HubEventGatedClaimDispatcher.cs'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/HubTaskMatcher.cs'
+      - 'scaling/src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs'
+      - 'scaling/src/WorkflowCore.RemoteExecution/HubWorkflowRegistration.cs'
+      - 'scaling/src/WorkflowCore.Hub.Telemetry/HubOpenTelemetryExtensions.cs'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/compose.matching-ha.yaml'
+      - 'scaling/observability/benchmark/summarize_admission_ab.py'
+      - '.github/scripts/diagnose_hub_claims.py'
+      - '.github/workflows/workflow-hub-admission-ab.yml'
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Unordered workflows per independent trial'
+        default: '300'
+        required: false
+
+concurrency:
+  group: workflow-hub-admission-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        batch_claims: ['false', 'true']
+        admission_mode: ['queue', 'demand']
+        worker_cap: ['0', '2']
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      DIAG: scaling/observability/compose.claim-diagnostics.yaml
+      ENVFILE: scaling/observability/.env.example
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: ${{ matrix.batch_claims }}
+      WFC_HUB_CLAIM_ADMISSION_MODE: ${{ matrix.admission_mode }}
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_LIMIT: '3'
+      WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS: '1'
+      WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE: ${{ matrix.worker_cap }}
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_DB_POOL: '12'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      COUNT: ${{ github.event.inputs.count || '300' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scripts and compose configuration
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/diagnose_hub_claims.py scaling/observability/benchmark/summarize_claim_diagnostics.py scaling/observability/benchmark/summarize_admission_ab.py
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" config --quiet
+          echo "CPU $(nproc); mode=$WFC_HUB_CLAIM_ADMISSION_MODE cap=$WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE batch=$WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS"
+      - name: Start isolated two-Hub diagnostic stack
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb prometheus tempo loki
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" exec -T postgres psql -X -U workflow -d workflow -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
+      - name: Run 16 processors with two independently verified trials
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/admission-ab
+          mkdir -p "$root"
+          chmod 0777 scaling/observability/results "$root"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" --profile offboarding-load up -d --build --no-deps --scale processor=16 processor
+          actual="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+          test "$actual" -eq 16
+          sleep 15
+          for repeat in 1 2; do
+            tag="$WFC_HUB_CLAIM_ADMISSION_MODE-$WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE-$WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS-$repeat"
+            run_id="admission-bench-$tag-$GITHUB_RUN_ID"
+            echo "::group::run=$run_id"
+            python3 .github/scripts/diagnose_hub_claims.py prepare --output "$root/before-$tag.json"
+            python3 .github/scripts/diagnose_hub_claims.py sample --output "$root/sample-$tag.json" --interval 1 &
+            sampler_pid=$!
+            set +e
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=unordered -e K6_POLICY_COUNT="$COUNT" -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 -e K6_POLICY_RUN_ID="$run_id" k6-policy | tee "$root/k6-$tag.log"
+            k6_rc=${PIPESTATUS[0]}
+            set -e
+            kill -TERM "$sampler_pid" 2>/dev/null || true
+            wait "$sampler_pid" || true
+            test "$k6_rc" -eq 0
+            test -s "$root/sample-$tag.json"
+            python3 scaling/observability/benchmark/verify_ordering.py --mode unordered --run-id "$run_id" --count "$COUNT" --output "$root/verify-$tag.json"
+            sleep 7
+            python3 .github/scripts/diagnose_hub_claims.py finish --before "$root/before-$tag.json" --sampler "$root/sample-$tag.json" --output "$root/diag-$tag.json"
+            echo "::endgroup::"
+          done
+      - name: Verify keyed FIFO and lease attempt safety under optimized admission
+        if: matrix.admission_mode == 'demand' && matrix.worker_cap == '2'
+        run: |
+          set -euo pipefail
+          tag="$WFC_HUB_CLAIM_ADMISSION_MODE-$WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE-$WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS"
+          run_id="admission-keyed-$tag-$GITHUB_RUN_ID"
+          root=scaling/observability/results/admission-ab
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=keyed -e K6_POLICY_COUNT=100 -e K6_POLICY_VUS=40 -e K6_POLICY_TIMEOUT_SECONDS=600 -e K6_POLICY_RUN_ID="$run_id" k6-policy | tee "$root/keyed-$tag.log"
+          python3 scaling/observability/benchmark/verify_ordering.py --mode keyed --run-id "$run_id" --count 100 --output "$root/keyed-verify-$tag.json"
+      - name: Upload raw Prometheus, PostgreSQL, and K6 data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-admission-ab-${{ matrix.admission_mode }}-${{ matrix.worker_cap }}-${{ matrix.batch_claims }}
+          path: scaling/observability/results/admission-ab/
+          if-no-files-found: warn
+      - name: Stop isolated services
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$DIAG" --env-file "$ENVFILE" --profile offboarding-load --profile policy-k6 down --remove-orphans || true
+
+  compare:
+    needs: [profile]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download scenario artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hub-admission-ab-*
+          path: admission-evidence
+          merge-multiple: true
+      - name: Summarize p99 claim, admission and completion guardrail
+        run: |
+          set -euo pipefail
+          python3 scaling/observability/benchmark/summarize_admission_ab.py --input admission-evidence --output admission-evidence/admission-comparison.md --expected 16
+          cat admission-evidence/admission-comparison.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload aggregate comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-admission-ab-comparison
+          path: |
+            admission-evidence/admission-comparison.md
+            admission-evidence/admission-comparison.csv
+          if-no-files-found: warn

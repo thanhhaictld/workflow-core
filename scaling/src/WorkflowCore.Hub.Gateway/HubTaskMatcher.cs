@@ -50,7 +50,8 @@ public sealed class HubTaskMatcher
                 (request, ct) => tasks.ClaimAsync(request.WorkerId,
                     request.Hubs, request.Capabilities, request.MaxTasks,
                     TimeSpan.FromSeconds(45), ct, request.Workflows,
-                    request.MatchingPartition, request.MatchingPartitionCount),
+                    request.MatchingPartition, request.MatchingPartitionCount,
+                    deferWhenBusy: true),
                 (request, ct) => ownership.Sharded
                     ? ownership.StillOwnsPartitionAsync(request.Hubs[0],
                         request.MatchingPartition!.Value, ct)

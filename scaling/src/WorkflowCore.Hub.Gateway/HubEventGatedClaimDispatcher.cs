@@ -167,6 +167,8 @@ public sealed class HubEventGatedClaimDispatcher
         if (request.Hubs is not { Length: 1 })
             throw new ArgumentException("One Hub required for matching");
 
+        var pollStarted = Stopwatch.GetTimestamp();
+        var pollOutcome = "error";
         var waiter = new Waiter(request);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_pollTimeout);
@@ -241,32 +243,67 @@ public sealed class HubEventGatedClaimDispatcher
                             leases.Count > 0 ? "leased" : "empty"));
                     completed = true;
                 }
+                catch (HubClaimAdmissionDeferredException)
+                {
+                    // SQL capacity is busy; no task has been leased. Keep the
+                    // hint and yield this shard briefly to let completions and
+                    // other in-flight claim transactions finish.
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(
+                            60 + Random.Shared.Next(40)), deadline.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Worker long-poll timeout: retain hint for the next poller.
+                    }
+                }
                 finally
                 {
                     lock (_gate)
                     {
                         var lane = _lanes[waiter.Key];
                         lane.Claiming = false;
+                        if (!completed && work is Hint unconsumed)
+                        {
+                            // A rejected/cancelled claim never established
+                            // whether work was available. Do NOT discard the
+                            // readiness hint or a stranded task might wait
+                            // until the next catch-up probe.
+                            lane.Pending.Add(unconsumed);
+                        }
                         if (completed && leases.Count > 0)
                         {
-                            // Exactly one follow-up probe per capability to
-                            // drain tasks left behind by a successful batch.
+                            // Preserve successful partial-batch drain hints:
+                            // SQL can stop after a bounded candidate window,
+                            // so a partial return does not prove empty backlog.
                             foreach (var task in leases)
                                 lane.Pending.Add(new Hint(task.TaskType, task.Version));
                         }
-                        // An unsuccessful claim consumes its hint; a new
-                        // task/permit signal is needed for another DB call.
-                        // Errors recover on the periodic catch-up sweep.
+                        // A completed empty claim consumes the current hint.
+                        // A deferred/incomplete claim retains it for retry.
                         WakeOne(lane);
                     }
                 }
 
-                if (leases.Count > 0) return leases;
+                if (leases.Count > 0)
+                {
+                    pollOutcome = "leased";
+                    return leases;
+                }
+                // Deferral can schedule another wake on this same waiter even
+                // after its short poll deadline. Do not process that wake with
+                // an expired budget: the retained hint belongs to next poller.
+                if (deadline.IsCancellationRequested) break;
             }
+            pollOutcome = "empty";
             return Array.Empty<HubLeasedTask>();
         }
         finally
         {
+            HubTelemetry.MatchingPollDuration.Record(
+                Stopwatch.GetElapsedTime(pollStarted).TotalSeconds,
+                new KeyValuePair<string, object?>("outcome", pollOutcome));
             lock (_gate)
             {
                 if (_lanes.TryGetValue(waiter.Key, out var lane))

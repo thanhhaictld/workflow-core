@@ -106,6 +106,10 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     {
         if(capabilities.Length==0)return;
         await startup.Published.WaitAsync(ct);
+        // Each worker lane is bounded before leasing; no task waits locally
+        // after lease acquisition merely to obtain an execution slot.
+        var effectiveConcurrency = options.WorkerConcurrencyCap > 0
+            ? Math.Min(concurrency, options.WorkerConcurrencyCap) : concurrency;
         var running=new List<Task>();
         // A matching poll requires one Hub namespace. Multi-hub workers retain
         // the proven PR #18 SSE/adaptive path until per-Hub fan-out is added.
@@ -124,7 +128,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             while(!ct.IsCancellationRequested)
             {
                 running.RemoveAll(t=>t.IsCompleted);
-                if(running.Count<concurrency &&
+                if(running.Count<effectiveConcurrency &&
                     (matchingPoll || !options.AdaptiveClaimsEnabled ||
                      Stopwatch.GetTimestamp()>=nextClaimAt))
                 {
@@ -133,11 +137,24 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         var endpoint = matchingPoll
                             ? "api/hub/workers/tasks:poll"
                             : "api/hub/workers/tasks:claim";
-                        var leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
-                            new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
-                                Math.Min(16,concurrency-running.Count),workflows,
-                                matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
-                                matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                        var claimHttpStarted = Stopwatch.GetTimestamp();
+                        var claimHttpOutcome = "error";
+                        HubLeasedTask[] leases;
+                        try
+                        {
+                            leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
+                                new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
+                                    Math.Min(16,effectiveConcurrency-running.Count),workflows,
+                                    matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
+                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                            claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
+                        }
+                        finally
+                        {
+                            HubTelemetry.WorkerClaimHttpDuration.Record(
+                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane,
+                                new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
+                        }
                         if (matchingPoll && options.MatchingPartitions > 1)
                             matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
@@ -184,7 +201,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     continue; // next server-held poll; no local jitter/backoff
                 using var wait=CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var pollDelay=options.PollInterval;
-                if(options.AdaptiveClaimsEnabled && running.Count<concurrency)
+                if(options.AdaptiveClaimsEnabled && running.Count<effectiveConcurrency)
                 {
                     var ticksRemaining=nextClaimAt-Stopwatch.GetTimestamp();
                     if(ticksRemaining>0)
@@ -197,7 +214,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 var hinted=false;
                 while(_hints.Reader.TryRead(out _)) hinted=true;
                 if(hinted && options.AdaptiveClaimsEnabled && emptyClaims>0 &&
-                    running.Count<concurrency && !hintPreempted)
+                    running.Count<effectiveConcurrency && !hintPreempted)
                 {
                     // A fresh readiness hint may preempt one long empty-queue backoff,
                     // but never triggers an immediate, unbounded claim stampede.

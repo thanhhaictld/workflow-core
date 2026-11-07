@@ -74,6 +74,16 @@ public static class HubTelemetry
         Meter.CreateHistogram<int>("workflow_hub_claim_candidates_scanned", "{task}");
     public static readonly Histogram<int> ClaimReturnedCount =
         Meter.CreateHistogram<int>("workflow_hub_claim_tasks_returned", "{task}");
+    public static readonly Histogram<int> ClaimUnconstrainedBatchCount =
+        Meter.CreateHistogram<int>("workflow_hub_claim_unconstrained_batch_count", "{task}");
+    public static readonly Histogram<double> ClaimUnconstrainedBatchDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_unconstrained_batch_duration_seconds", "s");
+    // An extra legacy claim scan after an empty/partial batch can dominate
+    // high-cardinality matching workloads. Labels are strictly bounded.
+    public static readonly Counter<long> ClaimBatchOutcome =
+        Meter.CreateCounter<long>("workflow_hub_claim_batch_outcome", "{claim}");
+    public static readonly Histogram<double> ClaimLegacyFallbackDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_legacy_fallback_duration_seconds", "s");
     public static readonly Histogram<double> StoreOperationDuration =
         Meter.CreateHistogram<double>("workflow_hub_store_duration_seconds", "s");
     public static readonly Counter<long> SseNotifications =
@@ -103,6 +113,14 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_claim_db_connection_acquire_seconds", "s");
     public static readonly Histogram<double> ClaimAdmissionWait =
         Meter.CreateHistogram<double>("workflow_hub_claim_admission_wait_seconds", "s");
+    // Demand-matched claims can be deferred without consuming a DB connection,
+    // but their readiness signal remains parked in the matcher.
+    public static readonly Counter<long> ClaimAdmissionDeferred =
+        Meter.CreateCounter<long>("workflow_hub_claim_admission_deferred", "{claim}");
+    public static readonly UpDownCounter<long> ClaimAdmissionQueued =
+        Meter.CreateUpDownCounter<long>("workflow_hub_claim_admission_queued", "{claim}");
+    public static readonly UpDownCounter<long> ClaimAdmissionActive =
+        Meter.CreateUpDownCounter<long>("workflow_hub_claim_admission_active", "{claim}");
     public static readonly Histogram<double> ClaimCandidateQuery =
         Meter.CreateHistogram<double>("workflow_hub_claim_candidate_query_seconds", "s");
     public static readonly Histogram<double> ClaimPermitCheck =
@@ -111,8 +129,15 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_matching_dispatch_attempts", "{attempt}");
     public static readonly Histogram<double> MatchingDispatchDuration =
         Meter.CreateHistogram<double>("workflow_hub_matching_dispatch_duration_seconds", "s");
+    // Includes in-memory matching wait and deferred SQL admission retries.
+    public static readonly Histogram<double> MatchingPollDuration =
+        Meter.CreateHistogram<double>("workflow_hub_matching_poll_duration_seconds", "s");
     public static readonly Counter<long> WorkerClaimRequests =
         Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
+    // Client-observed claim/poll latency, including long-poll queueing and
+    // HTTP transport. Guardrail against hiding latency by deferring server SQL.
+    public static readonly Histogram<double> WorkerClaimHttpDuration =
+        Meter.CreateHistogram<double>("workflow_hub_worker_claim_http_duration_seconds", "s");
     public static readonly Histogram<double> WorkerEmptyClaimBackoff =
         Meter.CreateHistogram<double>("workflow_hub_worker_empty_claim_backoff_seconds", "s");
 

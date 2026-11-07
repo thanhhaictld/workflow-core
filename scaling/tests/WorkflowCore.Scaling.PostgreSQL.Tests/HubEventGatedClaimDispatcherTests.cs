@@ -171,4 +171,54 @@ public sealed class HubEventGatedClaimDispatcherTests
         Assert.Equal(1, called);
         Assert.Equal(0, dispatcher.PendingWaiters);
     }
+
+    [Fact]
+    public async Task AdmissionDeferralRetainsHintAndRetriesWithoutAnotherNotification()
+    {
+        var attempts = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (req, ct) =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                    throw new HubClaimAdmissionDeferredException();
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([Lease(1)]);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(600));
+
+        var claimed = await dispatcher.LongPollAsync(Request("worker", 1),
+            CancellationToken.None);
+        Assert.Single(claimed);
+        Assert.Equal(2, attempts);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
+    [Fact]
+    public async Task DeferredHintSurvivesPollTimeoutAndWorkerRotation()
+    {
+        var attempts = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (req, ct) =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                    throw new HubClaimAdmissionDeferredException();
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([Lease(2)]);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(25));
+
+        Assert.Empty(await dispatcher.LongPollAsync(
+            Request("first-worker", 2), CancellationToken.None));
+        Assert.Equal(1, attempts);
+
+        // Initial 5-second recovery probe is suppressed for this capability.
+        // Success therefore requires the first deferral to retain its hint.
+        Assert.Single(await dispatcher.LongPollAsync(
+            Request("rotated-worker", 2), CancellationToken.None));
+        Assert.Equal(2, attempts);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
 }

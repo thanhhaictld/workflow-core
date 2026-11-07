@@ -31,6 +31,16 @@ public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
 public sealed record HubTaskHeartbeatRequest(string WorkerId, long Epoch);
 public sealed record HubTaskFailureRequest(string WorkerId, long Epoch,
     string Error, int RetryDelaySeconds = 2);
+
+/// <summary>
+/// Transient backpressure signal for demand-matched claims only. The matching
+/// dispatcher must retain the readiness hint and retry; no task is leased.
+/// Never expose this as a permanent empty-queue result.
+/// </summary>
+public sealed class HubClaimAdmissionDeferredException : Exception
+{
+    public HubClaimAdmissionDeferredException() : base("Matching claim deferred while PostgreSQL claim capacity is occupied") { }
+}
 public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long ActiveDbConnections,
     long ReadyTasks, long LeasedTasks, long DeadTasks);
 
@@ -46,18 +56,53 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Unlike a global workflow lock, this only limits speculative claim SQL.
     private readonly SemaphoreSlim _claimGate;
     private readonly bool _claimAdmissionEnabled;
+    // Demand-aware mode leaves only a small number of claims waiting behind
+    // active SQL. Extra event-matched claims stay in memory, preserving hints.
+    // This never throttles completion/heartbeat/failure database operations.
+    private readonly bool _demandAwareAdmissionEnabled;
+    private readonly SemaphoreSlim _claimWaitSlots;
+    // Opt-in: atomically lease batches of tasks without any resource constraints.
+    // Constrained tasks retain the original task -> resource row lock path.
+    private readonly bool _unconstrainedBatchClaimsEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
-    public HubTaskStore(string connectionString, int maxPoolSize = 12)
+    public HubTaskStore(string connectionString, int maxPoolSize = 12,
+        bool? enableUnconstrainedBatchClaims = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
-        _claimGate = new SemaphoreSlim(Math.Max(1, maxPoolSize / 4));
-        _claimAdmissionEnabled =
+        var admissionMode = Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MODE");
+        _demandAwareAdmissionEnabled = string.Equals(admissionMode, "demand",
+            StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(admissionMode) &&
+            admissionMode is not ("queue" or "QUEUE" or "Queue") &&
+            !_demandAwareAdmissionEnabled)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_MODE must be queue or demand");
+
+        // A shared data source is used for claims and completions. Reserve at
+        // least one, normally four, pooled connections for non-claim traffic.
+        var effectivePoolSize = Math.Clamp(maxPoolSize, 1, 100);
+        var reservedConnections = Math.Min(4, Math.Max(1, effectivePoolSize - 1));
+        var maximumClaimConnections = Math.Max(1, effectivePoolSize - reservedConnections);
+        var configuredLimit = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_LIMIT"),
+            out var claimLimit) ? claimLimit : Math.Max(1, effectivePoolSize / 4);
+        if (configuredLimit < 1)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_LIMIT must be positive");
+        _claimGate = new SemaphoreSlim(Math.Clamp(configuredLimit, 1, maximumClaimConnections));
+        var maxQueued = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS"),
+            out var maxWaiting) ? maxWaiting : 1;
+        if (maxQueued is < 0 or > 128)
+            throw new ArgumentException("WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS must be 0..128");
+        _claimWaitSlots = new SemaphoreSlim(maxQueued, Math.Max(1, maxQueued));
+        _claimAdmissionEnabled = _demandAwareAdmissionEnabled ||
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
+        _unconstrainedBatchClaimsEnabled = enableUnconstrainedBatchClaims ??
+            (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -195,7 +240,8 @@ public sealed class HubTaskStore : IAsyncDisposable
     public async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
         int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null,
-        int? matchingPartition = null, int? matchingPartitionCount = null)
+        int? matchingPartition = null, int? matchingPartitionCount = null,
+        bool deferWhenBusy = false)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
@@ -216,6 +262,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         span?.SetTag("matching.partition_count", matchCount);
 
         var gateAcquired = false;
+        var queuedSlotAcquired = false;
         try
         {
             if (_claimAdmissionEnabled)
@@ -225,8 +272,39 @@ public sealed class HubTaskStore : IAsyncDisposable
                 {
                     admission?.SetTag("matching.partition", matchPartition);
                     admission?.SetTag("matching.partition_count", matchCount);
-                    await _claimGate.WaitAsync(ct);
-                    gateAcquired = true;
+                    if (_demandAwareAdmissionEnabled && deferWhenBusy)
+                    {
+                        if (_claimGate.Wait(0))
+                            gateAcquired = true;
+                        else if (_claimWaitSlots.Wait(0))
+                        {
+                            queuedSlotAcquired = true;
+                            HubTelemetry.ClaimAdmissionQueued.Add(1);
+                            try
+                            {
+                                await _claimGate.WaitAsync(ct);
+                                gateAcquired = true;
+                            }
+                            finally
+                            {
+                                HubTelemetry.ClaimAdmissionQueued.Add(-1);
+                                _claimWaitSlots.Release();
+                                queuedSlotAcquired = false;
+                            }
+                        }
+                        else
+                        {
+                            HubTelemetry.ClaimAdmissionDeferred.Add(1);
+                            admission?.SetTag("admission.deferred", true);
+                            throw new HubClaimAdmissionDeferredException();
+                        }
+                    }
+                    else
+                    {
+                        await _claimGate.WaitAsync(ct);
+                        gateAcquired = true;
+                    }
+                    HubTelemetry.ClaimAdmissionActive.Add(1);
                     var waitSeconds = Stopwatch.GetElapsedTime(waitStarted).TotalSeconds;
                     admission?.SetTag("admission.wait_seconds", waitSeconds);
                     span?.SetTag("claim.admission_wait_seconds", waitSeconds);
@@ -251,7 +329,27 @@ public sealed class HubTaskStore : IAsyncDisposable
         var connectionWaitSeconds = Stopwatch.GetElapsedTime(connectionStarted).TotalSeconds;
         HubTelemetry.ClaimConnectionWait.Record(connectionWaitSeconds);
         span?.SetTag("db.connection_acquire_seconds", connectionWaitSeconds);
-        for (var batch = 0; batch < maxTasks; batch++)
+        if (_unconstrainedBatchClaimsEnabled)
+        {
+            // Keep all existing filtering, lease epochs, attempt closure and
+            // native/workflow claim events in one fenced PostgreSQL transaction.
+            // The legacy path then fills any remaining slots, including all
+            // resource-constrained work (FIFO / capacity permits).
+            var batchLeases = await ClaimUnconstrainedBatchAsync(db, workerId,
+                hubs, supported, pins, maxTasks, lease, matchPartition, matchCount, ct);
+            results.AddRange(batchLeases);
+            span?.SetTag("tasks.unconstrained_batch_claimed", batchLeases.Count);
+        }
+        var initialBatchCount = results.Count;
+        if (_unconstrainedBatchClaimsEnabled)
+        {
+            var batchOutcome = initialBatchCount == maxTasks ? "full" :
+                initialBatchCount == 0 ? "empty" : "partial";
+            HubTelemetry.ClaimBatchOutcome.Add(1,
+                new KeyValuePair<string, object?>("outcome", batchOutcome));
+        }
+        var fallbackStarted = Stopwatch.GetTimestamp();
+        for (var batch = results.Count; batch < maxTasks; batch++)
         {
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();
@@ -469,6 +567,11 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(found.HubId),
                 HubTelemetry.ActivityTag(found.TaskType));
         }
+        if (_unconstrainedBatchClaimsEnabled && initialBatchCount < maxTasks)
+            HubTelemetry.ClaimLegacyFallbackDuration.Record(
+                Stopwatch.GetElapsedTime(fallbackStarted).TotalSeconds,
+                new KeyValuePair<string, object?>("batch_result",
+                    initialBatchCount == 0 ? "empty" : "partial"));
         var outcome = results.Count == 0 ? "empty" : "claimed";
         // Stable process-level label separates the two benchmark modes without
         // cardinality from hubs, workflow IDs or worker IDs.
@@ -477,10 +580,12 @@ public sealed class HubTaskStore : IAsyncDisposable
             Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") == "0" ? "legacy" : "batch";
         var modeTag = new KeyValuePair<string, object?>("history_mode", mode);
         var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
+        var claimStrategyTag = new KeyValuePair<string, object?>("claim_strategy",
+            _unconstrainedBatchClaimsEnabled ? "batch" : "legacy");
         HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
-            outcomeTag, modeTag);
-        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag);
-        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag);
+            outcomeTag, modeTag, claimStrategyTag);
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag);
+        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag, claimStrategyTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         span?.SetTag("tasks.claim_amplification", results.Count == 0 ? scannedCandidates : (double)scannedCandidates / results.Count);
@@ -488,8 +593,155 @@ public sealed class HubTaskStore : IAsyncDisposable
         }
         finally
         {
-            if (gateAcquired) _claimGate.Release();
+            if (queuedSlotAcquired)
+            {
+                HubTelemetry.ClaimAdmissionQueued.Add(-1);
+                _claimWaitSlots.Release();
+            }
+            if (gateAcquired)
+            {
+                HubTelemetry.ClaimAdmissionActive.Add(-1);
+                _claimGate.Release();
+            }
         }
+    }
+
+    /// <summary>
+    /// Single-round-trip row selection and lease update for tasks with NO
+    /// hub_task_constraint rows. The SQL must exclude constrained tasks before
+    /// SKIP LOCKED, otherwise resource FIFO/capacity could be bypassed.
+    /// Nothing about this path changes PostgreSQL fencing or task eligibility.
+    /// </summary>
+    private async Task<IReadOnlyList<HubLeasedTask>> ClaimUnconstrainedBatchAsync(
+        NpgsqlConnection db, string workerId, IReadOnlyList<string> hubs,
+        string[] supported, string? pins, int maxTasks, TimeSpan lease,
+        int matchingPartition, int matchingCount, CancellationToken ct)
+    {
+        var started = Stopwatch.GetTimestamp();
+        await using var tx = await db.BeginTransactionAsync(ct);
+        var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
+        await using (var command = new NpgsqlCommand("""
+            WITH candidates AS MATERIALIZED (
+                SELECT t.id
+                FROM wfc_scale.hub_task t
+                WHERE t.hub_id = ANY(@hubs)
+                  AND (@matchCount=1 OR t.partition_id % @matchCount=@matchPartition)
+                  AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
+                  AND t.attempts < t.max_attempts
+                  AND ((t.state=0 AND t.due_at<=now()) OR
+                       (t.state=1 AND t.lease_until<now()))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM wfc_scale.hub_workflow w
+                      WHERE w.id=t.workflow_id AND w.execution_mode='native'
+                        AND w.native_status<>'Runnable')
+                  AND (t.task_type NOT IN ('__workflow__','__native_workflow__')
+                       OR @pins IS NULL OR EXISTS (
+                           SELECT 1 FROM wfc_scale.hub_workflow w,
+                               jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                           WHERE w.id=t.workflow_id AND w.hub_id=p.hub
+                             AND w.definition_id=p.definition AND w.definition_version=p.version))
+                ORDER BY t.sequence
+                LIMIT @limit
+                FOR UPDATE OF t SKIP LOCKED
+            )
+            UPDATE wfc_scale.hub_task t
+            SET state=1, owner=@owner, last_owner=@owner, epoch=t.epoch+1,
+                attempts=t.attempts+1, lease_until=now()+@lease, updated_at=now()
+            FROM candidates c WHERE t.id=c.id
+            RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
+                      t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
+                      COALESCE(t.workflow_step,t.native_step_id)
+            """, db, tx))
+        {
+            command.Parameters.AddWithValue("hubs", hubs.ToArray());
+            command.Parameters.AddWithValue("matchCount", matchingCount);
+            command.Parameters.AddWithValue("matchPartition", matchingPartition);
+            command.Parameters.AddWithValue("types", supported);
+            command.Parameters.Add("pins", NpgsqlDbType.Jsonb).Value =
+                (object?)pins ?? DBNull.Value;
+            command.Parameters.AddWithValue("limit", maxTasks);
+            command.Parameters.AddWithValue("owner", workerId);
+            command.Parameters.Add("lease", NpgsqlDbType.Interval).Value = lease;
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var workflow = reader.IsDBNull(5) ? (Guid?)null : reader.GetGuid(5);
+                var leased = new HubLeasedTask(
+                    reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2),
+                    reader.GetString(3), reader.GetInt32(4), workflow,
+                    JsonDocument.Parse(reader.GetString(6)).RootElement.Clone(),
+                    reader.GetInt64(7), reader.GetInt32(8), reader.GetDateTime(9));
+                claimed.Add((leased, workflow.HasValue && !reader.IsDBNull(10)));
+            }
+        }
+
+        if (claimed.Count == 0)
+        {
+            await tx.CommitAsync(ct);
+            HubTelemetry.ClaimUnconstrainedBatchCount.Record(0);
+            HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalSeconds);
+            return Array.Empty<HubLeasedTask>();
+        }
+
+        // Preserve exactly the same attempt lifecycle as the legacy claim:
+        // close the previous expired attempt, then append the new epoch.
+        var stepTaskIds = claimed.Where(c => c.HasStep).Select(c => c.Lease.Id).ToArray();
+        if (stepTaskIds.Length > 0)
+        {
+            await using (var close = new NpgsqlCommand("""
+                UPDATE wfc_scale.hub_task_attempt
+                SET finished_at=clock_timestamp(), outcome='LeaseExpired'
+                WHERE task_id=ANY(@ids) AND finished_at IS NULL
+                """, db, tx))
+            {
+                close.Parameters.AddWithValue("ids", stepTaskIds);
+                await close.ExecuteNonQueryAsync(ct);
+            }
+            await using (var attempts = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task_attempt
+                    (task_id,epoch,workflow_id,step_index,attempt_number,worker_id)
+                SELECT t.id,t.epoch,t.workflow_id,
+                       COALESCE(t.workflow_step,t.native_step_id),t.attempts,@worker
+                FROM wfc_scale.hub_task t WHERE t.id=ANY(@ids)
+                """, db, tx))
+            {
+                attempts.Parameters.AddWithValue("ids", stepTaskIds);
+                attempts.Parameters.AddWithValue("worker", workerId);
+                await attempts.ExecuteNonQueryAsync(ct);
+            }
+        }
+
+        var workflowTaskIds = claimed.Where(c =>
+            c.Lease.WorkflowId.HasValue &&
+            c.Lease.TaskType is "__workflow__" or "__native_workflow__")
+            .Select(c => c.Lease.Id).ToArray();
+        if (workflowTaskIds.Length > 0)
+        {
+            await using var journal = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_workflow_event
+                    (workflow_id,step_index,task_id,activity_type,event_type,payload)
+                SELECT w.id,w.next_step,t.id,t.task_type,'WorkflowTaskClaimed',
+                       jsonb_build_object('worker',@worker,'epoch',t.epoch)
+                FROM wfc_scale.hub_task t
+                JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+                WHERE t.id=ANY(@ids)
+                """, db, tx);
+            journal.Parameters.AddWithValue("ids", workflowTaskIds);
+            journal.Parameters.AddWithValue("worker", workerId);
+            await journal.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        HubTelemetry.ClaimUnconstrainedBatchCount.Record(claimed.Count);
+        HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds);
+        foreach (var item in claimed)
+            HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(item.Lease.HubId),
+                HubTelemetry.ActivityTag(item.Lease.TaskType));
+        return claimed.Select(item => item.Lease).ToArray();
     }
 
     public async Task<bool> IsManagedWorkflowStepAsync(Guid id, CancellationToken ct)
@@ -691,5 +943,6 @@ public sealed class HubTaskStore : IAsyncDisposable
     {
         await _dataSource.DisposeAsync();
         _claimGate.Dispose();
+        _claimWaitSlots.Dispose();
     }
 }
