@@ -78,6 +78,12 @@ public static class HubTelemetry
         Meter.CreateHistogram<int>("workflow_hub_claim_unconstrained_batch_count", "{task}");
     public static readonly Histogram<double> ClaimUnconstrainedBatchDuration =
         Meter.CreateHistogram<double>("workflow_hub_claim_unconstrained_batch_duration_seconds", "s");
+    // An extra legacy claim scan after an empty/partial batch can dominate
+    // high-cardinality matching workloads. Labels are strictly bounded.
+    public static readonly Counter<long> ClaimBatchOutcome =
+        Meter.CreateCounter<long>("workflow_hub_claim_batch_outcome", "{claim}");
+    public static readonly Histogram<double> ClaimLegacyFallbackDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_legacy_fallback_duration_seconds", "s");
     public static readonly Histogram<double> StoreOperationDuration =
         Meter.CreateHistogram<double>("workflow_hub_store_duration_seconds", "s");
     public static readonly Counter<long> SseNotifications =
