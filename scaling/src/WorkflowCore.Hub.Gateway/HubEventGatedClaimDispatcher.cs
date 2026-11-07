@@ -241,22 +241,48 @@ public sealed class HubEventGatedClaimDispatcher
                             leases.Count > 0 ? "leased" : "empty"));
                     completed = true;
                 }
+                catch (HubClaimAdmissionDeferredException)
+                {
+                    // SQL capacity is busy; no task has been leased. Keep the
+                    // hint and yield this shard briefly to let completions and
+                    // other in-flight claim transactions finish.
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(
+                            60 + Random.Shared.Next(40)), deadline.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Worker long-poll timeout: retain hint for the next poller.
+                    }
+                }
                 finally
                 {
                     lock (_gate)
                     {
                         var lane = _lanes[waiter.Key];
                         lane.Claiming = false;
+                        if (!completed && work is Hint unconsumed)
+                        {
+                            // A rejected/cancelled claim never established
+                            // whether work was available. Do NOT discard the
+                            // readiness hint or a stranded task might wait
+                            // until the next catch-up probe.
+                            lane.Pending.Add(unconsumed);
+                        }
                         if (completed && leases.Count > 0)
                         {
-                            // Exactly one follow-up probe per capability to
-                            // drain tasks left behind by a successful batch.
-                            foreach (var task in leases)
-                                lane.Pending.Add(new Hint(task.TaskType, task.Version));
+                            // A partial fill is evidence that this particular
+                            // capability may have drained its ready backlog.
+                            // Only a full batch justifies an eager re-probe;
+                            // permit-release signals and catch-up scans still
+                            // handle eligibility changes.
+                            if (leases.Count >= request.MaxTasks)
+                                foreach (var task in leases)
+                                    lane.Pending.Add(new Hint(task.TaskType, task.Version));
                         }
-                        // An unsuccessful claim consumes its hint; a new
-                        // task/permit signal is needed for another DB call.
-                        // Errors recover on the periodic catch-up sweep.
+                        // A completed empty claim consumes the current hint.
+                        // A deferred/incomplete claim retains it for retry.
                         WakeOne(lane);
                     }
                 }
