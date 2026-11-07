@@ -14,6 +14,8 @@ export type HubTraceAttempt = {
   finishedAt: string | null;
   outcome: "Leased" | "Completed" | "RetryScheduled" | "Failed" | "LeaseExpired" | "Cancelled";
   source?: "lease" | "native-step";
+  traceId?: string | null;
+  spanId?: string | null;
 };
 export type HubTraceStep = {
   stepIndex: number;
@@ -54,14 +56,29 @@ const attemptsTone: Record<HubTraceAttempt["outcome"], {
 };
 
 export function HubTraceWaterfall({
-  workflow, trace, history, selectedStep, onSelectStep,
+  workflow, trace, history, selectedStep, onSelectStep, grafana,
 }: {
   workflow: WaterfallWorkflow;
   trace: HubTraceStep[];
   history: HubTraceEvent[];
+  grafana?: { url: string | null; tempoUid: string };
   selectedStep: number;
   onSelectStep: (step: number) => void;
 }) {
+  const tempoLink = (traceId: string | null | undefined) => {
+    if (!traceId || !/^[0-9a-f]{32}$/i.test(traceId) || !grafana?.url) return null;
+    try {
+      const base = new URL(grafana.url);
+      if (!["http:", "https:"].includes(base.protocol)) return null;
+      base.pathname = base.pathname.replace(/\\/$/, "") + "/explore";
+      base.searchParams.set("left", JSON.stringify({
+        datasource: grafana.tempoUid,
+        queries: [{ refId: "A", queryType: "traceId", query: traceId }],
+        range: { from: "now-24h", to: "now" },
+      }));
+      return base.toString();
+    } catch { return null; }
+  };
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [showQueue, setShowQueue] = useState(true);
   const [zoom, setZoom] = useState(1);
@@ -270,6 +287,17 @@ export function HubTraceWaterfall({
                     <p className="mt-1 font-medium">{formatTime(attempt.finishedAt)}</p></div>
                   <div><p className="text-muted-foreground">Fence epoch</p>
                     <p className="mt-1 font-medium">{attempt.epoch} · {shortId(step.taskId)}</p></div>
+                  {attempt.traceId && <div className="col-span-2 lg:col-span-4">
+                    <p className="text-muted-foreground">OpenTelemetry correlation</p>
+                    <p className="mt-1 break-all font-mono">{attempt.traceId}
+                      {attempt.spanId && <span className="ml-2 text-muted-foreground">span {attempt.spanId}</span>}
+                    </p>
+                    {tempoLink(attempt.traceId) && <a href={tempoLink(attempt.traceId)!}
+                      target="_blank" rel="noopener noreferrer"
+                      className="mt-1 inline-block font-medium text-blue-600 underline dark:text-blue-400">
+                      Open trace in Grafana Tempo
+                    </a>}
+                  </div>}
                 </div>}
               </div>;
             })}
