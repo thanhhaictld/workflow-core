@@ -201,7 +201,7 @@ def main() -> None:
         # Responsive shutdown without adding a busy loop or another SQL poll.
         until = time.monotonic() + args.interval
         while running and time.monotonic() < until:
-            time.sleep(min(0.2, until - time.monotonic()))
+            time.sleep(max(0.0, min(0.2, until - time.monotonic())))
 
     # Final query captures counter deltas even when the last Docker sample was
     # a few seconds earlier. SQL text itself is NEVER returned.
