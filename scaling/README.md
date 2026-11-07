@@ -27,6 +27,8 @@ The `scaling/src` projects reference original Workflow Core assemblies from
 are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 
 
+> **Current Hub architecture:** [As-built source-grounded Hub / native workflow architecture](docs/current-hub-runtime-architecture.md) (system, components, sequences, DB model, matching, traces, performance and production gaps).
+>
 > **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
 
 For REST/SSE execution through a generic Hub, use the combined
