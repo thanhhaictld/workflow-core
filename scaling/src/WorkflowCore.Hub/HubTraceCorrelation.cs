@@ -29,14 +29,17 @@ public static class HubTraceCorrelation
             DateTime.UtcNow - task.CreatedAt > MaxSegmentAge;
         var split = retry || longWait;
 
-        // The worker runs outside the HTTP claim span. Starting a fresh trace
-        // here is intentional; Tempo does not merge linked traces into one tree.
+        // Detached execution must not accidentally inherit an ambient polling
+        // span. Explicitly clear it for a new linked segment or root.
+        var ambient = Activity.Current;
+        if (split || !hasOrigin) Activity.Current = null;
         Activity? span = hasOrigin && split
             ? HubTelemetry.Traces.StartActivity(name, ActivityKind.Consumer,
                 default(ActivityContext), links: [new ActivityLink(origin)])
             : hasOrigin
                 ? HubTelemetry.Traces.StartActivity(name, ActivityKind.Consumer, origin)
                 : HubTelemetry.Traces.StartActivity(name, ActivityKind.Consumer);
+        if (span is null && (split || !hasOrigin)) Activity.Current = ambient;
         span?.SetTag("workflow.trace_segment", !hasOrigin ? "new" :
             retry ? "linked_retry" : longWait ? "linked_wait" : "continued");
         return span;
