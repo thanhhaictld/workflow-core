@@ -105,7 +105,7 @@ flowchart TB
       POLICY["B4 — Resource permits + FIFO\nintentional blocking + repeated checks"]
       READY["PostgreSQL LISTEN/NOTIFY + recovery"]
       SCHED["Embedded timer scheduler"]
-      WFSTORE["Native workflow state + revisioned commit"]
+      WFSTORE["B5 — Workflow orchestration / native commit\np99 stage to activity creation 5.146 s"]
       API --> OWN
       OWN --> MATCH
       MATCH --> ADMIT
@@ -130,7 +130,7 @@ flowchart TB
     classDef suspect fill:#fff4d6,stroke:#d97706,color:#7c2d12,stroke-width:2px
     classDef neutral fill:#eef2f6,stroke:#64748b,color:#1f2937
     class ADMIT,MATCH measured
-    class CAND,POLICY suspect
+    class CAND,POLICY,WFSTORE suspect
     class DB suspect
 ```
 
@@ -142,7 +142,7 @@ flowchart TB
 | **B2 — confirmed wasted work** | `HubTaskMatcher`, `HubEventGatedClaimDispatcher`, legacy/adaptive claim fallback | **2,813 claim RPCs / 1,632 empty (58%)** across the event-gated six-scenario OTel archive, for 2,400 leased tasks | Counts cover **both matching and adaptive paths**; separate metric by lane/shard/outcome to assign blame precisely. Capability and FIFO-successor readiness could reduce redundant drains |
 | **B3 — source-supported candidate-work amplifier** | `HubTaskStore.ClaimAsync`: selects up to **96** candidates and opens task/permit transactions repeatedly | Per-candidate SQL and `FOR UPDATE SKIP LOCKED` observed in source; earlier forensic report found first candidate query p95 about **29 ms**, much less than end-to-end successful claim waits | Workload-specific contribution unproven. Measure candidate rows scanned, DB reads and time per successful lease; try atomic **unordered-only** batch claim |
 | **B4 — some intentional serialization** | `hub_resource`, `hub_task_constraint`, `PartitionSerial` / `KeyedFifo` | Event-gated **16-processor** durable timeline p99 activity queue **4.665 s partition**, **3.604 s keyed** | Queue time mixes required FIFO resource waiting with matching/claim overhead. Split `eligible_at → claimed_at` from `created_at → eligible_at` before weakening policy |
-| **Additional orchestration latency** | Native worker decision + Hub native commit + workflow wake | Event-gated 16-processor unordered p99 initial processing to activity creation **5.146 s** | Durable stage includes multiple sub-operations. Trace native execution vs HTTP commit vs DB transaction independently |
+| **B5 — orchestration-stage latency** | Native worker decision + Hub native commit + workflow wake | Event-gated 16-processor unordered p99 initial processing to activity creation **5.146 s** | Durable stage includes multiple sub-operations. Trace native execution vs HTTP commit vs DB transaction independently |
 | **Shared capacity — not proven bottleneck** | One shared PostgreSQL primary; per-Hub Npgsql pools; all containers on a **four-vCPU** CI runner | 8→16 processors: unordered 9.59→8.70 workflows/sec, partition 10.57→10.74, keyed 10.33→13.73 | Sublinear scaling observed, but **not proof of PostgreSQL CPU, lock or WAL saturation**. Profile `pg_stat_activity`/waits, CPU, IO, connections and repeat on dedicated compute |
 | **Matching coverage gap** | `HubRuntimeWorker`: uses long poll only for single-Hub capability sets | Mixed-Hub worker capabilities use adaptive `tasks:claim` rather than sharded matching | Confirmed in code, throughput impact not separately isolated; benchmark per-Hub worker lanes before rollout |
 
