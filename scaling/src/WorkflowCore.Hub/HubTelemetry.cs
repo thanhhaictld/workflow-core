@@ -74,6 +74,10 @@ public static class HubTelemetry
         Meter.CreateHistogram<int>("workflow_hub_claim_candidates_scanned", "{task}");
     public static readonly Histogram<int> ClaimReturnedCount =
         Meter.CreateHistogram<int>("workflow_hub_claim_tasks_returned", "{task}");
+    public static readonly Histogram<int> ClaimUnconstrainedBatchCount =
+        Meter.CreateHistogram<int>("workflow_hub_claim_unconstrained_batch_count", "{task}");
+    public static readonly Histogram<double> ClaimUnconstrainedBatchDuration =
+        Meter.CreateHistogram<double>("workflow_hub_claim_unconstrained_batch_duration_seconds", "s");
     public static readonly Histogram<double> StoreOperationDuration =
         Meter.CreateHistogram<double>("workflow_hub_store_duration_seconds", "s");
     public static readonly Counter<long> SseNotifications =
