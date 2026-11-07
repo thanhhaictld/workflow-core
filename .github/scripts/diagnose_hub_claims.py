@@ -49,7 +49,13 @@ def prom_snapshot() -> dict[str, float]:
             return {"_prom_error": -1.0}
         metrics: dict[str, float] = collections.defaultdict(float)
         for series in result["data"]["result"]:
-            metrics[series["metric"]["__name__"]] += float(series["value"][1])
+            labels = series["metric"]
+            label_suffix = ",".join(key + "=" + str(labels[key])
+                                    for key in ("outcome", "claim_strategy", "batch_result")
+                                    if key in labels)
+            metric_key = labels["__name__"] + (
+                "{" + label_suffix + "}" if label_suffix else "")
+            metrics[metric_key] += float(series["value"][1])
         return dict(metrics)
     except (OSError, ValueError, KeyError):
         return {"_prom_error": -1.0}
