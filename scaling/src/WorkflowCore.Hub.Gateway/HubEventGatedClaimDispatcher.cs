@@ -167,6 +167,8 @@ public sealed class HubEventGatedClaimDispatcher
         if (request.Hubs is not { Length: 1 })
             throw new ArgumentException("One Hub required for matching");
 
+        var pollStarted = Stopwatch.GetTimestamp();
+        var pollOutcome = "error";
         var waiter = new Waiter(request);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_pollTimeout);
@@ -284,16 +286,24 @@ public sealed class HubEventGatedClaimDispatcher
                     }
                 }
 
-                if (leases.Count > 0) return leases;
+                if (leases.Count > 0)
+                {
+                    pollOutcome = "leased";
+                    return leases;
+                }
                 // Deferral can schedule another wake on this same waiter even
                 // after its short poll deadline. Do not process that wake with
                 // an expired budget: the retained hint belongs to next poller.
                 if (deadline.IsCancellationRequested) break;
             }
+            pollOutcome = "empty";
             return Array.Empty<HubLeasedTask>();
         }
         finally
         {
+            HubTelemetry.MatchingPollDuration.Record(
+                Stopwatch.GetElapsedTime(pollStarted).TotalSeconds,
+                new KeyValuePair<string, object?>("outcome", pollOutcome));
             lock (_gate)
             {
                 if (_lanes.TryGetValue(waiter.Key, out var lane))
