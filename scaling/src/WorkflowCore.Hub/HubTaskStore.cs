@@ -520,6 +520,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         string[] supported, string? pins, int maxTasks, TimeSpan lease,
         int matchingPartition, int matchingCount, CancellationToken ct)
     {
+        var started = Stopwatch.GetTimestamp();
         await using var tx = await db.BeginTransactionAsync(ct);
         var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
         await using (var command = new NpgsqlCommand("""
@@ -582,6 +583,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         if (claimed.Count == 0)
         {
             await tx.CommitAsync(ct);
+            HubTelemetry.ClaimUnconstrainedBatchCount.Record(0);
+            HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalSeconds);
             return Array.Empty<HubLeasedTask>();
         }
 
@@ -634,6 +638,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         }
 
         await tx.CommitAsync(ct);
+        HubTelemetry.ClaimUnconstrainedBatchCount.Record(claimed.Count);
+        HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds);
         foreach (var item in claimed)
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(item.Lease.HubId),
                 HubTelemetry.ActivityTag(item.Lease.TaskType));
