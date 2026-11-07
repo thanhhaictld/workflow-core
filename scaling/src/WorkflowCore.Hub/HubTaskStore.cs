@@ -64,10 +64,14 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Opt-in: atomically lease batches of tasks without any resource constraints.
     // Constrained tasks retain the original task -> resource row lock path.
     private readonly bool _unconstrainedBatchClaimsEnabled;
+    // Optional SQL prefilter keeps blocked strict-FIFO successors out of the
+    // bounded claim candidate window. Admission is still rechecked under locks.
+    private readonly bool _fifoHeadPrefilterEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
-        bool? enableUnconstrainedBatchClaims = null)
+        bool? enableUnconstrainedBatchClaims = null,
+        bool? enableFifoHeadPrefilter = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -103,6 +107,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
         _unconstrainedBatchClaimsEnabled = enableUnconstrainedBatchClaims ??
             (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
+        _fifoHeadPrefilterEnabled = enableFifoHeadPrefilter ??
+            (Environment.GetEnvironmentVariable("WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED") is "true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -260,6 +266,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         var matchCount = matchingPartitionCount ?? 1;
         span?.SetTag("matching.partition", matchingPartition);
         span?.SetTag("matching.partition_count", matchCount);
+        span?.SetTag("claim.fifo_head_prefilter", _fifoHeadPrefilterEnabled);
 
         var gateAcquired = false;
         var queuedSlotAcquired = false;
@@ -354,8 +361,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
-                SELECT id FROM wfc_scale.hub_task
-                WHERE hub_id = ANY(@hubs)
+                SELECT t.id FROM wfc_scale.hub_task t
+                WHERE t.hub_id = ANY(@hubs)
                   AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
                       WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
@@ -368,12 +375,23 @@ public sealed class HubTaskStore : IAsyncDisposable
                   AND attempts < max_attempts
                   AND ((state = 0 AND due_at <= now()) OR
                        (state = 1 AND lease_until < now()))
+                  AND (NOT @fifoHeadFilter OR NOT EXISTS (
+                    SELECT 1 FROM wfc_scale.hub_task_constraint c
+                    JOIN wfc_scale.hub_resource r
+                      ON r.resource_key = c.resource_key AND r.strict_fifo
+                    JOIN wfc_scale.hub_task_constraint previous
+                      ON previous.resource_key = c.resource_key
+                    JOIN wfc_scale.hub_task earlier ON earlier.id = previous.task_id
+                    WHERE c.task_id = t.id AND earlier.sequence < t.sequence
+                      AND earlier.state IN (0, 1)
+                  ))
                 ORDER BY sequence LIMIT 96
                 """, db))
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
                 candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
                 candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
+                candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled);
                 candidateQuery.Parameters.AddWithValue("types", supported);
                 candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
@@ -584,7 +602,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             _unconstrainedBatchClaimsEnabled ? "batch" : "legacy");
         HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
             outcomeTag, modeTag, claimStrategyTag);
-        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag);
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag,
+            new KeyValuePair<string, object?>("fifo_head_prefilter", _fifoHeadPrefilterEnabled));
         HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag, claimStrategyTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
