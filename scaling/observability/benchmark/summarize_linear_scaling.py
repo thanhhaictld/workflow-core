@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize fixed-load 1/2/4/8/16 worker scaling from persisted k6 JSON.
+"""Summarize fixed-load 1/2/4/8/16 worker scaling from verified run JSON.
 
 CI runners are CPU-constrained; this report is a regression signal, NOT a
 dedicated-host linear scalability claim. Throughput is server-side workflow
@@ -21,23 +21,26 @@ def main() -> None:
     args = parser.parse_args()
 
     rows = []
-    for path in sorted(args.input.glob("k6-*-*.json")):
+    # verify_ordering.py writes the canonical, DB-validated workflow metrics.
+    # k6-*.json is the generic k6 metrics summary and does NOT contain count,
+    # completed, serverWorkflowsPerSecond, or workflowP95Ms at its root.
+    for path in sorted(args.input.glob("verify-*-*.json")):
         parts = path.stem.split("-")
         if len(parts) != 3:
             continue
         workers, mode = int(parts[1]), parts[2]
         data = json.loads(path.read_text())
-        count = int(data["count"])
+        count = int(data["workflows"])
         completed = int(data["completed"])
         failed = int(data["failed"])
-        if count != completed or failed != 0:
+        if count != completed or failed != 0 or int(data.get("extraAttempts", 0)) != 0:
             raise SystemExit(f"Incomplete workflow run: {path}: {completed}/{count}, failed={failed}")
         rows.append({
             "variant": args.label,
             "policy": mode,
             "processors": workers,
             "completed": completed,
-            "throughput_workflows_s": round(float(data["serverWorkflowsPerSecond"]), 4),
+            "throughput_workflows_s": round(float(data["throughputWorkflowsPerSecond"]), 4),
             "workflow_p95_ms": round(float(data["workflowP95Ms"]), 2),
             "workflow_p99_ms": round(float(data["workflowP99Ms"]), 2),
         })
