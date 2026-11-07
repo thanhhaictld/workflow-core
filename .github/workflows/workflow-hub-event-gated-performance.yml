@@ -200,6 +200,13 @@ jobs:
           import json, os
           from pathlib import Path
           base=Path("admission-ab-results")
+          # upload-artifact preserves the full relative tree because we also
+          # upload /tmp logs; search beneath each named artifact, not its root.
+          def artifact_file(root, name):
+              matches=list(root.rglob(name))
+              if len(matches) != 1:
+                  raise RuntimeError(f"Expected one {name} under {root}; found {matches}")
+              return matches[0]
           results={}
           for enabled in ("true","false"):
               root=base/f"matching-event-gated-admission-{enabled}"
@@ -208,12 +215,12 @@ jobs:
               d={}
               for processors in (8,16):
                   for mode in ("unordered","partition","keyed"):
-                      path=root/f"timeline-{processors}-{mode}.json"
+                      path=artifact_file(root, f"timeline-{processors}-{mode}.json")
                       report=json.loads(path.read_text())
                       assert report["workflows"] == 100, (enabled,processors,mode,report["workflows"])
                       p=report["latencyByStage"]["total_s"]
                       d[f"{processors}/{mode}"]={"p95":p["p95"],"p99":p["p99"]}
-              ot=json.loads((root/"otel-investigation.json").read_text())
+              ot=json.loads(artifact_file(root, "otel-investigation.json").read_text())
               claims=ot.get("claimSummary",{})
               spans=ot.get("importantSpanDurationsSeconds",{})
               d["claims"]={"total":claims.get("total",0),"empty":claims.get("empty",0),
