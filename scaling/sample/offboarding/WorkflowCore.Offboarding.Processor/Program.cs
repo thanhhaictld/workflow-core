@@ -21,7 +21,16 @@ var registrations = builder.Services.AddHubWorkflowRuntime(options =>
         ? int.TryParse(Environment.GetEnvironmentVariable("ACTIVITY_WORKERS"), out var n) ? n : 8
         : 1;
 });
-registrations.AddWorkflow<OffboardingWorkflow, OffboardingData>("offboarding", partitions: 64);
+// The usual mixed-hub sample intentionally registers offboarding as well as
+// policy workflows. Matching long-poll is selected per worker lane only when
+// all capabilities belong to one Hub, so that mixed sample silently exercises
+// adaptive SSE/claim on the workflow lane. Opt in to a policy-only benchmark
+// to measure true event-gated matching on BOTH workflow and activity lanes.
+var policyOnly = Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ONLY") == "true";
+if (policyOnly && Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ENABLED") != "true")
+    throw new InvalidOperationException("POLICY_BENCHMARK_ONLY requires POLICY_BENCHMARK_ENABLED=true");
+if (!policyOnly)
+    registrations.AddWorkflow<OffboardingWorkflow, OffboardingData>("offboarding", partitions: 64);
 if (Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ENABLED") == "true")
 {
     // Partition is placement, not ordering. Only opted-in activities get permits.
