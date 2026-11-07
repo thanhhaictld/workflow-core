@@ -362,12 +362,17 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         await using(var q=new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task_attempt
-            SET outcome='Completed',finished_at=clock_timestamp()
+            SET outcome='Completed',finished_at=clock_timestamp(),
+                trace_id=@traceId,span_id=@spanId
             WHERE task_id=@id AND epoch=@epoch AND finished_at IS NULL
             """,db,tx))
         {
             q.Parameters.AddWithValue("id",taskId);
             q.Parameters.AddWithValue("epoch",epoch);
+            q.Parameters.Add("traceId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceId ?? DBNull.Value;
+            q.Parameters.Add("spanId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.SpanId ?? DBNull.Value;
             await q.ExecuteNonQueryAsync(ct);
         }
         await using(var q=new NpgsqlCommand("""
@@ -410,8 +415,8 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using var q=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             payload,request_key)
-            VALUES (@id,@hub,@partition,'__workflow__',1,@workflow,'{}'::jsonb,@key)
+             payload,request_key,traceparent,tracestate)
+            VALUES (@id,@hub,@partition,'__workflow__',1,@workflow,'{}'::jsonb,@key,@traceparent,@tracestate)
             ON CONFLICT DO NOTHING RETURNING id
             """,db,tx);
         q.Parameters.AddWithValue("id",Guid.NewGuid());
@@ -419,6 +424,10 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         q.Parameters.AddWithValue("partition",partition);
         q.Parameters.AddWithValue("workflow",workflow);
         q.Parameters.AddWithValue("key","wf:"+workflow.ToString("N")+":r:"+revision);
+        q.Parameters.Add("traceparent", NpgsqlDbType.Text).Value =
+            (object?)HubTraceCorrelation.TraceParent ?? DBNull.Value;
+        q.Parameters.Add("tracestate", NpgsqlDbType.Text).Value =
+            (object?)HubTraceCorrelation.TraceState ?? DBNull.Value;
         var taskId=await q.ExecuteScalarAsync(ct);
         if(taskId is Guid created)
             await JournalAsync(db,tx,workflow,0,created,"__workflow__",
@@ -434,8 +443,8 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using(var insert=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             workflow_step,payload)
-            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload)
+             workflow_step,payload,traceparent,tracestate)
+            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload,@traceparent,@tracestate)
             """,db,tx))
         {
             insert.Parameters.AddWithValue("id",taskId);
@@ -446,6 +455,10 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             insert.Parameters.AddWithValue("workflow",workflow);
             insert.Parameters.Add("step",NpgsqlDbType.Integer).Value=(object?)step??DBNull.Value;
             insert.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
+            insert.Parameters.Add("traceparent", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceParent ?? DBNull.Value;
+            insert.Parameters.Add("tracestate", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceState ?? DBNull.Value;
             await insert.ExecuteNonQueryAsync(ct);
         }
         foreach(var resource in constraints)

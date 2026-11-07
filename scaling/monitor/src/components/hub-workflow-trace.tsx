@@ -49,6 +49,7 @@ type HubDetailResponse = {
   workflow: HubWorkflow;
   history: HubHistory[];
   trace: HubTraceStep[];
+  grafana?: { url: string | null; tempoUid: string };
   definition: HubDefinition | null;
   nativeRuntime: { status: string; revision: number; snapshot: unknown } | null;
 };
@@ -180,7 +181,7 @@ export function HubWorkflowTrace({ workflowId }: { workflowId: string }) {
 
       {tab === "trace" && <>
         <Card className="overflow-hidden">
-          <HubTraceWaterfall workflow={workflow} trace={trace} history={history}
+          <HubTraceWaterfall workflow={workflow} trace={trace} history={history} grafana={detail?.grafana}
             selectedStep={selectedStep} onSelectStep={setSelectedStep}/>
         </Card>
 

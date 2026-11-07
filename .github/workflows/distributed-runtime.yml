@@ -66,6 +66,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/020_hub_trace_correlation.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
@@ -262,6 +263,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/020_hub_trace_correlation.sql
       - name: Build Hub, remote worker and performance harness
         run: |
           dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release

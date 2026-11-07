@@ -344,11 +344,12 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     internal static async Task WakeAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,int partition,CancellationToken ct)
     {
         await Execute(db,tx,"""
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload)
-            SELECT @task,@hub,@partition,'__native_workflow__',1,@id,'{}'::jsonb
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload,traceparent,tracestate)
+            SELECT @task,@hub,@partition,'__native_workflow__',1,@id,'{}'::jsonb,@traceparent,@tracestate
             FROM wfc_scale.hub_workflow WHERE id=@id AND native_status='Runnable'
             ON CONFLICT DO NOTHING
-            """,ct,("task",Guid.NewGuid()),("hub",hub),("partition",partition),("id",id));
+            """,ct,("task",Guid.NewGuid()),("hub",hub),("partition",partition),("id",id),
+                ("traceparent",HubTraceCorrelation.TraceParent),("tracestate",HubTraceCorrelation.TraceState));
     }
 
     private static async Task MatchEvents(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,CancellationToken ct)
@@ -517,9 +518,11 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             """,("result",result.GetRawText()),("task",task),("worker",worker),("epoch",epoch)))
             if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
         await Execute(db,tx,"""
-            UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()
+            UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp(),
+                trace_id=@traceId,span_id=@spanId
             WHERE task_id=@task AND epoch=@epoch AND finished_at IS NULL
-            """,ct,("task",task),("epoch",epoch));
+            """,ct,("task",task),("epoch",epoch),
+            ("traceId",HubTraceCorrelation.TraceId),("spanId",HubTraceCorrelation.SpanId));
         await Execute(db,tx,"""
             INSERT INTO wfc_scale.hub_native_inbox(workflow_id,pointer_id,kind,source_key,payload)
             VALUES(@id,@pointer,'Activity',@dispatch,@result::jsonb) ON CONFLICT DO NOTHING

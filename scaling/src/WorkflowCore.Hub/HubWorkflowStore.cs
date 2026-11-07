@@ -30,7 +30,7 @@ public sealed record HubRecentRun(string RunId, long Total, long Ready, long Run
 public sealed record HubWorkflowTraceAttempt(
     long Epoch, int AttemptNumber, string WorkerId,
     DateTime ClaimedAt, DateTime? FinishedAt, string Outcome,
-    string Source = "lease");
+    string Source = "lease", string? TraceId = null, string? SpanId = null);
 public sealed record HubWorkflowTraceStep(
     int StepIndex, Guid TaskId, string ActivityType, int Version,
     string State, DateTime? ReadyAt,
@@ -165,10 +165,10 @@ public sealed class HubWorkflowStore(
             await using (var task = new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_task
                     (id,hub_id,partition_id,task_type,task_version,workflow_id,
-                     workflow_step,payload,due_at)
+                     workflow_step,payload,due_at,traceparent,tracestate)
                 VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,
                         @payload,CASE WHEN @first THEN now()
-                                      ELSE 'infinity'::timestamptz END)
+                                      ELSE 'infinity'::timestamptz END,@traceparent,@tracestate)
                 """, db, tx))
             {
                 task.Parameters.AddWithValue("id", taskId);
@@ -180,6 +180,10 @@ public sealed class HubWorkflowStore(
                 task.Parameters.AddWithValue("step", step);
                 task.Parameters.AddWithValue("first", step == 0);
                 task.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = input;
+                task.Parameters.Add("traceparent", NpgsqlDbType.Text).Value =
+                    (object?)HubTraceCorrelation.TraceParent ?? DBNull.Value;
+                task.Parameters.Add("tracestate", NpgsqlDbType.Text).Value =
+                    (object?)HubTraceCorrelation.TraceState ?? DBNull.Value;
                 await task.ExecuteNonQueryAsync(ct);
             }
             foreach (var resource in routes[step].Resources)
@@ -243,7 +247,7 @@ public sealed class HubWorkflowStore(
         // as step/result commit. Historic pre-migration tasks can have no row.
         await using (var attempt = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task_attempt
-            SET finished_at=now(),outcome='Completed'
+            SET finished_at=now(),outcome='Completed',trace_id=@traceId,span_id=@spanId
             WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
               AND finished_at IS NULL
             """, db, tx))
@@ -251,6 +255,10 @@ public sealed class HubWorkflowStore(
             attempt.Parameters.AddWithValue("id", taskId);
             attempt.Parameters.AddWithValue("epoch", epoch);
             attempt.Parameters.AddWithValue("owner", owner);
+            attempt.Parameters.Add("traceId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceId ?? DBNull.Value;
+            attempt.Parameters.Add("spanId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.SpanId ?? DBNull.Value;
             await attempt.ExecuteNonQueryAsync(ct);
         }
         await using (var progress = new NpgsqlCommand("""
@@ -286,13 +294,18 @@ public sealed class HubWorkflowStore(
         }
         await using (var next = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task
-            SET due_at=now(), updated_at=now()
+            SET due_at=now(), updated_at=now(),
+                traceparent=@traceparent, tracestate=@tracestate
             WHERE workflow_id=@workflow AND workflow_step=@step AND state=0
               AND due_at='infinity'::timestamptz
             """, db, tx))
         {
             next.Parameters.AddWithValue("workflow", task.WorkflowId);
             next.Parameters.AddWithValue("step", task.Step + 1);
+            next.Parameters.Add("traceparent", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceParent ?? DBNull.Value;
+            next.Parameters.Add("tracestate", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceState ?? DBNull.Value;
             await next.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
@@ -340,7 +353,8 @@ public sealed class HubWorkflowStore(
         await using (var attempt = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task_attempt
             SET finished_at=now(),
-                outcome=CASE WHEN @dead THEN 'Failed' ELSE 'RetryScheduled' END
+                outcome=CASE WHEN @dead THEN 'Failed' ELSE 'RetryScheduled' END,
+                trace_id=@traceId,span_id=@spanId
             WHERE task_id=@id AND epoch=@epoch AND worker_id=@owner
               AND finished_at IS NULL
             """, db, tx))
@@ -349,6 +363,10 @@ public sealed class HubWorkflowStore(
             attempt.Parameters.AddWithValue("epoch", epoch);
             attempt.Parameters.AddWithValue("owner", owner);
             attempt.Parameters.AddWithValue("dead", dead);
+            attempt.Parameters.Add("traceId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceId ?? DBNull.Value;
+            attempt.Parameters.Add("spanId", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.SpanId ?? DBNull.Value;
             await attempt.ExecuteNonQueryAsync(ct);
         }
         if (dead)
@@ -440,7 +458,8 @@ public sealed class HubWorkflowStore(
                              AND h.step_index=t.workflow_step-1
                              AND h.event_type='StepCompleted') END AS ready_at,
                    a.epoch,a.attempt_number,a.worker_id,
-                   a.claimed_at,a.finished_at,a.outcome,t.execution_pointer_id,t.dispatch_key
+                   a.claimed_at,a.finished_at,a.outcome,t.execution_pointer_id,t.dispatch_key,
+                   a.trace_id,a.span_id
             FROM wfc_scale.hub_task t
             JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
             LEFT JOIN wfc_scale.hub_task_attempt a ON a.task_id=t.id
@@ -485,7 +504,9 @@ public sealed class HubWorkflowStore(
                 attempts.Add(new(reader.GetInt64(6),reader.GetInt32(7),
                     reader.GetString(8),reader.GetDateTime(9),
                     reader.IsDBNull(10) ? null : reader.GetDateTime(10),
-                    reader.GetString(11)));
+                    reader.GetString(11),"lease",
+                    reader.IsDBNull(14) ? null : reader.GetString(14),
+                    reader.IsDBNull(15) ? null : reader.GetString(15)));
         }
         Flush();
 
@@ -542,7 +563,9 @@ public sealed class HubWorkflowStore(
                             (events.IsDBNull(4)?1:events.GetInt32(4)+1);
                         entry.Attempts.Add(new(epoch,Math.Max(1,number),
                             worker.GetString()??"native",startAt.ToUniversalTime(),
-                            finishAt.ToUniversalTime(),"Completed","native-step"));
+                            finishAt.ToUniversalTime(),"Completed","native-step",
+                            json.TryGetProperty("traceId",out var nativeTrace) ? nativeTrace.GetString() : null,
+                            json.TryGetProperty("spanId",out var nativeSpan) ? nativeSpan.GetString() : null));
                     }
                 }
                 nativeRows[key]=entry;

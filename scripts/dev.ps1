@@ -128,7 +128,8 @@ function Apply-DatabaseSchema {
         '013_activity_policy_revision.sql', '014_hub_work_ready_notifications.sql',
         '015_explicit_activity_ordering.sql', '016_hub_matching_ownership.sql',
         '017_hub_matching_capability_hints.sql',
-        '018_hub_matching_partition_ownership.sql', '019_hub_matching_partition_hints.sql')) {
+        '018_hub_matching_partition_ownership.sql', '019_hub_matching_partition_hints.sql',
+        '020_hub_trace_correlation.sql')) {
         Write-Host "Applying $migration..."
         Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
