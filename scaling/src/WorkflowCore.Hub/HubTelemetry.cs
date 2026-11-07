@@ -129,8 +129,15 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_matching_dispatch_attempts", "{attempt}");
     public static readonly Histogram<double> MatchingDispatchDuration =
         Meter.CreateHistogram<double>("workflow_hub_matching_dispatch_duration_seconds", "s");
+    // Includes in-memory matching wait and deferred SQL admission retries.
+    public static readonly Histogram<double> MatchingPollDuration =
+        Meter.CreateHistogram<double>("workflow_hub_matching_poll_duration_seconds", "s");
     public static readonly Counter<long> WorkerClaimRequests =
         Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
+    // Client-observed claim/poll latency, including long-poll queueing and
+    // HTTP transport. Guardrail against hiding latency by deferring server SQL.
+    public static readonly Histogram<double> WorkerClaimHttpDuration =
+        Meter.CreateHistogram<double>("workflow_hub_worker_claim_http_duration_seconds", "s");
     public static readonly Histogram<double> WorkerEmptyClaimBackoff =
         Meter.CreateHistogram<double>("workflow_hub_worker_empty_claim_backoff_seconds", "s");
 
