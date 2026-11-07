@@ -79,3 +79,33 @@ Average container CPU cores at 16 processors (sampled via Docker, subject to ove
 Run [workflow-hub-fifo-sql-ab.yml](../../.github/workflows/workflow-hub-fifo-sql-ab.yml) on the same runner with **8 processors** and feature-flag sequence OFF → ON → OFF. Verify partition and keyed FIFO ordering each time. Record per-policy throughput/p95, resource/permit SQL calls per workflow and SQL execution time, and compare the ON value to the average OFF control. Reuse the existing `WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED` implementation; do **not** enable it by default yet. Watch for the previously observed 4-processor partition regression and query-plan overhead.
 
 This experiment is intended to determine if filtering blocked FIFO successors reduces speculative resource-row checks; it does not address unordered no-row scans. A future plan/index experiment should capture `EXPLAIN (ANALYZE, BUFFERS)` for the expensive matching SQL under representative backlog and parameter values, rather than guessing an index.
+
+
+## FIFO-head prefilter OFF → ON → OFF — completed
+
+The dedicated [FIFO SQL A/B run 42387790626](https://github.com/thanhhaictld/workflow-core/actions/runs/42387790626) passed all six 200-workflow cohorts with durable ordering checks. The eight-processor topology and PostgreSQL database remained the same between cohorts; both Hubs were recreated between stages so the feature flag was applied consistently.
+
+| Policy | OFF1 WF/s | ON WF/s | OFF2 WF/s | ON / mean OFF | OFF drift |
+|---|---:|---:|---:|---:|---:|
+| Partition FIFO | 6.98 | 11.79 | 10.37 | **1.36x** | **+48.6%** |
+| Keyed FIFO | 9.57 | 5.17 | 9.55 | **0.54x** | **−0.2%** |
+
+| Metric | Partition OFF1 / ON / OFF2 | Keyed OFF1 / ON / OFF2 |
+|---|---|---|
+| Workflow p95 (s) | 26.24 / 13.21 / 15.15 | **20.36 / 34.14 / 20.34** |
+| Policy SQL calls per workflow | 64.57 / 13.57 / 64.16 | 69.19 / 13.64 / 68.61 |
+| Policy SQL execution wall ms/workflow | 237.33 / 100.50 / 59.00 | 35.43 / 26.46 / 44.24 |
+| Candidate-window SQL calls/workflow | 3.79 / 3.90 / 3.40 | 3.27 / 4.00 / 3.33 |
+| Candidate-window query mean execution ms | 0.69 / 1.40 / 0.65 | **0.54 / 1.02 / 0.54** |
+| PostgreSQL sampled CPU cores | 0.39 / 0.52 / 0.54 | 0.53 / 0.30 / 0.67 |
+| Processor fleet sampled CPU cores | 0.87 / 0.72 / 0.62 | 0.68 / **0.26** / 0.63 |
+
+All SQL execution times are cumulative statement wall time, not CPU. Categories are a heuristic based on SQL text inspected inside PostgreSQL; exported artifacts contain fingerprints, not SQL text.
+
+**Decision: reject promotion of the global prefilter flag.** Keyed FIFO ON nearly halves throughput and increases p95 by ~68% against two very stable OFF controls. Although policy-admission SQL calls decrease by approximately 80%, keyed ON candidate-window query cache-block hits rise from ~132k–97k (OFF controls) to ~641k, and CPU usage *decreases* while latency rises. These observations favor an **underutilization/readiness-gap hypothesis** over a saturated PostgreSQL CPU explanation. The cause is not yet proven; no SQL text, execution-trace critical path or per-resource handoff gap was captured. The partition-FIFO improvement is ambiguous because OFF controls drift ~49%.
+
+For keyed FIFO, event-gated matching empty SQL drain counts were approximately 360 (OFF1), **479 (ON)**, 363 (OFF2), despite 442 / 433 / 459 successful drains. This is consistent with more unsuccessful checks per useful lease and an active policy-head wakeup issue, but counters from restarted or reset Hub processes should not be treated as fully reliable unless the restart boundaries are verified.
+
+**Next falsifiable question:** How much time passes between completion of the previous activity for a specific resource key and claiming the next activity for that same key, when the resource still has pending ready work? Using `hub_task_attempt` and each activity's resource key, measure the p50/p95/p99 FIFO handoff gap and number of handoffs >1 s by benchmark stage. Correlate those gaps with generic permit-release NOTIFY, match-hint receipt/forward and event-gated dispatcher empty-claim counts. A higher ON handoff gap would explain lower processor utilization despite fewer SQL resource checks. Keep all lease/fencing and ordering checks intact; do not globally disable generic completion wakeups or bypass strict FIFO.
+
+The head prefilter remains default OFF; it should not be enabled only for keyed or partition policy based on these single-run results. No change to live PostgreSQL connection pool or processor partition ownership is justified.
