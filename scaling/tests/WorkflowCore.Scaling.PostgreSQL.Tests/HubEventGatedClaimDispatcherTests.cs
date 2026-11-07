@@ -221,4 +221,40 @@ public sealed class HubEventGatedClaimDispatcherTests
         Assert.Equal(0, dispatcher.PendingWaiters);
     }
 
+
+    [Fact]
+    public async Task TypedHintScopesMultiCapabilityClaim_WithoutRestrictingGenericRecovery()
+    {
+        static HubClaimRequest MultiCapabilityRequest() =>
+            new("multi-cap-worker", ["test-hub"],
+                [new HubCapability("test-hub", "alpha", 1),
+                 new HubCapability("test-hub", "beta", 1)],
+                MaxTasks: 4, MatchingPartition: 0, MatchingPartitionCount: 4);
+
+        static HubEventGatedClaimDispatcher Create(ConcurrentQueue<string[]> observed) =>
+            new((request, _) =>
+                {
+                    observed.Enqueue(request.Capabilities.Select(c => c.TaskType).ToArray());
+                    return Task.FromResult<IReadOnlyList<HubLeasedTask>>([]);
+                },
+                (_, _) => Task.FromResult(true),
+                sharded: true, partitionCount: 4,
+                pollTimeout: TimeSpan.FromMilliseconds(100),
+                capabilityScopedClaims: true);
+
+        var typed = new ConcurrentQueue<string[]>();
+        var typedDispatcher = Create(typed);
+        typedDispatcher.NotifyReady("test-hub", "beta", 1, 0);
+        await typedDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
+        Assert.True(typed.TryPeek(out var typedCapabilities));
+        Assert.Equal(["beta"], typedCapabilities);
+
+        var generic = new ConcurrentQueue<string[]>();
+        var genericDispatcher = Create(generic);
+        genericDispatcher.NotifyReady("test-hub", null, 0, 0);
+        await genericDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
+        Assert.True(generic.TryPeek(out var recoveryCapabilities));
+        Assert.Equal(["alpha", "beta"], recoveryCapabilities);
+    }
+
 }
