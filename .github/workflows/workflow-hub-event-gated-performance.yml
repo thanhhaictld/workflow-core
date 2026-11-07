@@ -1,4 +1,4 @@
-name: Workflow Hub Event-Gated Matching A/B (3 modes)
+name: Workflow Hub Event-Gated Claim Admission Gate A/B
 
 on:
   pull_request:
@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        claim_strategy: [adaptive, matching, event-gated]
+        gate_enabled: ['true', 'false']
     timeout-minutes: 35
     env:
       COMPOSE: scaling/observability/compose.yaml
@@ -35,13 +35,14 @@ jobs:
       POLICY_BENCH_ACTIVITY_WORKERS: "8"
       OFFBOARD_PROCESSOR_WORKERS: "4"
       COUNT: "100"
-      CLAIM_STRATEGY: ${{ matrix.claim_strategy }}
+      CLAIM_STRATEGY: event-gated-${{ matrix.gate_enabled == 'true' && 'gate-on' || 'gate-off' }}
+      GATE_ENABLED: ${{ matrix.gate_enabled }}
       # Both cases retain all PR #18 optimizations and identical two-Hub resources.
       WFC_HUB_ADAPTIVE_CLAIMS: "true"
-      WFC_HUB_CLAIM_ADMISSION_ENABLED: "true"
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: ${{ matrix.gate_enabled }}
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
-      WFC_HUB_LONG_POLL_ENABLED: ${{ matrix.claim_strategy != 'adaptive' && 'true' || 'false' }}
-      WFC_HUB_MATCHING_EVENT_GATED: ${{ matrix.claim_strategy == 'event-gated' && 'true' || 'false' }}
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Validate diagnostic scripts
@@ -85,6 +86,16 @@ jobs:
             {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
           print('PASS: native policy workflow definitions registered')
           PY
+      - name: Assert gate setting on both Hub processes
+        run: |
+          set -euo pipefail
+          for hub in hub hub-2; do
+            actual="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" exec -T "$hub" printenv WFC_HUB_CLAIM_ADMISSION_ENABLED | tr -d '\r')"
+            echo "$hub: claim gate=$actual (expected $GATE_ENABLED)"
+            test "$actual" = "$GATE_ENABLED"
+          done
+          test "$WFC_HUB_LONG_POLL_ENABLED" = true
+          test "$WFC_HUB_MATCHING_EVENT_GATED" = true
       - name: Diagnose 100 workflows per policy with 8 and 16 processors
         run: |
           set -euo pipefail
@@ -160,7 +171,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: matching-event-gated-p99-100-${{ matrix.claim_strategy }}
+          name: matching-event-gated-admission-${{ matrix.gate_enabled }}
           path: |
             scaling/observability/results/p99-100/*.json
             scaling/observability/results/otel-p99/*.json
@@ -171,3 +182,84 @@ jobs:
         if: failure()
         run: |
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$OTEL_OVERRIDE" --env-file "$ENVFILE" logs --tail=200 hub hub-2 hub-lb postgres processor otel-collector tempo || true
+
+  compare-admission-gate:
+    name: Compare gate on/off (8/16 processors)
+    needs: [p99-root-cause]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: matching-event-gated-admission-*
+          path: admission-ab-results
+      - name: Compare durable workflow timing and actual OTel claims
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          base=Path("admission-ab-results")
+          # upload-artifact preserves the full relative tree because we also
+          # upload /tmp logs; search beneath each named artifact, not its root.
+          def artifact_file(root, name):
+              matches=list(root.rglob(name))
+              if len(matches) != 1:
+                  raise RuntimeError(f"Expected one {name} under {root}; found {matches}")
+              return matches[0]
+          results={}
+          for enabled in ("true","false"):
+              root=base/f"matching-event-gated-admission-{enabled}"
+              if not root.exists():
+                  raise RuntimeError(f"Missing CI artifact for gate={enabled}: {root}")
+              d={}
+              for processors in (8,16):
+                  for mode in ("unordered","partition","keyed"):
+                      path=artifact_file(root, f"timeline-{processors}-{mode}.json")
+                      report=json.loads(path.read_text())
+                      assert report["workflows"] == 100, (enabled,processors,mode,report["workflows"])
+                      p=report["latencyByStage"]["total_s"]
+                      d[f"{processors}/{mode}"]={"p95":p["p95"],"p99":p["p99"]}
+              ot=json.loads(artifact_file(root, "otel-investigation.json").read_text())
+              claims=ot.get("claimSummary",{})
+              spans=ot.get("importantSpanDurationsSeconds",{})
+              d["claims"]={"total":claims.get("total",0),"empty":claims.get("empty",0),
+                           "leased":claims.get("leased",0),
+                           "empty_rate":round(claims.get("empty",0)/max(1,claims.get("total",0)),4)}
+              d["claim_p95_s"]=spans.get("hub.task.claim",{}).get("p95")
+              d["claim_gate_wait_p95_s"]=spans.get("hub.task.claim.admission_wait",{}).get("p95")
+              d["completion_http_p95_s"]=spans.get("hub.worker.completion.http",{}).get("p95")
+              assert d["claims"]["leased"] >= 600, (enabled, d["claims"])
+              results[enabled]=d
+          out={"control_gate_on":results["true"],"treatment_gate_off":results["false"],
+               "comparisons":{}}
+          print("| Processors | Policy | Gate-on p95 (s) | Gate-off p95 (s) | p95 change % | Gate-on p99 (s) | Gate-off p99 (s) |")
+          print("|---:|---|---:|---:|---:|---:|---:|")
+          for processors in (8,16):
+              for mode in ("unordered","partition","keyed"):
+                  key=f"{processors}/{mode}"
+                  a=results["true"][key];b=results["false"][key]
+                  delta=round(100*(b["p95"]/a["p95"]-1),2) if a["p95"]>0 else None
+                  out["comparisons"][key]={"p95_change_pct":delta,"p99_change_pct":round(100*(b["p99"]/a["p99"]-1),2) if a["p99"]>0 else None}
+                  print(f"| {processors} | {mode} | {a['p95']:.3f} | {b['p95']:.3f} | {delta:+.2f}% | {a['p99']:.3f} | {b['p99']:.3f} |")
+          out["caveat"]="Parallel jobs use separate GitHub-hosted runners; each mode runs sequentially within a job. Repeat with reversed order / same runner to establish causality."
+          Path("admission-comparison.json").write_text(json.dumps(out,indent=2)+"\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+              f.write("### Claim admission gate A/B benchmark\n\n")
+              f.write("| Processors | Policy | Gate ON p95 (s) | Gate OFF p95 (s) | p95 change | Gate ON p99 (s) | Gate OFF p99 (s) |\n|---:|---|---:|---:|---:|---:|---:|\n")
+              for processors in (8,16):
+                  for mode in ("unordered","partition","keyed"):
+                      key=f"{processors}/{mode}";a=results["true"][key];b=results["false"][key];d=out["comparisons"][key]
+                      f.write(f"| {processors} | {mode} | {a['p95']:.3f} | {b['p95']:.3f} | {d['p95_change_pct']:+.2f}% | {a['p99']:.3f} | {b['p99']:.3f} |\n")
+              f.write("\nOTel claim metrics:\n\n")
+              f.write("| Gate | Claim RPCs | Empty % | Claim p95 (s) | Gate wait p95 (s) | Completion HTTP p95 (s) |\n|---|---:|---:|---:|---:|---:|\n")
+              for enabled in ("true","false"):
+                  d=results[enabled];cl=d["claims"]
+                  f.write(f"| {enabled} | {cl['total']} | {cl['empty_rate']:.1%} | {d['claim_p95_s']} | {d['claim_gate_wait_p95_s']} | {d['completion_http_p95_s']} |\n")
+              f.write("\nCaveat: two independently provisioned CI runners; confirm with sequential same-runner reversal before production decision.\n")
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: admission-gate-ab-comparison
+          path: admission-comparison.json
