@@ -257,4 +257,34 @@ public sealed class HubEventGatedClaimDispatcherTests
         Assert.Equal(new[] { "alpha", "beta" }, recoveryCapabilities);
     }
 
+
+    [Fact]
+    public async Task LostOwnerNeverClaimsOrIssuesAWorkerLease()
+    {
+        var attempts = 0;
+        var checks = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (request, _) =>
+            {
+                Interlocked.Increment(ref attempts);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([Lease(1)]);
+            },
+            (_, _) =>
+            {
+                Interlocked.Increment(ref checks);
+                return Task.FromResult(false);
+            },
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(200));
+
+        // A ready hint is present, but ownership has already changed.
+        // Gateway may have routed this poll using an earlier valid lease.
+        dispatcher.NotifyReady("test-hub", "do-work", 1, 1);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            dispatcher.LongPollAsync(Request("stale-owner", 1), CancellationToken.None));
+        Assert.Equal(1, checks);
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
 }
