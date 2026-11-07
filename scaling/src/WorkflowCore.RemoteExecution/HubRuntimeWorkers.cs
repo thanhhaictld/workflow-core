@@ -137,11 +137,21 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         var endpoint = matchingPoll
                             ? "api/hub/workers/tasks:poll"
                             : "api/hub/workers/tasks:claim";
-                        var leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
-                            new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
-                                Math.Min(16,effectiveConcurrency-running.Count),workflows,
-                                matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
-                                matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                        var claimHttpStarted = Stopwatch.GetTimestamp();
+                        HubLeasedTask[] leases;
+                        try
+                        {
+                            leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
+                                new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
+                                    Math.Min(16,effectiveConcurrency-running.Count),workflows,
+                                    matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
+                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                        }
+                        finally
+                        {
+                            HubTelemetry.WorkerClaimHttpDuration.Record(
+                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane);
+                        }
                         if (matchingPoll && options.MatchingPartitions > 1)
                             matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
