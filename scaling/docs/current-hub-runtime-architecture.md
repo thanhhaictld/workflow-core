@@ -15,45 +15,72 @@ The fork contains **two distinct distributed execution paths**, plus upstream Wo
 
 **Core rule:** Hub is the management, durable-state and admission boundary—not a host of application workflow definitions. A *workflow partition* chooses stable placement. It does **not** automatically serialize execution; only explicit policy resources do. A *matching shard* chooses an owner for worker poll routing and is different from both workflow placement and per-task fencing.
 
-### C4-ish system context
+### C4-ish system context (task matching is explicit)
 
 ```mermaid
 flowchart LR
-  C[Application / operator / load generator]
-  LB[Optional NGINX Hub LB]
-  H1[Hub Gateway A]
-  H2[Hub Gateway B]
-  S[Embedded scheduler in each Hub]
-  W[Provisioner / remote workflow processor]
-  A[External systems / business side effects]
-  DB[(PostgreSQL 17\nwfc_scale Hub state)]
-  M[Next.js workflow monitor]
-  L[Legacy monitoring API]
-  DB2[(PostgreSQL\nwfc + wfc_scale legacy state)]
-  OT[OpenTelemetry Collector]
-  G[Grafana / Tempo / Prometheus / Loki]
+  C["Clients / k6 / operators"]
+  WF["Native workflow processors"]
+  AW["Typed activity workers"]
+  EXT["Business side effects"]
+  LB["Optional NGINX Hub LB"]
+  UI["Next.js workflow monitor"]
 
-  C -->|REST start, publish, management| LB
-  LB --> H1
-  LB --> H2
-  W <-->|REST claim or long-poll, heartbeat, transitions, completion| LB
-  W --> A
-  H1 <--> DB
-  H2 <--> DB
-  H1 --- S
-  H2 --- S
-  DB -. committed NOTIFY .-> H1
-  DB -. committed NOTIFY .-> H2
-  M -->|server-side authenticated Hub API| LB
-  M -->|legacy monitor HTTP| L
-  L --> DB2
-  H1 --> OT
-  H2 --> OT
-  W --> OT
-  L --> OT
-  OT --> G
-  M -.->|Grafana trace deep links| G
+  subgraph HA["Hub Gateway A"]
+    RESTA["REST / bearer A"]
+    OWNA["Shard ownership + forwarding A"]
+    MATCHA["TASK MATCHING A: capability waiters / event-gated drain"]
+    READYA["PG NOTIFY listener + readiness A"]
+    STOREA["Fenced tasks / workflow stores A"]
+    SCHEDA["Embedded scheduler A"]
+    RESTA --> OWNA
+    OWNA --> MATCHA
+    MATCHA --> STOREA
+    RESTA --> STOREA
+    READYA --> MATCHA
+    SCHEDA --> STOREA
+  end
+
+  subgraph HB["Hub Gateway B - HA overlay"]
+    RESTB["REST / bearer B"]
+    OWNB["Shard ownership + forwarding B"]
+    MATCHB["TASK MATCHING B: capability waiters / event-gated drain"]
+    READYB["PG NOTIFY listener + readiness B"]
+    STOREB["Fenced tasks / workflow stores B"]
+    SCHEDB["Embedded scheduler B"]
+    RESTB --> OWNB
+    OWNB --> MATCHB
+    MATCHB --> STOREB
+    RESTB --> STOREB
+    READYB --> MATCHB
+    SCHEDB --> STOREB
+  end
+
+  PG[("PostgreSQL: task leases, permits, workflow state, matching owner epochs, journal")]
+  OT["OTel collector / Grafana, Tempo, Prometheus, Loki"]
+  C -->|REST starts / events| LB
+  WF <-->|poll or claim; native commits| LB
+  AW <-->|poll or claim; heartbeat; completion| LB
+  AW --> EXT
+  LB --> RESTA
+  LB --> RESTB
+  OWNA -. "nonlocal shard: one forwarding hop" .-> RESTB
+  OWNB -. "nonlocal shard: one forwarding hop" .-> RESTA
+  STOREA <--> PG
+  STOREB <--> PG
+  OWNA <--> PG
+  OWNB <--> PG
+  PG -. "committed ready hints" .-> READYA
+  PG -. "committed ready hints" .-> READYB
+  UI -->|server-side Hub API| LB
+  RESTA --> OT
+  RESTB --> OT
+  WF --> OT
+  AW --> OT
+  UI -. "Tempo drill-down" .-> OT
 ```
+
+**How to read this:** matching lives *inside each Hub Gateway process*, not in a separately deployed matching service. On the matched path, the worker's HTTP long poll is routed to the current PostgreSQL-fenced matching-shard owner, where `HubTaskMatcher` tracks in-memory capability-specific demand. Committed readiness hints wake matching; `HubTaskStore.ClaimAsync` still makes the authoritative PostgreSQL task/permit/epoch decision. The ordinary `tasks:claim` path bypasses matching. The HA overlay runs both Hub replicas; base Compose runs only A.
 
 The optional two-Hub load-balancer and sharded matching configuration are enabled through Compose overlays, not by the base Compose stack. The two DB nodes above represent **logical ownership/schema boundaries**; the supplied local observability Compose stack actually uses **one PostgreSQL container**.
 
@@ -87,15 +114,23 @@ flowchart TB
   end
   subgraph hub["Hub Gateway process, replicated with same registrations"]
     REST[Minimal API + bearer validation]
-    MATCH[Matching ownership + matcher / event-gated dispatcher]
-    READY[SSE broadcaster + PostgreSQL LISTEN]
-    TIMER[Background timer scanner]
-    OPS[Operations + OTel sampler]
-    STORE[Hub stores: task, workflow, native, remote, definition, timer]
-    REST --> STORE
-    MATCH --> STORE
+    OWNER[HubMatchingOwnership: per-Hub/shard epoch + HTTP forwarding]
+    MATCH[HubTaskMatcher: capability waiters]
+    GATED[HubEventGatedClaimDispatcher: opt-in single-flight drain]
+    READY[HubReadinessBroadcaster + PostgreSQL LISTEN]
+    CLAIM[HubTaskStore.ClaimAsync: task lease + resource permits]
+    TIMER[HubTimerSchedulerService: due timers and inbox repair]
+    OPS[HubMetricsSampler and HubOperationsStore]
+    STORE[Hub stores: workflow, native, remote, definition, timer]
+    REST --> OWNER
+    OWNER --> MATCH
+    MATCH --> GATED
+    MATCH --> CLAIM
+    GATED --> CLAIM
     READY --> MATCH
     TIMER --> STORE
+    CLAIM --> STORE
+    REST --> STORE
     OPS --> STORE
   end
   subgraph worker["DB-free application host"]
@@ -224,6 +259,41 @@ The Hub has **two alternative worker acquisition paths**:
 A worker lane declares supported `HubCapability` (hub, type, version) and a bounded concurrency count. The native workflow worker handles `__native_workflow__` and optional sequential compatibility `__workflow__`; the activity lane handles registered activity types. Worker claims return at most 16 tasks per request in the common loop.
 
 **Current multi-Hub caveat:** `HubRuntimeWorker` uses matching polling only when its capabilities contain exactly one distinct Hub ID. Mixed workflow hosts fall back to adaptive claims. Sharded long polls rotate a matching partition, with approximately a **4-second server hold** per shard. This is not a global ready-queue dispatcher.
+
+### Matching request and readiness sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Worker as Workflow/activity worker
+    participant LB as Hub load balancer
+    participant Gateway as Gateway / shard owner
+    participant Matcher as HubTaskMatcher / event-gated dispatcher
+    participant Ready as PostgreSQL LISTEN / readiness
+    participant Store as HubTaskStore
+    participant PG as PostgreSQL
+    Worker->>LB: POST /api/hub/workers/tasks:poll (Hub, capabilities, shard)
+    LB->>Gateway: forward HTTP to a Gateway replica
+    Gateway->>PG: resolve matching shard owner + epoch
+    Note over Gateway: If nonlocal, forward once to the owner Gateway
+    Gateway->>Matcher: register compatible in-memory worker demand
+    alt committed work-ready notification
+        PG-->>Ready: NOTIFY after commit
+        Ready-->>Matcher: capability/shard hint
+    else bounded recovery probe
+        Matcher->>PG: inspect durable ready work
+    end
+    Matcher->>Store: claim only on matching worker demand
+    Store->>PG: SELECT candidates; lock task/permits; lease + epoch + attempt; COMMIT
+    PG-->>Store: committed task leases
+    Store-->>Matcher: task batch (or none)
+    Matcher-->>Gateway: task batch
+    Gateway-->>LB: HTTP response
+    LB-->>Worker: leased tasks
+    Note over Worker,PG: Worker runs separately; heartbeat and completion use ordinary REST and fenced DB updates.
+```
+
+**Matching correctness boundary:** in-memory waiters and notifications are performance optimizations, not durable task assignments. An empty matched claim can legally return no tasks; another notification/reconciliation probe drives future claims. The task lease is established only by the PostgreSQL transaction, not by matcher ownership.
 
 ### Matching HA versus task ownership
 
