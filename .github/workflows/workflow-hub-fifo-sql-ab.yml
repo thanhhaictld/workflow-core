@@ -1,0 +1,151 @@
+name: Workflow Hub FIFO Head SQL A-B (off-on-off)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-fifo-sql-ab.yml'
+      - 'scaling/observability/benchmark/compare_fifo_head_sql.py'
+      - '.github/scripts/profile_workflow_bottleneck.py'
+      - 'scaling/observability/compose.pg-statement-profile.yaml'
+      - 'scaling/src/WorkflowCore.Hub/HubTaskStore.cs'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/compose.matching-ha.yaml'
+  workflow_dispatch:
+    inputs:
+      workflow_count:
+        description: 'Workflows per ordering-policy cohort'
+        required: false
+        default: '200'
+
+concurrency:
+  group: workflow-hub-fifo-sql-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fifo-sql-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      PROFILE: scaling/observability/compose.pg-statement-profile.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      WFC_HUB_DB_POOL: '12'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: 'false'
+      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: 'false'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      COUNT: ${{ github.event.inputs.workflow_count || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate profiling scripts and compose
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/profile_workflow_bottleneck.py \
+            scaling/observability/benchmark/compare_fifo_head_sql.py
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" config --quiet
+      - name: Start Hub, PostgreSQL, and worker infrastructure
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb tempo loki prometheus
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" exec -T postgres psql -X -U workflow -d workflow \
+            -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" --profile offboarding-load \
+            up -d --build --no-deps --scale processor=8 processor
+          sleep 18
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+      - name: Compare off-on-off FIFO filtering with SQL and CPU telemetry
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/fifo-sql
+          mkdir -p "$root"
+          chmod 0777 scaling/observability/results "$root"
+          for stage in off1 on off2; do
+            case "$stage" in on) enabled=true;; *) enabled=false;; esac
+            export WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED="$enabled"
+            # Restart both Hubs only between completed cohorts; all task
+            # lease epochs, resource admission and history remain PostgreSQL-owned.
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+              --env-file "$ENVFILE" up -d --no-deps --force-recreate hub hub-2
+            for service in hub hub-2; do
+              id="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+                --env-file "$ENVFILE" ps -q "$service")"
+              test -n "$id"
+              docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id" \
+                | grep -qx "WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED=$enabled"
+            done
+            for i in {1..60}; do
+              if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+              sleep 2
+            done
+            curl -fsS http://127.0.0.1:5110/health/ready
+            sleep 10
+            for mode in partition keyed; do
+              run="fifoab-$stage-$mode-$GITHUB_RUN_ID"
+              echo "::group::fifo_prefilter=$enabled policy=$mode"
+              python3 .github/scripts/profile_workflow_bottleneck.py \
+                --output "$root/profile-$stage-$mode.json" --interval 3 \
+                >"/tmp/fifo-sql-profile-$stage-$mode.log" 2>&1 &
+              profiler_pid=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+                --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/fifo-sql-k6-$stage-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$profiler_pid" 2>/dev/null || true
+              wait "$profiler_pid"
+              test "$k6_rc" -eq 0
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "$root/$stage-$mode.json"
+              test -s "$root/profile-$stage-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/compare_fifo_head_sql.py \
+            --input "$root" --output "$root/report.json" | tee "$root/report.txt"
+          cat "$root/report.md" >>"$GITHUB_STEP_SUMMARY"
+      - name: Upload SQL + ordering artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-fifo-head-sql-ab
+          path: |
+            scaling/observability/results/fifo-sql/
+            /tmp/fifo-sql-profile-*.log
+            /tmp/fifo-sql-k6-*.log
+          if-no-files-found: warn
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" logs --tail=120 hub hub-2 postgres processor || true
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" --profile offboarding-load --profile policy-k6 \
+            down --remove-orphans || true
