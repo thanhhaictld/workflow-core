@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        processor_mode: [mixed-hubs, policy-only]
+        processor_mode: [mixed-hubs, policy-only, owner-check-deferred]
     env:
       COMPOSE: scaling/observability/compose.yaml
       HA: scaling/observability/compose.matching-ha.yaml
@@ -35,7 +35,8 @@ jobs:
       ENVFILE: scaling/observability/.env.example
       PROCESSOR_MODE: ${{ matrix.processor_mode }}
       POLICY_BENCHMARK_ENABLED: 'true'
-      POLICY_BENCHMARK_ONLY: ${{ matrix.processor_mode == 'policy-only' && 'true' || 'false' }}
+      POLICY_BENCHMARK_ONLY: ${{ matrix.processor_mode != 'mixed-hubs' && 'true' || 'false' }}
+      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: ${{ matrix.processor_mode == 'owner-check-deferred' && 'true' || 'false' }}
       POLICY_BENCH_ACTIVITY_WORKERS: '8'
       OFFBOARD_PROCESSOR_WORKERS: '4'
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
