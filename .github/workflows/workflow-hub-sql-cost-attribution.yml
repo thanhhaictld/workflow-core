@@ -106,7 +106,7 @@ jobs:
                 -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
                 -e K6_POLICY_RUN_ID="$run" k6-policy \
                 | tee "/tmp/sqlcpu-k6-$stage-$mode.log"
-              k6_rc=$${PIPESTATUS[0]}
+              k6_rc=${PIPESTATUS[0]}
               set -e
               kill -TERM "$profiler_pid" 2>/dev/null || true
               wait "$profiler_pid"
