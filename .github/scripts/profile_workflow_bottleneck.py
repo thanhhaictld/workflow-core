@@ -32,6 +32,10 @@ SELECT coalesce(json_agg(row_to_json(s)), '[]'::json)::text
 FROM (
  SELECT queryid::text AS fingerprint, toplevel,
    CASE
+    -- Query SHAPES, not SQL text, are stored in benchmark artifacts.
+    -- Keep the bounded candidate window separate from successful row locks.
+    WHEN query ILIKE '%hub_task%' AND query ILIKE '%ORDER BY sequence LIMIT%' THEN 'claim_candidate_window'
+    WHEN query ILIKE '%hub_task%' AND query ILIKE '%FOR UPDATE SKIP LOCKED%' THEN 'claim_row_lock'
     WHEN query ILIKE '%hub_matching_partition%' OR query ILIKE '%hub_matching_lease%' THEN 'matching_owner'
     WHEN query ILIKE '%hub_resource%' OR query ILIKE '%hub_task_constraint%' THEN 'policy_admission'
     WHEN query ILIKE '%hub_task_attempt%' THEN 'task_attempt'
