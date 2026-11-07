@@ -70,7 +70,7 @@ export function HubTraceWaterfall({
     try {
       const base = new URL(grafana.url);
       if (!["http:", "https:"].includes(base.protocol)) return null;
-      base.pathname = base.pathname.replace(/\\/$/, "") + "/explore";
+      base.pathname = base.pathname.replace(/\/$/, "") + "/explore";
       base.searchParams.set("left", JSON.stringify({
         datasource: grafana.tempoUid,
         queries: [{ refId: "A", queryType: "traceId", query: traceId }],
