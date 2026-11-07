@@ -272,14 +272,11 @@ public sealed class HubEventGatedClaimDispatcher
                         }
                         if (completed && leases.Count > 0)
                         {
-                            // A partial fill is evidence that this particular
-                            // capability may have drained its ready backlog.
-                            // Only a full batch justifies an eager re-probe;
-                            // permit-release signals and catch-up scans still
-                            // handle eligibility changes.
-                            if (leases.Count >= request.MaxTasks)
-                                foreach (var task in leases)
-                                    lane.Pending.Add(new Hint(task.TaskType, task.Version));
+                            // Preserve successful partial-batch drain hints:
+                            // SQL can stop after a bounded candidate window,
+                            // so a partial return does not prove empty backlog.
+                            foreach (var task in leases)
+                                lane.Pending.Add(new Hint(task.TaskType, task.Version));
                         }
                         // A completed empty claim consumes the current hint.
                         // A deferred/incomplete claim retains it for retry.
