@@ -30,7 +30,10 @@ COMPOSE = ["docker", "compose", "-f", "scaling/observability/compose.yaml",
 def psql(sql: str) -> str:
     cp = subprocess.run(COMPOSE + ["exec", "-T", "postgres", "psql", "-X",
         "-U", "workflow", "-d", "workflow", "-At", "-c", sql],
-        capture_output=True, text=True, check=True, timeout=30)
+        capture_output=True, text=True, check=False, timeout=30)
+    if cp.returncode:
+        raise RuntimeError("PostgreSQL diagnostic query failed (exit " +
+                           str(cp.returncode) + "): " + cp.stderr[-2400:])
     return cp.stdout.strip()
 
 
@@ -74,17 +77,15 @@ SELECT coalesce(json_agg(row_to_json(r)), '[]'::json) FROM (
 
 STATEMENTS_SQL = """
 SELECT coalesce(json_agg(row_to_json(r)), '[]'::json) FROM (
- SELECT queryid::text AS query_id, calls, rows,
-        round(total_exec_time::numeric,2) AS total_ms,
-        round(mean_exec_time::numeric,3) AS mean_ms,
-        round(max_exec_time::numeric,3) AS max_ms,
-        shared_blks_hit AS blocks_hit, shared_blks_read AS blocks_read,
-        round(blk_read_time::numeric,2) AS block_read_ms,
-        regexp_replace(left(query,420), '[[:space:]]+', ' ', 'g') AS sql
+ SELECT queryid::text AS query_id,
+        calls,
+        total_exec_time::float8 AS total_ms,
+        mean_exec_time::float8 AS mean_ms,
+        shared_blks_hit AS blocks_hit,
+        shared_blks_read AS blocks_read,
+        left(query,420) AS sql
  FROM pg_stat_statements
- WHERE query ILIKE '%wfc_scale.hub_task%'
-    OR query ILIKE '%wfc_scale.hub_workflow%'
-    OR query ILIKE '%wfc_scale.hub_resource%'
+ WHERE query LIKE '%wfc_scale.%'
  ORDER BY total_exec_time DESC LIMIT 35
 ) r
 """
