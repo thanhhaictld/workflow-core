@@ -285,6 +285,10 @@ public sealed class HubEventGatedClaimDispatcher
                 }
 
                 if (leases.Count > 0) return leases;
+                // Deferral can schedule another wake on this same waiter even
+                // after its short poll deadline. Do not process that wake with
+                // an expired budget: the retained hint belongs to next poller.
+                if (deadline.IsCancellationRequested) break;
             }
             return Array.Empty<HubLeasedTask>();
         }
