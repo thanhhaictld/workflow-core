@@ -42,8 +42,9 @@ def psql_json(sql: str):
 
 
 def prom_snapshot() -> dict[str, float]:
-    # Histogram sums/counts and counters; avoid high-cardinality bucket exports.
-    query = '{__name__=~"workflow_hub_(claim|matching|worker_claim|worker_empty).*(_sum|_count|_total)"}'
+    # Preserve histogram bucket deltas for per-scenario p95/p99 estimates.
+    # These metrics are bounded-cardinality (claim path/outcome/upper bound).
+    query = '{__name__=~"workflow_hub_(claim|matching|worker_claim|worker_empty).*(_sum|_count|_total|_bucket)"}'
     url = "http://127.0.0.1:9090/api/v1/query?" + urllib.parse.urlencode({"query": query})
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -54,7 +55,7 @@ def prom_snapshot() -> dict[str, float]:
         for series in result["data"]["result"]:
             labels = series["metric"]
             label_suffix = ",".join(key + "=" + str(labels[key])
-                                    for key in ("outcome", "claim_strategy", "batch_result")
+                                    for key in ("outcome", "claim_strategy", "batch_result", "le")
                                     if key in labels)
             metric_key = labels["__name__"] + (
                 "{" + label_suffix + "}" if label_suffix else "")
