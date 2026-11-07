@@ -43,7 +43,7 @@ Tests cover a 105-task same-tenant blocked backlog followed by a runnable indepe
 | fifo | OFF | ON |
 | combined | ON | ON |
 
-Each tests 8 and 16 processor instances, with unordered, partition-FIFO and keyed-FIFO workloads at the same workflow count. It archives k6 workflow summaries, order verifications, PostgreSQL wait samples and the scaling report. GitHub shared runners are useful for regression comparison but **not** evidence of linear scaling or production capacity.
+Each tests 1, 2, 4, 8 and 16 processor instances, with unordered, partition-FIFO and keyed-FIFO workloads at the same workflow count. The 1-processor cohort is mandatory for the scaling summarizer; the original benchmark failed at report generation when it ran only 8 and 16 processors (all 24 k6 workload cohorts had completed successfully). It archives k6 workflow summaries, order verifications, PostgreSQL wait samples and the scaling report. GitHub shared runners are useful for regression comparison but **not** evidence of linear scaling or production capacity. The first 8/16-only run showed mixed results and occasional regressions; do not infer an improvement before repeated controlled comparisons.
 
 Promote each flag only after multiple controlled runs confirm no meaningful throughput/p95/p99 regression, fewer expensive unsuccessful scans or claims, no unexpected retries, ordering verification, stable database waits and acceptable connection/WAL pressure. Run a 1/2/4/8/16/32 scaling curve on dedicated resources before concluding processor scaling is linear.
 
