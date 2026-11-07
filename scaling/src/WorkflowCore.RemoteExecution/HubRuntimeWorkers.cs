@@ -138,6 +138,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             ? "api/hub/workers/tasks:poll"
                             : "api/hub/workers/tasks:claim";
                         var claimHttpStarted = Stopwatch.GetTimestamp();
+                        var claimHttpOutcome = "error";
                         HubLeasedTask[] leases;
                         try
                         {
@@ -146,11 +147,13 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                                     Math.Min(16,effectiveConcurrency-running.Count),workflows,
                                     matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
                                     matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                            claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
                         }
                         finally
                         {
                             HubTelemetry.WorkerClaimHttpDuration.Record(
-                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane);
+                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane,
+                                new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
                         }
                         if (matchingPoll && options.MatchingPartitions > 1)
                             matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
