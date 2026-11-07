@@ -42,7 +42,12 @@ export async function GET(
         value.version === workflow.version,
     ) : null;
     return NextResponse.json(
-      { workflow, history: history ?? [], trace: trace ?? [], definition, nativeRuntime },
+      { workflow, history: history ?? [], trace: trace ?? [], definition, nativeRuntime,
+        grafana: {
+          url: process.env.WORKFLOW_GRAFANA_PUBLIC_URL ?? null,
+          tempoUid: process.env.WORKFLOW_GRAFANA_TEMPO_UID ?? "tempo",
+        },
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {
