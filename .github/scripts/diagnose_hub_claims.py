@@ -44,7 +44,7 @@ def psql_json(sql: str):
 def prom_snapshot() -> dict[str, float]:
     # Preserve histogram bucket deltas for per-scenario p95/p99 estimates.
     # These metrics are bounded-cardinality (claim path/outcome/upper bound).
-    query = '{__name__=~"workflow_hub_(claim|matching|worker_claim|worker_empty).*(_sum|_count|_total|_bucket)"}'
+    query = '{__name__=~"workflow_hub_(claim|matching|worker_claim|worker_empty|worker_completion).*(_sum|_count|_total|_bucket)"}'
     url = "http://127.0.0.1:9090/api/v1/query?" + urllib.parse.urlencode({"query": query})
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
