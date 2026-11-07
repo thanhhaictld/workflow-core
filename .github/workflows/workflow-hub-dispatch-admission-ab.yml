@@ -9,7 +9,6 @@ on:
       - 'scaling/observability/compose.matching-shards.yaml'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
       - 'scaling/observability/compose.yaml'
-      - 'scaling/observability/compose.matching-ha.yaml'
       - 'scaling/observability/benchmark/summarize_linear_scaling.py'
       - '.github/workflows/workflow-hub-dispatch-admission-ab.yml'
   workflow_dispatch:
