@@ -12,7 +12,8 @@ public sealed record HubWorkflowCapability(string HubId, string DefinitionId, in
 public sealed record HubLeasedTask(
     Guid Id, string HubId, int PartitionId, string TaskType, int Version,
     Guid? WorkflowId, JsonElement Payload, long Epoch, int Attempts,
-    DateTime LeaseUntil);
+    DateTime LeaseUntil, DateTime CreatedAt = default,
+    string? TraceParent = null, string? TraceState = null);
 public sealed record HubTaskStatus(Guid Id, string HubId, int PartitionId,
     string TaskType, int Version, string State, int Attempts, string? Error,
     JsonElement? Result);
@@ -137,8 +138,8 @@ public sealed class HubTaskStore : IAsyncDisposable
 
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
-                (id,hub_id,partition_id,task_type,task_version,workflow_id,payload,request_key)
-            VALUES (@id,@hub,@partition,@type,@version,@workflow,@payload,@request)
+                (id,hub_id,partition_id,task_type,task_version,workflow_id,payload,request_key,traceparent,tracestate)
+            VALUES (@id,@hub,@partition,@type,@version,@workflow,@payload,@request,@traceparent,@tracestate)
             ON CONFLICT DO NOTHING RETURNING id
             """, db, tx))
         {
@@ -152,6 +153,10 @@ public sealed class HubTaskStore : IAsyncDisposable
             insert.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = payload;
             insert.Parameters.Add("request", NpgsqlDbType.Text).Value =
                 (object?)requestKey ?? DBNull.Value;
+            insert.Parameters.Add("traceparent", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceParent ?? DBNull.Value;
+            insert.Parameters.Add("tracestate", NpgsqlDbType.Text).Value =
+                (object?)HubTraceCorrelation.TraceState ?? DBNull.Value;
             var inserted = await insert.ExecuteScalarAsync(ct);
             if (inserted is null)
             {
@@ -294,9 +299,11 @@ public sealed class HubTaskStore : IAsyncDisposable
                 Guid id; string hub; string taskType; int version, partition, attempts;
                 int? workflowStep;
                 long sequence; Guid? workflow; string payload;
+                DateTime createdAt; string? originTraceParent, originTraceState;
                 await using (var row = new NpgsqlCommand("""
                     SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,
-                           payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)
+                           payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id),
+                           created_at,traceparent,tracestate
                     FROM wfc_scale.hub_task WHERE id = @id
                       AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
                       AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
@@ -328,6 +335,9 @@ public sealed class HubTaskStore : IAsyncDisposable
                     sequence = reader.GetInt64(7);
                     attempts = reader.GetInt32(8);
                     workflowStep = reader.IsDBNull(9) ? null : reader.GetInt32(9);
+                    createdAt = reader.GetDateTime(10);
+                    originTraceParent = reader.IsDBNull(11) ? null : reader.GetString(11);
+                    originTraceState = reader.IsDBNull(12) ? null : reader.GetString(12);
                 }
 
                 var constraints = new List<(string Key, int Limit, bool Fifo)>();
@@ -413,7 +423,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                     var epoch = reader.GetInt64(0);
                     var until = reader.GetDateTime(1);
                     found = new(id, hub, partition, taskType, version, workflow,
-                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until);
+                        JsonDocument.Parse(payload).RootElement.Clone(), epoch, attempts + 1, until,
+                        createdAt, originTraceParent, originTraceState);
                 }
                 // A lease is a durable fencing epoch. Keep one actual claim
                 // timestamp per managed workflow activity attempt, including
