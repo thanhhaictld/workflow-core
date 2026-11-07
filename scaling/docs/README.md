@@ -7,8 +7,11 @@
 
 ## Documentation map
 
+**For the current Hub/remote-processor implementation, start with [As-built Hub runtime architecture](current-hub-runtime-architecture.md).** The earlier [Architecture](architecture.md) describes the distinct direct-PostgreSQL scaling runtime, not the newer REST Hub topology.
+
 | Document | Audience | Contents |
 |---|---|---|
+| [As-built Hub runtime architecture](current-hub-runtime-architecture.md) | Architects, maintainers and SREs | Full source-verified Hub, native executor, scheduler, matching HA, PostgreSQL, API, security, monitoring and known limitations |
 | [Architecture](architecture.md) | Architects/engineers | Context, boundaries, component diagram, scaling model |
 | [Implemented embedded scheduler and processor runbook](hub-remote-scheduler-implementation.md) | Developers / SREs | Current implementation, architecture boundaries, endpoints, build/run instructions, testing status and known limitations |
 | [Native fluent Provisioner](hub-native-fluent-runtime.md) | Application/runtime developers | Native registration, typed activities, fenced snapshots, durable inboxes, compatibility, and restart verification |
