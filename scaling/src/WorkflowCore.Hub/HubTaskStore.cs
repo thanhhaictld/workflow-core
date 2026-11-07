@@ -268,6 +268,15 @@ public sealed class HubTaskStore : IAsyncDisposable
             results.AddRange(batchLeases);
             span?.SetTag("tasks.unconstrained_batch_claimed", batchLeases.Count);
         }
+        var initialBatchCount = results.Count;
+        if (_unconstrainedBatchClaimsEnabled)
+        {
+            var outcome = initialBatchCount == maxTasks ? "full" :
+                initialBatchCount == 0 ? "empty" : "partial";
+            HubTelemetry.ClaimBatchOutcome.Add(1,
+                new KeyValuePair<string, object?>("outcome", outcome));
+        }
+        var fallbackStarted = Stopwatch.GetTimestamp();
         for (var batch = results.Count; batch < maxTasks; batch++)
         {
             var candidates = new List<Guid>();
@@ -486,6 +495,11 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(found.HubId),
                 HubTelemetry.ActivityTag(found.TaskType));
         }
+        if (_unconstrainedBatchClaimsEnabled && initialBatchCount < maxTasks)
+            HubTelemetry.ClaimLegacyFallbackDuration.Record(
+                Stopwatch.GetElapsedTime(fallbackStarted).TotalSeconds,
+                new KeyValuePair<string, object?>("batch_result",
+                    initialBatchCount == 0 ? "empty" : "partial"));
         var outcome = results.Count == 0 ? "empty" : "claimed";
         // Stable process-level label separates the two benchmark modes without
         // cardinality from hubs, workflow IDs or worker IDs.
@@ -494,10 +508,12 @@ public sealed class HubTaskStore : IAsyncDisposable
             Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") == "0" ? "legacy" : "batch";
         var modeTag = new KeyValuePair<string, object?>("history_mode", mode);
         var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
+        var claimStrategyTag = new KeyValuePair<string, object?>("claim_strategy",
+            _unconstrainedBatchClaimsEnabled ? "batch" : "legacy");
         HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
-            outcomeTag, modeTag);
-        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag);
-        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag);
+            outcomeTag, modeTag, claimStrategyTag);
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag);
+        HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag, claimStrategyTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
         span?.SetTag("tasks.claim_amplification", results.Count == 0 ? scannedCandidates : (double)scannedCandidates / results.Count);
