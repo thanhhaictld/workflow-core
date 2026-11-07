@@ -1,0 +1,21 @@
+# Diagnostic-only overlay: PostgreSQL 17 statement telemetry and backend labels.
+# DO NOT apply to production without reviewing pg_stat_statements memory/overhead.
+# Order after compose.yaml, compose.matching-ha.yaml and compose.matching-shards.yaml.
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - compute_query_id=on
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - track_io_timing=on
+  hub:
+    environment:
+      WFC_PG: "Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12};Application Name=workflow-hub-a"
+  hub-2:
+    environment:
+      WFC_PG: "Host=postgres;Port=5432;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=${WFC_HUB_DB_POOL:-12};Application Name=workflow-hub-b"

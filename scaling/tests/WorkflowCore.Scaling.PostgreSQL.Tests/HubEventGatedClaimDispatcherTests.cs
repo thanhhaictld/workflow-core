@@ -221,4 +221,70 @@ public sealed class HubEventGatedClaimDispatcherTests
         Assert.Equal(0, dispatcher.PendingWaiters);
     }
 
+
+    [Fact]
+    public async Task TypedHintScopesMultiCapabilityClaim_WithoutRestrictingGenericRecovery()
+    {
+        static HubClaimRequest MultiCapabilityRequest() =>
+            new("multi-cap-worker", ["test-hub"],
+                [new HubCapability("test-hub", "alpha", 1),
+                 new HubCapability("test-hub", "beta", 1)],
+                MaxTasks: 4, MatchingPartition: 0, MatchingPartitionCount: 4);
+
+        static HubEventGatedClaimDispatcher Create(ConcurrentQueue<string[]> observed) =>
+            new((request, _) =>
+                {
+                    observed.Enqueue(request.Capabilities.Select(c => c.TaskType).ToArray());
+                    return Task.FromResult<IReadOnlyList<HubLeasedTask>>([]);
+                },
+                (_, _) => Task.FromResult(true),
+                sharded: true, partitionCount: 4,
+                pollTimeout: TimeSpan.FromMilliseconds(100),
+                capabilityScopedClaims: true);
+
+        var typed = new ConcurrentQueue<string[]>();
+        var typedDispatcher = Create(typed);
+        typedDispatcher.NotifyReady("test-hub", "beta", 1, 0);
+        await typedDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
+        Assert.True(typed.TryPeek(out var typedCapabilities));
+        Assert.Equal(new[] { "beta" }, typedCapabilities);
+
+        var generic = new ConcurrentQueue<string[]>();
+        var genericDispatcher = Create(generic);
+        genericDispatcher.NotifyReady("test-hub", null, 0, 0);
+        await genericDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
+        Assert.True(generic.TryPeek(out var recoveryCapabilities));
+        Assert.Equal(new[] { "alpha", "beta" }, recoveryCapabilities);
+    }
+
+
+    [Fact]
+    public async Task LostOwnerNeverClaimsOrIssuesAWorkerLease()
+    {
+        var attempts = 0;
+        var checks = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (request, _) =>
+            {
+                Interlocked.Increment(ref attempts);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([Lease(1)]);
+            },
+            (_, _) =>
+            {
+                Interlocked.Increment(ref checks);
+                return Task.FromResult(false);
+            },
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(200));
+
+        // A ready hint is present, but ownership has already changed.
+        // Gateway may have routed this poll using an earlier valid lease.
+        dispatcher.NotifyReady("test-hub", "do-work", 1, 1);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            dispatcher.LongPollAsync(Request("stale-owner", 1), CancellationToken.None));
+        Assert.Equal(1, checks);
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
 }

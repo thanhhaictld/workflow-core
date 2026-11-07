@@ -56,7 +56,8 @@ public sealed class HubTaskMatcher
                     ? ownership.StillOwnsPartitionAsync(request.Hubs[0],
                         request.MatchingPartition!.Value, ct)
                     : ownership.StillOwnsAsync(request.Hubs[0], ct),
-                ownership.Sharded, ownership.PartitionCount);
+                ownership.Sharded, ownership.PartitionCount,
+                capabilityScopedClaims: Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_SCOPED_CLAIMS") is "true" or "1" or "True");
         }
         readiness.TaskReady += NotifyReady;
     }

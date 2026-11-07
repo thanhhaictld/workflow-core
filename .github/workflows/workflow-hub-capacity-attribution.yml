@@ -1,0 +1,147 @@
+name: Workflow Hub Capacity Attribution (mixed vs policy-only)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-capacity-attribution.yml'
+      - '.github/scripts/sample_dispatch_pressure.py'
+      - 'scaling/observability/benchmark/compare_dispatch_capacity.py'
+      - 'scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/observability/compose.yaml'
+  workflow_dispatch:
+    inputs:
+      workflow_count:
+        description: 'Workflows per policy per stage'
+        required: false
+        default: '200'
+
+concurrency:
+  group: workflow-hub-capacity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        processor_mode: [mixed-hubs, policy-only, owner-check-deferred]
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      PROCESSOR_MODE: ${{ matrix.processor_mode }}
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: ${{ matrix.processor_mode != 'mixed-hubs' && 'true' || 'false' }}
+      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: ${{ matrix.processor_mode == 'owner-check-deferred' && 'true' || 'false' }}
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: 'false'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_DB_POOL: '12'
+      COUNT: ${{ github.event.inputs.workflow_count || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate diagnostic scripts and topology
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/sample_dispatch_pressure.py \
+            scaling/observability/benchmark/compare_dispatch_capacity.py
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          echo "runner_logical_cpus=$(nproc) processor_mode=$PROCESSOR_MODE policy_only=$POLICY_BENCHMARK_ONLY"
+          cat /proc/loadavg
+          if test -r /sys/fs/cgroup/cpu.max; then cat /sys/fs/cgroup/cpu.max; fi
+      - name: Start matching Hubs and PostgreSQL
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+      - name: Bracket 16 processors with two 8-processor controls
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/capacity
+          mkdir -p "$root"
+          chmod 0777 scaling/observability/results "$root"
+          for stage in 8a 16 8b; do
+            case "$stage" in 16) processors=16;; *) processors=8;; esac
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --build --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 15
+            token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+            curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/definitions >"$root/definitions-$stage.json"
+            python3 - "$root/definitions-$stage.json" "$POLICY_BENCHMARK_ONLY" <<'PY'
+          import json,sys
+          rows=json.load(open(sys.argv[1]))
+          hubs={x['hubId'] for x in rows}
+          assert 'policy-benchmark' in hubs, 'No policy workflow registration'
+          assert ('offboarding' not in hubs) == (sys.argv[2]=='true'), (
+              'Benchmark Hub isolation is misconfigured',hubs,sys.argv[2])
+          PY
+            for mode in unordered partition keyed; do
+              run="capacity-$PROCESSOR_MODE-$stage-$mode-$GITHUB_RUN_ID"
+              echo "::group::processor_mode=$PROCESSOR_MODE stage=$stage policy=$mode"
+              python3 .github/scripts/sample_dispatch_pressure.py \
+                --output "$root/pressure-$stage-$mode.json" --interval 2 \
+                >"/tmp/dispatch-pressure-$stage-$mode.log" 2>&1 &
+              sample_pid=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/dispatch-capacity-$stage-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$sample_pid" 2>/dev/null || true
+              wait "$sample_pid" || true
+              test "$k6_rc" -eq 0
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "$root/$stage-$mode.json"
+              test -s "$root/pressure-$stage-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/compare_dispatch_capacity.py \
+            --input "$root" --mode "$PROCESSOR_MODE" --output "$root/capacity-report.json" \
+            | tee "$root/capacity-summary.txt"
+          cat "$root/capacity-report.md" >>"$GITHUB_STEP_SUMMARY"
+      - name: Upload throughput, CPU and PostgreSQL diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-capacity-${{ matrix.processor_mode }}
+          path: |
+            scaling/observability/results/capacity/
+            /tmp/dispatch-capacity-*.log
+            /tmp/dispatch-pressure-*.log
+          if-no-files-found: warn
+      - name: Print service logs on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" logs --tail=120 hub hub-2 postgres processor || true
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load --profile policy-k6 down --remove-orphans || true

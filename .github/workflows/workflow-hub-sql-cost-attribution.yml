@@ -1,0 +1,145 @@
+name: Workflow Hub SQL / CPU Bottleneck Attribution
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-sql-cost-attribution.yml'
+      - '.github/scripts/profile_workflow_bottleneck.py'
+      - 'scaling/observability/benchmark/summarize_statement_attribution.py'
+      - 'scaling/observability/compose.pg-statement-profile.yaml'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/**'
+  workflow_dispatch:
+    inputs:
+      workflow_count:
+        description: 'Number of workflows per ordering policy and processor stage'
+        required: false
+        default: '200'
+
+concurrency:
+  group: workflow-hub-sql-profile-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sql-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      PROFILE: scaling/observability/compose.pg-statement-profile.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      WFC_HUB_DB_POOL: '12'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: 'false'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: 'false'
+      COUNT: ${{ github.event.inputs.workflow_count || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preflight SQL profiler and diagnostic Compose overlay
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/profile_workflow_bottleneck.py \
+            scaling/observability/benchmark/summarize_statement_attribution.py
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" config --quiet
+          echo "CPU count: $(nproc)"
+          echo "CPU quota: $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo unknown)"
+      - name: Start two Hubs, PostgreSQL and telemetry
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" exec -T postgres psql -X -U workflow -d workflow \
+            -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+          # Fail closed if PostgreSQL was not started with shared_preload_libraries.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" exec -T postgres psql -X -U workflow -d workflow \
+            -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM pg_stat_statements"
+      - name: Sample PostgreSQL statement families and CPU by service (8 / 16 / 8)
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/sql-cost
+          mkdir -p "$root"
+          chmod 0777 scaling/observability/results "$root"
+          for stage in 8a 16 8b; do
+            case "$stage" in 16) processors=16;; *) processors=8;; esac
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+              --env-file "$ENVFILE" --profile offboarding-load \
+              up -d --build --no-deps --scale "processor=$processors" processor
+            actual="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+              --env-file "$ENVFILE" --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$actual" -eq "$processors"
+            sleep 12
+            for mode in unordered partition keyed; do
+              run="sqlcpu-$stage-$mode-$GITHUB_RUN_ID"
+              echo "::group::profile processors=$processors policy=$mode"
+              python3 .github/scripts/profile_workflow_bottleneck.py \
+                --output "$root/profile-$stage-$mode.json" --interval 3 \
+                >"/tmp/sqlcpu-profile-$stage-$mode.log" 2>&1 &
+              profiler_pid=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+                --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/sqlcpu-k6-$stage-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$profiler_pid" 2>/dev/null || true
+              wait "$profiler_pid"
+              test "$k6_rc" -eq 0
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "$root/$stage-$mode.json"
+              test -s "$root/profile-$stage-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/summarize_statement_attribution.py \
+            --input "$root" --output "$root/report.json" \
+            | tee "$root/report.txt"
+          cat "$root/report.md" >>"$GITHUB_STEP_SUMMARY"
+      - name: Upload SQL cost, Docker stats and correctness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-sql-cpu-cost
+          path: |
+            scaling/observability/results/sql-cost/
+            /tmp/sqlcpu-profile-*.log
+            /tmp/sqlcpu-k6-*.log
+          if-no-files-found: warn
+      - name: Print services on error
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" logs --tail 100 hub hub-2 postgres processor || true
+      - name: Stop diagnostic services
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" -f "$PROFILE" \
+            --env-file "$ENVFILE" --profile offboarding-load --profile policy-k6 \
+            down --remove-orphans || true
