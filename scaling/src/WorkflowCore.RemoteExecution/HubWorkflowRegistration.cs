@@ -17,6 +17,11 @@ public sealed class HubRuntimeOptions
     public bool AllowInsecureHttp { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true";
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
+    // Opt-in processor-side cap. Applies independently to workflow and
+    // activity lanes, including long-poll demand; 0 keeps legacy settings.
+    public int WorkerConcurrencyCap { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE"),
+            out var laneCap) ? laneCap : 0;
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
     // Only enable against matching-capable, load-balanced Hub replicas.
     // Polls wait server-side; failed long-poll requests retry with backoff.
@@ -162,6 +167,7 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
+           options.WorkerConcurrencyCap is < 0 or > 256 ||
            options.PollInterval<TimeSpan.FromMilliseconds(10) ||
            options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
