@@ -34,7 +34,7 @@ def metric(metrics, target):
                          or key[len(target)] == "{")), 4)
 
 
-def histogram_quantile_ms(metrics, instrument, quantile):
+def histogram_quantile_ms(metrics, instrument, quantile, required_labels=None):
     """Estimate the per-case histogram quantile from BEFORE/AFTER bucket deltas.
 
     Aggregates the bounded outcome/strategy labels by bucket upper bound,
@@ -51,6 +51,8 @@ def histogram_quantile_ms(metrics, instrument, quantile):
         labels = dict(part.split("=", 1)
                       for part in key[len(prefix):-1].split(",") if "=" in part)
         if "le" not in labels:
+            continue
+        if required_labels and any(labels.get(key) != val for key, val in required_labels.items()):
             continue
         upper = float(labels["le"])
         buckets[upper] = buckets.get(upper, 0) + float(value)
