@@ -45,3 +45,37 @@ The PostgreSQL counters are **per database** and include background traffic from
 - The experiment creates a PostgreSQL extension only in the disposable CI database.
 - Keep PR #27 in draft until all mandatory correctness/HA gates pass, SQL cost evidence is collected, and repeated 8→16→8 comparisons are stable.
 - A real multi-host capacity assessment still requires separate CPU reservations or hosts for PostgreSQL, Hub and workers. GitHub-hosted Compose containers **do not** provide that environment.
+
+
+## Completed SQL/CPU profile: run 42383367632
+
+The corrected baseline [run](https://github.com/thanhhaictld/workflow-core/actions/runs/42383367632) completed successfully: all 9 workload cohorts passed durable workflow completion and ordering validation. The remaining CI checks at that commit also passed.
+
+### Throughput at 8 → 16 → 8 processors
+
+| Policy | 8a WF/s | 16 WF/s | 8b WF/s | 16 / mean 8 | 8-control drift |
+|---|---:|---:|---:|---:|---:|
+| Unordered | 5.90 | 5.15 | 9.68 | 0.66x | +64.1% |
+| Partition FIFO | 3.77 | 7.27 | 5.77 | 1.52x | +52.9% |
+| Keyed FIFO | 5.43 | 10.46 | 5.91 | 1.84x | +8.8% |
+
+These are single-host four-vCPU results with one shared PostgreSQL and two Hub containers. Unordered and partition controls drift >20%; no claim of throughput speedup or regression should be generalized from this run.
+
+### SQL families at 16 processors (200 workflows per cohort)
+
+| SQL group | Unordered wall seconds | Partition FIFO wall seconds | Keyed FIFO wall seconds |
+|---|---:|---:|---:|
+| Task queue | 10.97 | 1.73 | 1.91 |
+| Policy / resource admission | 7.23 | 17.21 | 9.10 |
+| Matching ownership | 0.19 | 0.13 | 0.10 |
+| Bounded candidate window | 0.98 | 0.54 | 0.35 |
+
+All times are cumulative PostgreSQL *statement execution wall time*, not CPU time or workflow latency. The `policy_admission` heuristic also matches statements involving constraint tables and should not automatically be interpreted as resource-lock waits. At 16-processor partition FIFO, fingerprint `-4541374265085359344` ran 4,384 times and accounted for 14.58 s in this broad group. Its exact SQL shape must be verified before optimizing or indexing. The repeated no-row task queue fingerprint `-1435339812113414142` is another suspect, especially for unordered work.
+
+Average container CPU cores at 16 processors (sampled via Docker, subject to overhead): PostgreSQL 0.22 unordered / 0.38 partition / 0.60 keyed; Hub pair 0.25 / 0.28 / 0.32; processors 1.68 / 0.71 / 0.66. PostgreSQL **CPU saturation is not evidenced**. Claim/admission Prometheus series are collected but alone do not distinguish queue wait from end-to-end dispatch latency.
+
+### Next falsifiable experiment
+
+Run [workflow-hub-fifo-sql-ab.yml](../../.github/workflows/workflow-hub-fifo-sql-ab.yml) on the same runner with **8 processors** and feature-flag sequence OFF → ON → OFF. Verify partition and keyed FIFO ordering each time. Record per-policy throughput/p95, resource/permit SQL calls per workflow and SQL execution time, and compare the ON value to the average OFF control. Reuse the existing `WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED` implementation; do **not** enable it by default yet. Watch for the previously observed 4-processor partition regression and query-plan overhead.
+
+This experiment is intended to determine if filtering blocked FIFO successors reduces speculative resource-row checks; it does not address unordered no-row scans. A future plan/index experiment should capture `EXPLAIN (ANALYZE, BUFFERS)` for the expensive matching SQL under representative backlog and parameter values, rather than guessing an index.
