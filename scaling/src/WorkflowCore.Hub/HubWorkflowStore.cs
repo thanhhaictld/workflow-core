@@ -563,7 +563,9 @@ public sealed class HubWorkflowStore(
                             (events.IsDBNull(4)?1:events.GetInt32(4)+1);
                         entry.Attempts.Add(new(epoch,Math.Max(1,number),
                             worker.GetString()??"native",startAt.ToUniversalTime(),
-                            finishAt.ToUniversalTime(),"Completed","native-step"));
+                            finishAt.ToUniversalTime(),"Completed","native-step",
+                            json.TryGetProperty("traceId",out var nativeTrace) ? nativeTrace.GetString() : null,
+                            json.TryGetProperty("spanId",out var nativeSpan) ? nativeSpan.GetString() : null));
                     }
                 }
                 nativeRows[key]=entry;
