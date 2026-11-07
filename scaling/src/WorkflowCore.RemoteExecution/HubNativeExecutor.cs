@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using WorkflowCore.Hub;
 using WorkflowCore.Interface;
@@ -51,7 +52,9 @@ internal sealed class HubNativeLifeCyclePublisher(HubExecutionSessionAccessor se
                     pointer.PredecessorId,pointer.Scope.ToArray(),pointer.RetryCount,
                     JsonSerializer.SerializeToElement(new {
                         startedAt,finishedAt=observedAt,workerId=session.WorkerId,
-                        epoch=session.LeaseEpoch,attemptNumber=pointer.RetryCount+1
+                        epoch=session.LeaseEpoch,attemptNumber=pointer.RetryCount+1,
+                        traceId=Activity.Current?.TraceId.ToString(),
+                        spanId=Activity.Current?.SpanId.ToString()
                     },HubNativeExecutor.JsonOptions),
                     session.StepNames.GetValueOrDefault(pointer.StepId)));
             }
