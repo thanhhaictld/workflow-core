@@ -70,3 +70,29 @@ For the existing bottleneck evidence and scope limitations see [throughput inves
 **CI integration caveat:** [OTEL Observability Smoke run 42447369037](https://github.com/thanhhaictld/workflow-core/actions/runs/42447369037) failed while waiting for the *removed* legacy monitor service on port 5000. The head inherited a PR #27 change removing the legacy monitor API from Compose; the smoke workflow still asserted its existence. That check runs with capacity fanout OFF and therefore is **not evidence of a feature regression**. Commit `64876e7` updates the smoke test to validate the Hub-only UI and REST proxy. Confirm the replacement CI succeeds before declaring all checks green.
 
 **Next gate:** Re-run the experiment on dedicated Hub/PostgreSQL/processor compute with 4/8/16 worker replicas and repeat each treatment. Monitor resource head handoff latency, ready-to-claim p95/p99, Hub waiter counts, empty SQL claims, PostgreSQL transactions/WAL per completed activity and CPU headroom. If throughput advantage disappears after CPU isolation, keep existing single-poll mode. No gRPC push or durable worker credits are warranted solely from this benchmark.
+
+## Local PowerShell / Make commands
+
+The root `Makefile` uses **PowerShell 7 (`pwsh`) as its recipe shell** on Windows, macOS and Linux. GNU Make and Docker Compose v2 are also required. Commands below work from the repository root and automatically combine the base Compose file, the two-Hub matching HA overlay and the four-shard overlay. They preserve the PostgreSQL migrations and database flags already configured in `scaling/observability/.env`.
+
+```powershell
+# One-time setup; edit the local .env token and DB password before starting.
+make obs-setup
+
+# 2 Hubs, 4 matching shards, 8 native-only processor replicas, fanout ON.
+make obs-offboarding-fanout-up
+
+# Inspect services and confirm "Capacity-aware shard polling enabled" in logs.
+make obs-offboarding-fanout-ps
+make obs-offboarding-fanout-logs
+
+# Run the native offboarding k6 workload with the same HA topology.
+make obs-offboarding-fanout-test K6_OFFBOARD_COUNT=1000 K6_OFFBOARD_VUS=200
+
+# Stop services without removing PostgreSQL or Grafana volumes.
+make obs-offboarding-fanout-down
+```
+
+Optional overrides: `OFFBOARD_PROCESSORS=16`, `FANOUT_MATCHING_SHARDS=4`, `FANOUT_MAX_SHARD_POLLS=4`, and `OBS_ENV_FILE=scaling/observability/.env`. The `obs-offboarding-fanout-*` commands set `WFC_HUB_WORKER_CAPACITY_FANOUT=true`, `WFC_HUB_LONG_POLL_ENABLED=true`, and `WFC_HUB_MATCHING_EVENT_GATED=true` only for those targets. The existing `obs-offboarding-*` commands continue to use their normal Compose configuration.
+
+**Note:** `obs-offboarding-fanout-test` measures the three-step native offboarding workload; it is not the keyed-FIFO benchmark from CI. For a controlled OFF/ON comparison, use the dedicated `workflow-hub-worker-capacity-ab.yml` benchmark.
