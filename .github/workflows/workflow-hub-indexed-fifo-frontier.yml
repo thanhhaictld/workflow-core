@@ -1,0 +1,132 @@
+name: Workflow Hub Indexed FIFO Frontier E2E A/B
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-indexed-fifo-frontier.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fifo-frontier-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        frontier: ['false', 'true']
+    env:
+      WFC_OBSERVABILITY_PROJECT: wfc-frontier-${{ matrix.frontier }}-${{ github.run_id }}
+      WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED: ${{ matrix.frontier }}
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and benchmark code
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          node --input-type=module --check < scaling/observability/k6/partition-ordering.js
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py
+      - name: Build and start PostgreSQL and both Hub matching owners
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          # The migration is mandatory, not silently skipped when tests run.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            exec -T postgres psql -U workflow -d workflow -v ON_ERROR_STOP=1 \
+            -c "SELECT count(*) FROM pg_indexes WHERE schemaname='wfc_scale' AND indexname='ix_hub_fifo_pending_head';" \
+            | tee /tmp/frontier-index.txt
+          grep -q '1' /tmp/frontier-index.txt
+      - name: PostgreSQL concurrent lease and FIFO integration tests
+        run: |
+          set -euo pipefail
+          docker run --rm --network "${WFC_OBSERVABILITY_PROJECT}_default" \
+            -v "$PWD:/repo" -w /repo \
+            -e 'WFC_TEST_PG=Host=postgres;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only' \
+            mcr.microsoft.com/dotnet/sdk:10.0 \
+            dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release \
+              --filter "FullyQualifiedName~HubIndexedFifoFrontierTests|FullyQualifiedName~HubFifoHeadPrefilterTests|FullyQualifiedName~HubExplicitOrderingTests|FullyQualifiedName~HubUnconstrainedBatchClaimTests" \
+              --logger "console;verbosity=normal"
+      - name: Start eight DB-free processors with matching and event-gated hints
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/definitions > /tmp/definitions.json && \
+              python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/definitions.json'))
+          expected={'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}
+          assert expected.issubset({x['definitionId'] for x in data if x['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {x['definitionId'] for x in data if x['hubId']=='policy-benchmark'})
+          PY
+      - name: K6 100 workflows per policy with persisted FIFO verification
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/fifo-frontier
+          chmod 0777 scaling/observability/results scaling/observability/results/fifo-frontier
+          for mode in unordered partition keyed; do
+            run="frontier-${WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED}-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "::group::frontier=${WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED} policy=$mode"
+            K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile policy-k6 run --rm --no-deps \
+              -e K6_POLICY_MODE="$mode" \
+              -e K6_POLICY_COUNT=100 -e K6_POLICY_VUS=30 \
+              -e K6_POLICY_TIMEOUT_SECONDS=480 \
+              -e K6_POLICY_RUN_ID="$run" k6-policy \
+              | tee "scaling/observability/results/fifo-frontier/k6-${mode}.log"
+            cp scaling/observability/results/k6-policy-summary.json \
+              "scaling/observability/results/fifo-frontier/k6-${mode}.json"
+            python3 scaling/observability/benchmark/verify_ordering.py \
+              --mode "$mode" --run-id "$run" --count 100 \
+              --output "scaling/observability/results/fifo-frontier/verify-${mode}.json"
+            echo "::endgroup::"
+          done
+      - name: Upload measured results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexed-fifo-frontier-${{ matrix.frontier }}
+          path: scaling/observability/results/fifo-frontier/*
+          if-no-files-found: warn
+      - name: Capture failure logs
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" logs --tail=200 hub hub-2 postgres processor || true
+      - name: Stop lab
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" down --remove-orphans -v || true
