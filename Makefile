@@ -64,6 +64,16 @@ $(FANOUT_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := $(FANOUT_MAX_SHARD_P
 $(FANOUT_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := $(FANOUT_MATCHING_SHARDS)
 $(FANOUT_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
 $(FANOUT_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
+
+# Server-initiated task leases over persistent SSE. Credit replenishment uses
+# authenticated REST; existing long-poll flags remain OFF for this target.
+SSE_PUSH_TARGETS := obs-offboarding-sse-up obs-offboarding-sse-test obs-offboarding-sse-ps obs-offboarding-sse-logs obs-offboarding-sse-down
+.PHONY: $(SSE_PUSH_TARGETS)
+$(SSE_PUSH_TARGETS): export WFC_HUB_TASK_SSE_PUSH := true
+$(SSE_PUSH_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
+$(SSE_PUSH_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := $(FANOUT_MATCHING_SHARDS)
+$(SSE_PUSH_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
+$(SSE_PUSH_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
 obs-up:
@@ -119,6 +129,22 @@ obs-offboarding-fanout-logs:
 
 # This only stops the stack. It does not delete PostgreSQL or other volumes.
 obs-offboarding-fanout-down:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
+
+# Push variant of the same two-Hub + four-matching-shard laboratory.
+obs-offboarding-sse-up:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=0 --scale processor=$(OFFBOARD_PROCESSORS)
+
+obs-offboarding-sse-test:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+obs-offboarding-sse-ps:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load ps
+
+obs-offboarding-sse-logs:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load logs --tail=100 processor hub hub-2 hub-lb
+
+obs-offboarding-sse-down:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
 obs-down:
