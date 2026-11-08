@@ -4,6 +4,8 @@
 **Base:** [PR #27](https://github.com/thanhhaictld/workflow-core/pull/27) at `818ec2183a3e4b72a0ea8b8d76d7b287d6254326`. **The existing PostgreSQL optimization migrations 020–022, including `ix_hub_task_claim_sequence`, are inherited unchanged.**  
 **Status:** Experimental, default OFF; not Microsoft Durable Task-style push.
 
+**Diagrams:** [High-level topology, task-dispatch sequence and failover](capacity-aware-matching-diagrams.md).
+
 ## Motivation and scope
 
 Current native worker lanes use one `/workers/tasks:poll` at a time and **rotate** across the four matching shards. The worker already communicates free execution slots through `HubClaimRequest.MaxTasks`, but only one shard gets attention during each up-to-four-second matching wait. This may inflate ready-to-claim latency when tasks are ready on other shards.
