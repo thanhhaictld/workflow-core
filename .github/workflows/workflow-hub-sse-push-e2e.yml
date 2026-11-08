@@ -70,13 +70,12 @@ jobs:
           test "$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
             --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
           for i in {1..40}; do
-            if docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
-              --profile offboarding-load logs processor 2>&1 \
-              | grep -q 'SSE task push enabled'; then break; fi
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load logs --no-color processor > /tmp/sse-processor.log 2>&1
+            if grep -q 'SSE task push enabled' /tmp/sse-processor.log; then break; fi
             sleep 2
           done
-          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
-            --profile offboarding-load logs processor 2>&1 | grep -q 'SSE task push enabled'
+          grep -q 'SSE task push enabled' /tmp/sse-processor.log
       - name: Run real 100-workflow E2E for every ordering policy
         run: |
           set -euo pipefail
