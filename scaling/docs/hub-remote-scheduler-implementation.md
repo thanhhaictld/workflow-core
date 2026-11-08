@@ -84,6 +84,15 @@ To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions wh
 
 All mutating workflow operations are SQL transactions. A workflow waits by persisting a timer, releasing the processor, and re-enqueueing work on a future due deadline. SSE readiness is best-effort and reconciled by periodic Hub sweeps.
 
+Native commits return the already-read Hub ID to the gateway internally for
+readiness publication, avoiding a post-commit snapshot/inbox reload. The REST
+acknowledgement remains `HubTransitionResult`, including on idempotent replay.
+Within one native commit, activity registration reads are reused by
+`(hub, activity type, version)` under the existing shared policy locks. Each
+dispatch still validates its input and derives its own resource keys; the
+registration cache is discarded with the transaction so later commits observe
+registration and capacity updates.
+
 Workflow and activity registration updates metadata under the supplied identity
 and version. Developers keep same-version changes backward compatible and define
 a new code version for breaking changes, retaining earlier registrations while
@@ -124,3 +133,12 @@ For a future dedicated host, reuse `WorkflowCore.Hub.Scheduling` and `IHubTimerS
 Production identity/scoped authorization, operator recovery workflows, live cross-version migration, scheduler-health readiness, a dedicated scheduler host (optional), and a full 1000-due-timer failover stress test remain. Native workflows use the upstream cancellation/error semantics. `SubWorkflowStepBody` remains unsupported because it is unimplemented upstream.
 
 The system currently uses a shared **development bearer token**, local unauthenticated OTel/Prometheus remote write, and business activity handlers that simulate side effects. Do not expose this Compose stack publicly or infer production readiness from the smoke test.
+
+
+## Claim and activity throughput telemetry
+
+Worker-observed HTTP claim and poll metrics, their bounded labels, histogram
+boundaries, durable completion semantics, and process/export limitations are
+specified in the [observability guide](../observability/README.md#worker-claims-and-durable-activity-completions).
+They are distinct from internal database claim scans and do not establish
+exactly-once execution of external effects.

@@ -33,6 +33,10 @@ are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 
 > **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
 
+For the proposed move from worker claims to Hub batch matching and SSE task
+delivery, see the [architecture review and implementation plan](docs/hub-batch-sse-dispatch-plan.md).
+This is a proposal; current Hub SSE carries readiness hints, not assignments.
+
 For REST/SSE execution through a generic Hub, use the combined
 [native fluent Provisioner](docs/hub-native-fluent-runtime.md). It reuses upstream
 `IWorkflow<TData>` definitions, routes registered typed steps to durable activity

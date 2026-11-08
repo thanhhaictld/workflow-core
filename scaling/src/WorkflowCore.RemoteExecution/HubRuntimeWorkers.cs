@@ -152,18 +152,17 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         HubLeasedTask[] leases;
                         try
                         {
-                            leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
+                            leases = await ClaimRequestAsync(endpoint,
                                 new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
                                     Math.Min(16,effectiveConcurrency-running.Count),workflows,
                                     matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
-                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null), ct);
                             claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
                         }
                         finally
                         {
-                            HubTelemetry.WorkerClaimHttpDuration.Record(
-                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane,
-                                new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
+                            HubTelemetry.WorkerClaimHttpDuration.Record(Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds,
+                                _lane, new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
                         }
                         if (matchingPoll && options.MatchingPartitions > 1)
                             matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
@@ -322,16 +321,15 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var outcome = "error";
         try
         {
-            var leased = await client.PostAsync<HubLeasedTask[]>(
-                "api/hub/workers/tasks:poll",
+            var leases = await ClaimRequestAsync("api/hub/workers/tasks:poll",
                 new HubClaimRequest(_owner,
                     capabilities.Select(c => c.HubId).Distinct().ToArray(), capabilities,
                     MaxTasks: 1, Workflows: workflows,
                     MatchingPartition: shard, MatchingPartitionCount: options.MatchingPartitions), ct);
-            outcome = leased.Length > 0 ? "claimed" : "empty";
+            outcome = leases.Length > 0 ? "claimed" : "empty";
             HubTelemetry.WorkerClaimRequests.Add(1, _lane,
                 new KeyValuePair<string, object?>("outcome", outcome));
-            return leased;
+            return leases;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -339,16 +337,45 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             HubTelemetry.WorkerClaimRequests.Add(1, _lane,
                 new KeyValuePair<string, object?>("outcome", "error"));
             logger.LogWarning(ex, "Capacity-aware poll of matching shard {Shard} failed", shard);
-            // A failed owner-forwarding or networking path must not turn into
-            // a tight retry loop across multiple outstanding shard polls.
             await Task.Delay(TimeSpan.FromSeconds(1), ct);
             return [];
         }
         finally
         {
-            HubTelemetry.WorkerClaimHttpDuration.Record(
-                Stopwatch.GetElapsedTime(started).TotalSeconds, _lane,
-                new KeyValuePair<string, object?>("outcome", outcome));
+            HubTelemetry.WorkerClaimHttpDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds,
+                _lane, new KeyValuePair<string, object?>("outcome", outcome));
+        }
+    }
+
+    private Task<HubLeasedTask[]> ClaimRequestAsync(string endpoint, HubClaimRequest request, CancellationToken ct) =>
+        InstrumentClaimAsync(endpoint, _lane, () => client.PostAsync<HubLeasedTask[]>(endpoint, request, ct));
+
+    internal static async Task<HubLeasedTask[]> InstrumentClaimAsync(string endpoint,
+        KeyValuePair<string, object?> lane, Func<Task<HubLeasedTask[]>> send)
+    {
+        var transport = new KeyValuePair<string, object?>("transport", endpoint.EndsWith(":poll", StringComparison.Ordinal) ? "poll" : "claim");
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "error";
+        HubTelemetry.ClaimAttempts.Add(1, lane, transport);
+        try
+        {
+            var leases = await send();
+            outcome = leases.Length == 0 ? "empty" : "claimed";
+            if (leases.Length == 0) HubTelemetry.ClaimEmpty.Add(1, lane, transport);
+            HubTelemetry.ClaimBatchSize.Record(leases.Length, lane, transport);
+            foreach (var group in leases.GroupBy(t => t.TaskType is "__workflow__" or "__native_workflow__" ? "workflow" : "activity"))
+                HubTelemetry.ClaimSuccess.Add(group.Count(), new KeyValuePair<string, object?>("lane", group.Key), transport);
+            return leases;
+        }
+        catch (OperationCanceledException)
+        {
+            outcome = "cancelled";
+            throw;
+        }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            HubTelemetry.ClaimHttpDuration.Record(elapsed, lane, transport, new KeyValuePair<string, object?>("outcome", outcome));
         }
     }
 

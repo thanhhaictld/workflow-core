@@ -39,7 +39,7 @@ approve:
 
 # Observability Compose stack. The env file supplies Compose settings; make's
 # development-stack defaults above must not override its PostgreSQL credentials.
-COMPOSE ?= docker compose
+COMPOSE ?= $(PWSH) -NoProfile -File scaling/observability/compose.ps1
 OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
@@ -110,6 +110,10 @@ obs-offboarding-fanout-up:
 # Use the identical three-file topology for k6, inspection and cleanup.
 obs-offboarding-fanout-test:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+# Use the identical three-file topology for k6, inspection and cleanup.
+obs-offboarding-fanout-test-4k:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=4000 -e K6_OFFBOARD_COUNT=10000 k6-offboarding
 
 obs-offboarding-fanout-ps:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load ps

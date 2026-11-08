@@ -188,11 +188,10 @@ public static class HubGatewayEndpoints
         {
             try
             {
-                var result = await native.CommitAsync(id,request,ct);
-                if(result is null)return Results.Conflict(new{error="Stale native lease or revision"});
-                var runtime = await native.GetRuntimeAsync(id,ct);
-                if(runtime is not null)readiness.Publish(runtime.HubId);
-                return Results.Ok(result);
+                var outcome = await native.CommitWithRoutingAsync(id,request,ct);
+                if(outcome is null)return Results.Conflict(new{error="Stale native lease or revision"});
+                readiness.Publish(outcome.HubId);
+                return Results.Ok(outcome.Result);
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(KeyNotFoundException ex){return Results.NotFound(new{error=ex.Message});}

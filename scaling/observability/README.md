@@ -44,18 +44,32 @@ and the Prometheus scrape interval is 5 seconds.
 
 ## Start everything locally
 
-Requires Docker Desktop or Docker Engine + Compose v2.
+Requires Docker Desktop or Docker Engine + Compose v2, and PowerShell 7.
+The Compose launcher derives a stable project name from the worktree path, so
+each worktree has its own PostgreSQL and observability volumes. Use the launcher
+for every command, including commands with extra Compose files. Moving a
+worktree changes its project name. For direct `docker compose` use, set
+`WFC_OBSERVABILITY_PROJECT` to a unique, stable Compose project name first.
+Host ports still need distinct values in each worktree's `.env` when running
+stacks concurrently.
+
+Existing `workflow-hub-observability_*` volumes are not migrated or deleted;
+the new project starts with fresh volumes. Stop the old project explicitly with
+`docker compose -p workflow-hub-observability ... down` before starting the new
+stack if it is still running (set `WFC_OBSERVABILITY_PROJECT` to
+`workflow-hub-observability` for that command). Back up and migrate any data
+you need separately.
 
 ~~~bash
 # From the repository root:
 cp scaling/observability/.env.example scaling/observability/.env
 # Edit scaling/observability/.env to set strong local token/password.
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   up -d --build --scale provisioner=4
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env ps
 ~~~
 
@@ -81,7 +95,7 @@ PowerShell:
 
 ~~~powershell
 Copy-Item scaling/observability/.env.example scaling/observability/.env
-docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
 The migrate container applies SQL migrations 002–023, followed by the
@@ -145,7 +159,7 @@ run the default `tenant-onboarding` definition.
 ## Run the 1,000-workflow k6 E2E stress test
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml `
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml `
   --env-file scaling/observability/.env `
   --profile load run --rm k6
 ~~~
@@ -158,7 +172,7 @@ It checks results and returns a failure when a workflow fails or times out.
 Override the load:
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml `
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml `
   --env-file scaling/observability/.env `
   --profile load run --rm `
   -e K6_WORKFLOWS=2000 -e K6_VUS=200 `
@@ -202,12 +216,12 @@ service and stop the normal onboarding `provisioner` for a clean baseline:
 
 ~~~bash
 cp scaling/observability/.env.example scaling/observability/.env
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-load up -d --build \
   --scale processor=8 --scale provisioner=0
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-load ps
 ~~~
@@ -216,7 +230,7 @@ Run the separate k6 workload (submits all instances without per-workflow
 status polling, then polls only the run summary until all have completed):
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-k6 run --rm \
   -e K6_OFFBOARD_COUNT=1000 \
@@ -311,12 +325,12 @@ from a native .NET process. Without this variable, OTLP export is disabled.
 ## Health and monitoring checks
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env config --quiet
 
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_workflows_completed_total'
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_process_working_set_bytes'
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env logs --tail=100 \
   hub provisioner monitor-api monitor otel-collector prometheus grafana tempo loki
 ~~~
@@ -331,7 +345,7 @@ sampling, secret management and retention policies.
 ## Stop and clean up
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env down
 ~~~
 
@@ -351,3 +365,38 @@ including local workflow, PostgreSQL, Prometheus and Grafana state.
   container limits). Use an infrastructure exporter if OS-wide metrics
   are required.
 - Full remote IWorkflow<T> and subworkflow semantics are separate work.
+
+
+### Worker claims and durable activity completions
+
+The `WorkflowCore.Hub` meter exports `workflow_claim_attempts_total`,
+`workflow_claim_empty_total`, and `workflow_claim_success_total`, plus
+`workflow_claim_duration_seconds` and `workflow_claim_batch_size` histograms.
+Each attempt is one worker HTTP claim or long poll, including errors and
+cancellation; it is distinct from Hub database claim scans. Empty counts only
+successful responses with zero tasks. Success counts returned tasks, not requests.
+The duration covers the entire HTTP call, including long-poll wait but excluding
+error backoff; its `outcome` is `claimed`, `empty`, `error`, or `cancelled`.
+Batch size records every successful response including zero; its explicit bounds
+are 0, 1, 2, 4, 8, 16, 24, and 32. Duration bounds are 0.0005, 0.001,
+0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+30, and 60 seconds. Both include the implicit +Inf bucket.
+
+Claim labels are bounded: `lane=activity|workflow` and `transport=claim|poll`;
+duration also has `outcome`. Workflow-lane tasks are processor work, not
+business activities. Success uses the returned task type to classify its lane;
+the other claim measurements describe the requesting lane. Activity panels
+filter `lane="activity"`. The empty percentage divides by all attempts, so
+errors and cancellations are in the denominator; the outcome panel shows them
+separately. Percentiles aggregate histogram buckets across instances before
+`histogram_quantile`. An absent series or zero denominator is not replaced by
+invented data.
+
+`workflow_activities_completed_total` counts newly accepted durable activity
+completions in the Hub process, including standalone, managed, sequential remote,
+and native paths. Replays, rejected or expired leases, failed transactions, and
+workflow processor commits do not count. This is not a guarantee of exactly-once
+business side effects. Metrics are process-local and best effort: a crash after
+commit before recording, or before export, can lose counts. Use durable task and
+workflow history for reconciliation. No identifiers or payload fields are labels
+on these metrics. Existing `workflow_hub_*` diagnostics retain their meanings.

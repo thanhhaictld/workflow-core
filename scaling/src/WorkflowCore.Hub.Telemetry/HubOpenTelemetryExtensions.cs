@@ -58,6 +58,11 @@ public static class HubOpenTelemetryExtensions
                 };
                 metrics.AddView("workflow_hub_native_event_lane_lock_wait_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_claim_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_claim_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_claim_batch_size", new ExplicitBucketHistogramConfiguration
+                {
+                    Boundaries = new double[] { 0, 1, 2, 4, 8, 16, 24, 32 }
+                });
                 // Capture sub-second tail latency for every claim stage, not
                 // just the outer claim. Default buckets are too coarse here.
                 metrics.AddView("workflow_hub_claim_admission_wait_seconds", latencyBuckets);

@@ -1,5 +1,5 @@
 # Compose overlay for matching high-availability experiments.
-# Run: docker compose -f scaling/observability/compose.yaml
+# Run: pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml
 #      -f scaling/observability/compose.matching-ha.yaml
 #      --env-file scaling/observability/.env.example up -d --build hub hub-2 hub-lb
 services:

@@ -361,27 +361,26 @@ public sealed class HubTaskStore : IAsyncDisposable
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
-                -- For a single hub, scan its queue in sequence order. Multi-hub
-                -- requests retain the global ordered scan and outer hub filter.
+                -- Filter task eligibility before the ordered query boundary.
+                -- Single-hub equality permits a hub-selective index scan;
+                -- multiple hubs still share one global sequence order.
+                -- Share the workflow lookup between native status and version pins.
                 SELECT t.id FROM (
-                  SELECT * FROM wfc_scale.hub_task
+                  SELECT id,sequence,hub_id,task_type,workflow_id FROM wfc_scale.hub_task
                   WHERE state IN (0,1) AND attempts < max_attempts
                     AND /*hub_filter*/
+                    AND /*partition_filter*/
+                    AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
+                    AND ((state = 0 AND due_at <= now()) OR
+                         (state = 1 AND lease_until < now()))
                   ORDER BY sequence OFFSET 0
                 ) t
-                WHERE t.hub_id = ANY(@hubs)
-                  AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
-                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
-                      WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
-                  AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
-                  AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
-                    SELECT 1 FROM wfc_scale.hub_workflow w,
-                      jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
-                    WHERE w.id=workflow_id AND w.hub_id=p.hub
+                LEFT JOIN wfc_scale.hub_workflow w ON w.id = t.workflow_id
+                WHERE (w.id IS NULL OR w.execution_mode<>'native' OR w.native_status='Runnable')
+                  AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
+                    SELECT 1 FROM jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                    WHERE w.hub_id=p.hub
                       AND w.definition_id=p.definition AND w.definition_version=p.version))
-                  AND attempts < max_attempts
-                  AND ((state = 0 AND due_at <= now()) OR
-                       (state = 1 AND lease_until < now()))
                   AND (NOT @fifoHeadFilter OR NOT EXISTS (
                     SELECT 1 FROM wfc_scale.hub_task_constraint c
                     JOIN wfc_scale.hub_resource r
@@ -392,9 +391,11 @@ public sealed class HubTaskStore : IAsyncDisposable
                     WHERE c.task_id = t.id AND earlier.sequence < t.sequence
                       AND earlier.state IN (0, 1)
                   ))
-                ORDER BY sequence LIMIT 96
+                ORDER BY t.sequence LIMIT 96
                 """.Replace("/*hub_filter*/", hubs.Count == 1
-                    ? "hub_id = @hub" : "TRUE"), db))
+                    ? "hub_id = @hub" : "hub_id = ANY(@hubs)")
+                   .Replace("/*partition_filter*/", matchCount == 1
+                    ? "TRUE" : "partition_id % @matchCount = @matchPartition"), db))
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
                 candidateQuery.Parameters.AddWithValue("hub", hubs[0]);
@@ -826,12 +827,18 @@ public sealed class HubTaskStore : IAsyncDisposable
             SET state=2, owner=NULL, lease_until=NULL, result_json=@result, updated_at=now()
             WHERE id=@id AND owner=@owner AND epoch=@epoch
               AND state=1 AND lease_until>now()
+            RETURNING task_type
             """);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("owner", worker);
         cmd.Parameters.AddWithValue("epoch", epoch);
         cmd.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = resultJson;
-        if (await cmd.ExecuteNonQueryAsync(ct) == 1) return true;
+        if (await cmd.ExecuteScalarAsync(ct) is string taskType)
+        {
+            if (taskType is not ("__workflow__" or "__native_workflow__"))
+                HubTelemetry.ActivitiesCompleted.Add(1);
+            return true;
+        }
 
         // Client may retry after successful commit but a lost HTTP response.
         await using var check = _dataSource.CreateCommand("""
