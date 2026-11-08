@@ -141,6 +141,17 @@ public sealed class HubMatchingOwnership : BackgroundService
             ? _partitions.OwnsAsync(hub, partition, NodeId, lease.Epoch, ct)
             : Task.FromResult(false);
 
+    /// <summary>
+    /// Unlike checking just the current local owner, this validates the
+    /// exact epoch captured when an SSE stream was registered. Reacquiring
+    /// the shard under a newer generation must invalidate the old stream.
+    /// </summary>
+    public Task<bool> StillOwnsPartitionEpochAsync(
+        string hub, int partition, long epoch, CancellationToken ct) =>
+        _partitionOwned.TryGetValue((hub, partition), out var lease) && lease.Epoch == epoch
+            ? _partitions.OwnsAsync(hub, partition, NodeId, epoch, ct)
+            : Task.FromResult(false);
+
     public Task<HubLeasedTask[]?> ForwardAsync(
         HubMatchingLease owner, HubClaimRequest claim, string authorization, CancellationToken ct) =>
         ForwardToAsync(owner.OwnerUrl, claim, authorization, ct);
@@ -189,7 +200,17 @@ public sealed class HubMatchingOwnership : BackgroundService
         context.Response.Headers.CacheControl = "no-cache, no-transform";
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
-        await response.Content.CopyToAsync(context.Response.Body, ct);
+        // CopyToAsync only flushes when the stream ends, which is wrong for
+        // long-lived SSE frames. Relay and flush every received chunk so
+        // owner-forwarded tasks are actually pushed to the worker promptly.
+        await using var upstream = await response.Content.ReadAsStreamAsync(ct);
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = await upstream.ReadAsync(buffer, ct)) > 0)
+        {
+            await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+            await context.Response.Body.FlushAsync(ct);
+        }
     }
 
     public async Task<bool> ForwardSseCreditToAsync(string url,
