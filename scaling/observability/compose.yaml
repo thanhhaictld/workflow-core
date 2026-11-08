@@ -1,5 +1,5 @@
 # Set by compose.ps1 from the worktree path; required for direct Compose use.
-name: ${WFC_OBSERVABILITY_PROJECT:?Use scaling/observability/compose.ps1 or set a unique WFC_OBSERVABILITY_PROJECT}
+name: ${WFC_OBSERVABILITY_PROJECT:-wfc-ci-${GITHUB_RUN_ID:?Use scaling/observability/compose.ps1 or set WFC_OBSERVABILITY_PROJECT}}
 services:
   postgres:
     image: postgres:17
@@ -53,6 +53,7 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/021_hub_active_task_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/023_hub_claim_hub_sequence.sql
+        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_fifo_pending_frontier.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
@@ -96,6 +97,7 @@ services:
       WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS: "${WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS:-1}"
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: "${WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS:-false}"
       WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: "${WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED:-false}"
+      WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED: "${WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED:-false}"
       WFC_HUB_MATCHING_SCOPED_CLAIMS: "${WFC_HUB_MATCHING_SCOPED_CLAIMS:-false}"
       WFC_HUB_MATCHING_DEFER_OWNER_CHECK: "${WFC_HUB_MATCHING_DEFER_OWNER_CHECK:-false}"
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"
