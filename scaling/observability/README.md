@@ -400,3 +400,14 @@ business side effects. Metrics are process-local and best effort: a crash after
 commit before recording, or before export, can lose counts. Use durable task and
 workflow history for reconciliation. No identifiers or payload fields are labels
 on these metrics. Existing `workflow_hub_*` diagnostics retain their meanings.
+
+
+### HA load balancer and restarts
+
+`make obs-down` includes the matching HA overlays, so it stops both Hub
+replicas and the load balancer without removing named volumes. The HA nginx
+configuration resolves Hub service names through Docker DNS at runtime;
+recreated containers can receive different IP addresses. DNS refresh may take
+up to five seconds. A successful single readiness request does not guarantee
+all processors are registered or eliminate transient failures during restarts.
+Do not reuse benchmark runs with failed workflow starts for throughput comparisons.
