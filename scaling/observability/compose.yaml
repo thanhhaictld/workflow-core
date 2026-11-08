@@ -1,4 +1,5 @@
-name: workflow-hub-observability
+# Set by compose.ps1 from the worktree path; required for direct Compose use.
+name: ${WFC_OBSERVABILITY_PROJECT:?Use scaling/observability/compose.ps1 or set a unique WFC_OBSERVABILITY_PROJECT}
 services:
   postgres:
     image: postgres:17

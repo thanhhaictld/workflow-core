@@ -354,6 +354,14 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         string hub, string activity, int version, JsonElement input, CancellationToken ct,
         NpgsqlConnection? connection = null, NpgsqlTransaction? transaction = null)
     {
+        var registration=await ReadActivityRouteRegistrationAsync(hub,activity,version,ct,connection,transaction);
+        return registration?.Resolve(hub,activity,version,input);
+    }
+
+    internal async Task<ActivityRouteRegistration?> ReadActivityRouteRegistrationAsync(
+        string hub, string activity, int version, CancellationToken ct,
+        NpgsqlConnection? connection = null, NpgsqlTransaction? transaction = null)
+    {
         if(connection is not null && transaction is not null)
             await LockPolicyHub(connection,transaction,hub,ct,shared:true);
         const string sql = """
@@ -377,34 +385,46 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         string? field=reader.IsDBNull(4)?null:reader.GetString(4);
         int resourceLimit=reader.GetInt32(5); bool fifo=reader.GetBoolean(6);
         var ordering = Enum.Parse<HubActivityOrdering>(reader.GetString(7));
-        // Hub identifies the policy owner and authorizes requests; it does not
-        // implicitly serialize business work for explicit scheduling modes.
-        var rules = new List<HubResourceRule>();
-        if(ordering == HubActivityOrdering.Legacy)
+        return new(partitions,hubLimit,activityLimit,resource,field,resourceLimit,fifo,ordering);
+    }
+
+    internal sealed record ActivityRouteRegistration(int Partitions,int HubLimit,int ActivityLimit,
+        string? Resource,string? Field,int ResourceLimit,bool Fifo,HubActivityOrdering Ordering)
+    {
+        internal HubTaskRoute Resolve(string hub,string activity,int version,JsonElement input)
         {
-            rules.Add(new("hub:" + hub + ":" + Digest(hub), hubLimit, false));
-            rules.Add(new("activity:" + hub + ":" + activity + ":" + Digest(activity), activityLimit, false));
+            var ordering=Ordering;
+            var resource=Resource;
+            var field=Field;
+            // Hub identifies the policy owner and authorizes requests; it does not
+            // implicitly serialize business work for explicit scheduling modes.
+            var rules = new List<HubResourceRule>();
+            if(ordering == HubActivityOrdering.Legacy)
+            {
+                rules.Add(new("hub:" + hub + ":" + Digest(hub), HubLimit, false));
+                rules.Add(new("activity:" + hub + ":" + activity + ":" + Digest(activity), ActivityLimit, false));
+            }
+            if ((ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or
+                HubActivityOrdering.KeyedBounded) && (resource is null || field is null))
+                throw new InvalidOperationException("Keyed policy has no resource selector");
+            if ((ordering == HubActivityOrdering.Legacy && resource is not null && field is not null) ||
+                 (ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded))
+            {
+                if (field is null || input.ValueKind != JsonValueKind.Object ||
+                    !input.TryGetProperty(field, out var key) ||
+                    key.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(key.GetString()))
+                    throw new ArgumentException("Missing declarative policy resource field: " + field);
+                var capacity = ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo
+                    ? 1 : ResourceLimit;
+                var strictFifo = ordering == HubActivityOrdering.KeyedFifo ||
+                    (ordering == HubActivityOrdering.Legacy && Fifo);
+                rules.Add(new("resource:" + hub + ":" + resource + ":" + Digest(key.GetString()!),
+                    capacity, strictFifo));
+            }
+            return new(hub, activity, version, Partitions,
+                rules.OrderBy(x => x.Key,StringComparer.Ordinal).ToArray(), ordering);
         }
-        if ((ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or
-            HubActivityOrdering.KeyedBounded) && (resource is null || field is null))
-            throw new InvalidOperationException("Keyed policy has no resource selector");
-        if ((ordering == HubActivityOrdering.Legacy && resource is not null && field is not null) ||
-             (ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded))
-        {
-            if (input.ValueKind != JsonValueKind.Object ||
-                !input.TryGetProperty(field, out var key) ||
-                key.ValueKind != JsonValueKind.String ||
-                string.IsNullOrWhiteSpace(key.GetString()))
-                throw new ArgumentException("Missing declarative policy resource field: " + field);
-            var capacity = ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo
-                ? 1 : resourceLimit;
-            var strictFifo = ordering == HubActivityOrdering.KeyedFifo ||
-                (ordering == HubActivityOrdering.Legacy && fifo);
-            rules.Add(new("resource:" + hub + ":" + resource + ":" + Digest(key.GetString()!),
-                capacity, strictFifo));
-        }
-        return new(hub, activity, version, partitions,
-            rules.OrderBy(x => x.Key,StringComparer.Ordinal).ToArray(), ordering);
     }
 
     private static string Digest(string value) =>

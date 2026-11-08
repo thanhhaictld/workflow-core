@@ -92,6 +92,12 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     }
 
     public async Task<HubTransitionResult?> CommitAsync(Guid id, HubNativeCommit request, CancellationToken ct)
+        => (await CommitWithRoutingAsync(id, request, ct))?.Result;
+
+    // Gateway notification metadata stays outside the public REST acknowledgement.
+    public sealed record CommitOutcome(HubTransitionResult Result, string HubId);
+
+    public async Task<CommitOutcome?> CommitWithRoutingAsync(Guid id, HubNativeCommit request, CancellationToken ct)
     {
         var commitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if(request.ProtocolVersion!=1 || request.TaskId==Guid.Empty || request.Epoch<1 || request.ExpectedRevision<0 ||
@@ -167,7 +173,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             {
                 var stored=Json(r.GetString(5));
                 if(stored.TryGetProperty("commit",out var previous) && JsonElement.DeepEquals(previous,Json(canonical)))
-                    return new(id,stored.GetProperty("revision").GetInt64(),stored.GetProperty("status").GetString()!,true);
+                    return new(new(id,stored.GetProperty("revision").GetInt64(),stored.GetProperty("status").GetString()!,true),hub);
                 return null;
             }
             if(r.GetInt16(0)!=1 || r.IsDBNull(1) || r.GetString(1)!=request.WorkerId ||
@@ -208,6 +214,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         if(request.Status is "Runnable" or "Suspended")
         {
             var dispatches=new List<(HubNativeDispatch Activity,HubTaskRoute Route)>();
+            // Entries and their shared policy locks live only for this transaction.
+            var registrations=new Dictionary<(string Hub,string Activity,int Version),HubDefinitionStore.ActivityRouteRegistration>();
             foreach(var activity in request.Activities)
             {
                 // Dispatch keys are stable across transport retries, unique across native retries/iterations.
@@ -215,8 +223,14 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                     SELECT 1 FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key
                     """,("id",id),("key",activity.DispatchKey)))
                     if(await existing.ExecuteScalarAsync(ct) is not null)continue;
-                var route=await definitions.ResolveAsync(hub,activity.ActivityType,activity.Version,activity.Input,ct,db,tx)
-                    ?? throw new KeyNotFoundException("Unregistered native activity");
+                var key=(hub,activity.ActivityType,activity.Version);
+                if(!registrations.TryGetValue(key,out var registration))
+                {
+                    registration=await definitions.ReadActivityRouteRegistrationAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
+                        ?? throw new KeyNotFoundException("Unregistered native activity");
+                    registrations.Add(key,registration);
+                }
+                var route=registration.Resolve(hub,activity.ActivityType,activity.Version,activity.Input);
                 if(partition>=route.PartitionCount)throw new InvalidOperationException("Activity partition mismatch");
                 dispatches.Add((activity,route));
             }
@@ -338,7 +352,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             HistoryModeTag, EventLaneModeTag);
         if(nextStatus=="Complete")HubTelemetry.WorkflowsCompleted.Add(1,HubTelemetry.HubTag(hub));
         if(nextStatus=="Terminated")HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
-        return new(id,revision+1,nextStatus,false);
+        return new(new(id,revision+1,nextStatus,false),hub);
     }
 
     internal static async Task WakeAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,int partition,CancellationToken ct)
@@ -532,6 +546,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
             tags:new System.Diagnostics.ActivityTagsCollection {
                 { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
+        HubTelemetry.ActivitiesCompleted.Add(1);
         HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
         return true;
     }

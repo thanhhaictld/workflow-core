@@ -43,7 +43,7 @@ assert 0 <= args.max_extra_attempts <= args.count
 
 def query(sql):
     result = subprocess.run([
-        "docker", "compose", "-f", "scaling/observability/compose.yaml",
+        "pwsh", "-NoProfile", "-File", "scaling/observability/compose.ps1", "-f", "scaling/observability/compose.yaml",
         "--env-file", "scaling/observability/.env.example",
         "exec", "-T", "postgres", "psql", "-X", "-U", "workflow", "-d",
         "workflow", "-Atc", sql

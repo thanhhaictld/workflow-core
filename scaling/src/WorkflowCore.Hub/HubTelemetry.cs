@@ -45,6 +45,14 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_timer_batch_duration_seconds", "s");
     public static readonly Counter<long> TimerSchedulerErrors =
         Meter.CreateCounter<long>("workflow_hub_timer_scheduler_errors", "{error}");
+    // Worker-observed HTTP claims and newly committed activity completions.
+    // Names omit Prometheus suffixes; the collector adds _total to counters.
+    public static readonly Counter<long> ClaimAttempts = Meter.CreateCounter<long>("workflow_claim_attempts");
+    public static readonly Counter<long> ClaimEmpty = Meter.CreateCounter<long>("workflow_claim_empty");
+    public static readonly Counter<long> ClaimSuccess = Meter.CreateCounter<long>("workflow_claim_success");
+    public static readonly Histogram<double> ClaimHttpDuration = Meter.CreateHistogram<double>("workflow_claim_duration_seconds", "s");
+    public static readonly Histogram<int> ClaimBatchSize = Meter.CreateHistogram<int>("workflow_claim_batch_size");
+    public static readonly Counter<long> ActivitiesCompleted = Meter.CreateCounter<long>("workflow_activities_completed");
     public static readonly Counter<long> TasksClaimed =
         Meter.CreateCounter<long>("workflow_hub_tasks_claimed", "{task}");
     public static readonly Counter<long> TasksCompleted =

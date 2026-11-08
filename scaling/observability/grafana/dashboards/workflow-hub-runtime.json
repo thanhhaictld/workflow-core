@@ -1,7 +1,7 @@
 {
   "id": null,
   "uid": "workflow-hub-otel",
-  "title": "Workflow Hub • Stress Test & Runtime",
+  "title": "Workflow Hub \u00e2\u20ac\u00a2 Stress Test & Runtime",
   "tags": [
     "workflow-core",
     "otel",
@@ -220,7 +220,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Memory usage — Hub and worker processes",
+      "title": "Memory usage \u00e2\u20ac\u201d Hub and worker processes",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -271,7 +271,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Managed heap — Hub and workers",
+      "title": "Managed heap \u00e2\u20ac\u201d Hub and workers",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1547,6 +1547,210 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Activity claim attempts/s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 117,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
+          "legendFormat": "attempts/s",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Empty activity claims (%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 117,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(workflow_claim_empty_total{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
+          "legendFormat": "empty %",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Activity throughput/s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 125,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(workflow_claim_success_total{lane=\"activity\"}[5m]))",
+          "legendFormat": "claimed",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(workflow_activities_completed_total[5m]))",
+          "legendFormat": "durably completed",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Activity claim latency p95/p99 by transport",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 125,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
+          "legendFormat": "p95 {{transport}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
+          "legendFormat": "p99 {{transport}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Activity claim average batch size",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 133,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(workflow_claim_batch_size_sum{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_batch_size_count{lane=\"activity\"}[5m]))",
+          "legendFormat": "tasks / successful request",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Activity claim HTTP outcomes/s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 133,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (transport, outcome) (rate(workflow_claim_duration_seconds_count{lane=\"activity\"}[5m]))",
+          "legendFormat": "{{transport}} {{outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
         },
         "overrides": []
       }

@@ -23,6 +23,10 @@ is enabled in a live deployment.
 
 ## Matching and performance
 
+The [batch matching and SSE task delivery review/plan](hub-batch-sse-dispatch-plan.md)
+proposes capacity-aware assignments across workers. It is not implemented;
+current SSE continues to carry readiness hints only.
+
 These documents describe implemented options and specific experiments. Their
 branch names, measurements and comparisons refer to the recorded investigation,
 not a guarantee for today's deployment. The current default transport is adaptive
@@ -41,6 +45,7 @@ the HA Compose overlay.
 - [Throughput investigation](throughput-investigation-report.md)
 - [Claim/completion A/B](workflow-p95-claim-completion-ab.md)
 - [SQL CPU investigation](sql-cpu-statement-investigation.md)
+- [Claim candidate query review and local tuning](hub-claim-query-tuning.md)
 - [Capacity assessment](throughput-1000-to-million-assessment.md)
 - [Historical 1,000-workflow activity benchmark](workflow-hub-1000-performance.md)
 

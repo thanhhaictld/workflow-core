@@ -12,3 +12,5 @@ docker-compose.*.yml
 **/.next
 **/.env.local
 **/.env.*.local
+**.md
+Makefile
