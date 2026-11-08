@@ -1,6 +1,6 @@
 {
   "uid": "workflow-postgresql",
-  "title": "Workflow Hub â€¢ PostgreSQL",
+  "title": "Workflow Hub • PostgreSQL",
   "tags": ["workflow-core", "postgres"],
   "timezone": "browser",
   "schemaVersion": 41,
@@ -83,6 +83,84 @@
       "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_index_scans_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "text",
+      "title": "Statement statistics",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Top statements are cumulative for the current database since the statistics reset, not the selected time range. Total execution time includes waits and sums concurrent calls; it is not CPU time. Entries may be evicted and query text may be hidden by PostgreSQL permissions. If the panels fail, check the PostgreSQL datasource, permissions, pg_stat_statements preload, and extension."
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Statistics reset (all databases)",
+      "description": "pg_stat_statements reset time applies across databases. Individual entries can also be reset or evicted.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT stats_reset AS \"Statistics reset\" FROM pg_stat_statements_info"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Top queries by cumulative execution time",
+      "description": "Ten statements in the current database with the highest cumulative total execution time. Values are not restricted to the dashboard time range.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT queryid::text AS \"Query ID\", left(query, 4000) AS \"Query\", calls AS \"Calls\", total_exec_time AS \"Total execution (ms)\", mean_exec_time AS \"Mean execution (ms)\", rows AS \"Rows\" FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY total_exec_time DESC, queryid LIMIT 10"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     }
   ]
 }

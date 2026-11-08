@@ -60,25 +60,21 @@ jobs:
         run: |
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale provisioner=2
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
-      - name: Verify Hub, legacy monitoring API, Next.js UI and Grafana readiness
+      - name: Verify Hub, Next.js UI and Grafana readiness
         run: |
           set -euo pipefail
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
                curl -fsS http://127.0.0.1:3001/api/health >/dev/null &&
-               curl -fsS http://127.0.0.1:5000/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:3002/hub >/dev/null &&
-               curl -fsS http://127.0.0.1:3002/backend/monitor/overview >/dev/null; then break; fi
+               curl -fsS http://127.0.0.1:3002/api/hub-overview >/dev/null; then break; fi
             sleep 2
           done
           curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
-          curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
-          curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/legacy-monitor.html
           curl --fail-with-body -fsSL http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
-          curl --fail-with-body -fsS http://127.0.0.1:3002/backend/monitor/overview >/tmp/legacy-monitor-overview.json
           curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
 
           # Verify real PostgreSQL-backed dashboard through the Next.js
@@ -107,13 +103,11 @@ jobs:
           PY
           python3 - <<'PY'
           import json
-          legacy=json.load(open('/tmp/legacy-monitor-overview.json'))
           hub=json.load(open('/tmp/hub-monitor-overview.json'))
-          assert isinstance(legacy,dict), 'Legacy monitor API did not return JSON'
           assert isinstance(hub.get('runs'),list), 'Next.js Hub proxy did not return run list'
           assert 'databaseConnections' in hub['diagnostics']
           assert b'Workflow monitoring' in open('/tmp/hub-monitor.html','rb').read()
-          print('Next.js monitor, legacy backend and authenticated Hub proxy are online.')
+          print('Next.js monitor and authenticated Hub proxy are online.')
           PY
           curl --fail-with-body -fsS -u admin:local-grafana-change-this \
             http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel >/tmp/grafana-dashboard.json
@@ -173,7 +167,7 @@ jobs:
             --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
           test "$replicas" -eq 8
           # The offboarding processor publishes through Hub REST. The Definitions
-          # page must use that persisted catalog, not only the legacy archive.
+          # page must use the Hub's persisted definition catalog.
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json && python3 - <<'PY'
           import json
@@ -279,37 +273,27 @@ jobs:
           assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
           print('PASS: native combined Provisioner + embedded scheduler + durable timer journal')
           PY
-      - name: Verify unified workflow list, Hub filtering and durable step history
+      - name: Verify Hub workflow list, filtering and durable step history
         run: |
           set -euo pipefail
-          # One legacy instance creates a mixed-source monitor feed.
-          curl --fail-with-body -fsS -X POST \
-            -H 'Content-Type: application/json' \
-            -d '{"tenantId":"smoke-legacy-otel","organizationName":"Smoke Test"}' \
-            http://127.0.0.1:5000/api/demo/onboardings > /tmp/legacy-created.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&status=Complete&take=10&page=1' > /tmp/unified-onboarding.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&take=10&page=2' > /tmp/unified-hub-page2.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=legacy' > /tmp/unified-legacy.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=all' > /tmp/unified-all.json
           python3 - <<'PY'
           import json
           hub=json.load(open('/tmp/unified-hub.json'))
           onboarding=json.load(open('/tmp/unified-onboarding.json'))
           p2=json.load(open('/tmp/unified-hub-page2.json'))
-          legacy=json.load(open('/tmp/unified-legacy.json'))
           combined=json.load(open('/tmp/unified-all.json'))
           assert hub['total']>=20, hub
           assert all(x['source']=='hub' and x['status']=='Complete' for x in hub['items'])
           assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in onboarding['items'])
           assert p2['items'] and p2['total']>=20
-          assert legacy['total']>=1, legacy
-          assert all(x['source']=='legacy' for x in legacy['items'])
-          assert combined['total']>=21 and combined['total']==hub['total']+legacy['total']
-          assert {'hub','legacy','onboarding'}.issubset({'hub','legacy',*combined['hubs']})
-          assert any(x['source']=='legacy' for x in combined['items'])
-          assert any(x['source']=='hub' for x in combined['items'])
-          print('PASS: unified list returns both sources and hub/status/pagination filters')
+          assert combined['total']>=hub['total']
+          assert {'onboarding'}.issubset(set(combined['hubs']))
+          assert all(x['source']=='hub' for x in combined['items'])
+          print('PASS: Hub list returns durable executions with Hub/status/pagination filters')
           # The preceding timer test also creates a completed 4-step workflow.
           # Only validate the 3-step activity workload in this assertion.
           selected=next(x for x in onboarding['items'] if x['definitionId']=='tenant-onboarding')

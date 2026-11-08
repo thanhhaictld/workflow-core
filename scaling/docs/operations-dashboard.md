@@ -133,3 +133,20 @@ index-only scan results. Counters may reset when PostgreSQL statistics are
 reset; rates need at least two samples and are unavailable while collection
 is down. The collector's SQL query receiver is experimental. The query reads
 statistics views and does not scan workflow or task tables.
+
+
+The PostgreSQL Grafana dashboard also shows the ten statements with the highest
+cumulative `pg_stat_statements.total_exec_time` in the configured database and
+the statistics reset time. This ranking ignores the dashboard time range;
+execution time includes waits and sums concurrent calls, and is not CPU time.
+Individual entries can be reset or evicted, and text visibility depends on
+PostgreSQL permissions. The local Compose stack preloads and creates the
+extension during startup; for other deployments, install and preload it and
+configure the PostgreSQL datasource. Panel errors expose missing extensions,
+permissions, or datasource failures rather than reporting an empty ranking.
+
+The local Grafana server uses the existing database credentials for its
+server-side datasource. These development credentials have broad database
+access; Grafana users who can query the datasource can execute SQL and view
+statement text, which may contain sensitive information. Restrict access and
+use an appropriately limited database role outside this local stack.
