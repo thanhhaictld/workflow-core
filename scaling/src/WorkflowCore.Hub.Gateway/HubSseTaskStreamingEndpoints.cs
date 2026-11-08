@@ -25,7 +25,7 @@ public static class HubSseTaskStreamingEndpoints
                 claim.WorkerId is not { Length: > 0 and <= 128 } ||
                 claim.MaxTasks != 1 ||
                 request.Capacity is < 1 or > 64 ||
-                request.InitialCredits < 0 || request.InitialCredits > request.Capacity ||
+                request.InitialCredits != 0 ||
                 claim.MatchingPartition is null || claim.MatchingPartition < 0 ||
                 claim.MatchingPartition >= ownership.PartitionCount ||
                 claim.MatchingPartitionCount != ownership.PartitionCount ||
