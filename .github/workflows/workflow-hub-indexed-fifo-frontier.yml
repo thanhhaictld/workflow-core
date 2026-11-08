@@ -35,6 +35,7 @@ jobs:
       HA: scaling/observability/compose.matching-ha.yaml
       SHARDS: scaling/observability/compose.matching-shards.yaml
       ENVFILE: scaling/observability/.env.example
+      WFC_HUB_VERIFY_URL: http://127.0.0.1:5110
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose and benchmark code
@@ -47,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
-            up -d --build hub hub-2 hub-lb
+            up -d --build hub hub-2 hub-lb prometheus
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
             sleep 2
