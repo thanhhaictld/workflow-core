@@ -126,7 +126,7 @@ obs-offboarding-fanout-down:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
 obs-down:
-	$(OBS_COMPOSE) --profile * down
+	$(OBS_FANOUT_COMPOSE) --profile * down
 
 # Destructive: deletes named volumes belonging to this Compose project.
 obs-clean:
