@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using WorkflowCore.Hub;
 
 namespace WorkflowCore.Hub.Gateway;
