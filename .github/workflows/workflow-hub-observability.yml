@@ -60,21 +60,21 @@ jobs:
         run: |
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale provisioner=2
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
-      - name: Verify Hub, Next.js UI and Grafana readiness
+      - name: Verify Hub, Next.js Hub-only UI and Grafana readiness
         run: |
           set -euo pipefail
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
                curl -fsS http://127.0.0.1:3001/api/health >/dev/null &&
-               curl -fsS http://127.0.0.1:3002/hub >/dev/null &&
+               curl -fsS http://127.0.0.1:3002/workflows >/dev/null &&
                curl -fsS http://127.0.0.1:3002/api/hub-overview >/dev/null; then break; fi
             sleep 2
           done
           curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
-          curl --fail-with-body -fsSL http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
+          curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/hub-monitor.html
           curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
 
           # Verify real PostgreSQL-backed dashboard through the Next.js
@@ -273,7 +273,7 @@ jobs:
           assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
           print('PASS: native combined Provisioner + embedded scheduler + durable timer journal')
           PY
-      - name: Verify Hub workflow list, filtering and durable step history
+      - name: Verify Hub-only workflow list, Hub filtering and durable step history
         run: |
           set -euo pipefail
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
@@ -290,7 +290,7 @@ jobs:
           assert all(x['source']=='hub' and x['status']=='Complete' for x in hub['items'])
           assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in onboarding['items'])
           assert p2['items'] and p2['total']>=20
-          assert combined['total']>=hub['total']
+          assert combined['total']>=hub['total']>=20
           assert {'onboarding'}.issubset(set(combined['hubs']))
           assert all(x['source']=='hub' for x in combined['items'])
           print('PASS: Hub list returns durable executions with Hub/status/pagination filters')
