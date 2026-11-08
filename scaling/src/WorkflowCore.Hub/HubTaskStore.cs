@@ -361,6 +361,35 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.ClaimBatchOutcome.Add(1,
                 new KeyValuePair<string, object?>("outcome", batchOutcome));
         }
+        // Select ONE query shape per Hub process. A parameterized OR across
+        // indexed/legacy FIFO prefilters forces PostgreSQL to plan both paths
+        // for generic prepared plans; it also adds an unnecessary correlated
+        // anti-join to unordered claims when the feature is disabled.
+        // Filtering remains advisory. The resource-row lock rechecks FIFO
+        // authoritatively in the candidate lease transaction below.
+        var fifoHeadPredicate = _indexedFifoFrontierEnabled ? """
+                  AND NOT EXISTS (
+                    SELECT 1 FROM wfc_scale.hub_task_constraint c
+                    JOIN wfc_scale.hub_resource r
+                      ON r.resource_key=c.resource_key AND r.strict_fifo
+                    JOIN wfc_scale.hub_task_constraint previous
+                      ON previous.resource_key=c.resource_key
+                     AND previous.fifo_pending
+                     AND previous.queue_sequence < t.sequence
+                    WHERE c.task_id=t.id
+                  )
+                  """ : _fifoHeadPrefilterEnabled ? """
+                  AND NOT EXISTS (
+                    SELECT 1 FROM wfc_scale.hub_task_constraint c
+                    JOIN wfc_scale.hub_resource r
+                      ON r.resource_key=c.resource_key AND r.strict_fifo
+                    JOIN wfc_scale.hub_task_constraint previous
+                      ON previous.resource_key=c.resource_key
+                    JOIN wfc_scale.hub_task earlier ON earlier.id=previous.task_id
+                    WHERE c.task_id=t.id AND earlier.sequence < t.sequence
+                      AND earlier.state IN (0,1)
+                  )
+                  """ : string.Empty;
         var fallbackStarted = Stopwatch.GetTimestamp();
         for (var batch = results.Count; batch < maxTasks; batch++)
         {
@@ -387,39 +416,18 @@ public sealed class HubTaskStore : IAsyncDisposable
                     SELECT 1 FROM jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
                     WHERE w.hub_id=p.hub
                       AND w.definition_id=p.definition AND w.definition_version=p.version))
-                  AND (NOT @fifoHeadFilter OR (
-                    @indexedFrontier AND NOT EXISTS (
-                      SELECT 1 FROM wfc_scale.hub_task_constraint c
-                      JOIN wfc_scale.hub_resource r
-                        ON r.resource_key=c.resource_key AND r.strict_fifo
-                      JOIN wfc_scale.hub_task_constraint previous
-                        ON previous.resource_key=c.resource_key
-                       AND previous.fifo_pending
-                       AND previous.queue_sequence < t.sequence
-                      WHERE c.task_id=t.id
-                    )) OR (
-                    NOT @indexedFrontier AND NOT EXISTS (
-                      SELECT 1 FROM wfc_scale.hub_task_constraint c
-                      JOIN wfc_scale.hub_resource r
-                        ON r.resource_key=c.resource_key AND r.strict_fifo
-                      JOIN wfc_scale.hub_task_constraint previous
-                        ON previous.resource_key=c.resource_key
-                      JOIN wfc_scale.hub_task earlier ON earlier.id=previous.task_id
-                      WHERE c.task_id=t.id AND earlier.sequence < t.sequence
-                        AND earlier.state IN (0,1)
-                    )))
+                  /*fifo_head_predicate*/
                 ORDER BY t.sequence LIMIT 96
                 """.Replace("/*hub_filter*/", hubs.Count == 1
                     ? "hub_id = @hub" : "hub_id = ANY(@hubs)")
                    .Replace("/*partition_filter*/", matchCount == 1
-                    ? "TRUE" : "partition_id % @matchCount = @matchPartition"), db))
+                    ? "TRUE" : "partition_id % @matchCount = @matchPartition")
+                   .Replace("/*fifo_head_predicate*/", fifoHeadPredicate), db))
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
                 candidateQuery.Parameters.AddWithValue("hub", hubs[0]);
                 candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
                 candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
-                candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled || _indexedFifoFrontierEnabled);
-                candidateQuery.Parameters.AddWithValue("indexedFrontier", _indexedFifoFrontierEnabled);
                 candidateQuery.Parameters.AddWithValue("types", supported);
                 candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
