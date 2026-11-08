@@ -137,10 +137,13 @@ obs-offboarding-fanout-down:
 
 # Push variant of the same two-Hub + four-matching-shard laboratory.
 obs-offboarding-sse-up:
-	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=0 --scale processor=$(OFFBOARD_PROCESSORS)
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=1 --scale processor=$(OFFBOARD_PROCESSORS)
 
 obs-offboarding-sse-test:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+obs-offboarding-sse-test-4k:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=400 -e K6_OFFBOARD_COUNT=10000 k6-offboarding
 
 obs-offboarding-sse-ps:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load ps

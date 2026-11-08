@@ -22,6 +22,7 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 - Apply `scaling/sql/021_hub_active_task_indexes.sql` after 020 for workflow retirement; index creation can briefly block writes.
 - Apply `scaling/sql/022_hub_claim_index_selectivity.sql` after 021 and before deploying the corresponding Hub query. It narrows the ordered claim index so unrelated point updates do not scan the active queue when statistics are stale.
 - Apply `scaling/sql/023_hub_claim_hub_sequence.sql` after 022 to support hub-selective ordered claims. Creating the index on an existing large database can block writes; plan deployment accordingly.
+- Apply `scaling/sql/024_hub_native_reconcile_tasks.sql` after 023 before deploying the revised native inbox sweep. It indexes exhausted native activity tasks; index creation on a large existing table can block writes.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
 **Contract note:** native runs use execution-pointer snapshots and durable inboxes. Tested scenarios include mappings, branches, loops, parallel joins, delays, schedules, recurrence, events, activities, retries, cancellation, and compensation. Upstream's unimplemented `SubWorkflowStepBody` is rejected. See the [native runtime guide](hub-native-fluent-runtime.md) for contracts and limits. Existing sequential and inline runs retain their execution modes.
