@@ -4,6 +4,10 @@
 .DEFAULT_GOAL := help
 
 PWSH ?= pwsh
+# Use PowerShell 7 for Make recipes on Windows, Linux and macOS.
+# Avoid Bash-only syntax in targets; .SHELLFLAGS controls pwsh's command mode.
+SHELL := $(PWSH)
+.SHELLFLAGS := -NoLogo -NoProfile -NonInteractive -Command
 PG_PORT ?= 55432
 PG_USER ?= workflow
 PG_PASSWORD ?= workflow_dev_only
@@ -41,11 +45,25 @@ OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
 OFFBOARD_PROCESSORS ?= 8
 OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
+# Preserve the base file and layer matching HA and four-shard ownership.
+OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" --env-file "$(OBS_ENV_FILE)"
+FANOUT_MATCHING_SHARDS ?= 4
+FANOUT_MAX_SHARD_POLLS ?= 4
 K6_OFFBOARD_VUS ?= 200
 K6_OFFBOARD_COUNT ?= 1000
 
 
 .PHONY: obs-setup obs-up obs-scale obs-stress-test obs-down obs-clean obs-ps obs-offboarding-up obs-offboarding-test obs-offboarding-ps
+.PHONY: obs-offboarding-fanout-up obs-offboarding-fanout-test obs-offboarding-fanout-ps obs-offboarding-fanout-logs obs-offboarding-fanout-down
+
+# These target-specific exports reach Docker Compose on every platform,
+# including when GNU Make runs with pwsh. They do not affect normal obs-*.
+FANOUT_TARGETS := obs-offboarding-fanout-up obs-offboarding-fanout-test obs-offboarding-fanout-ps obs-offboarding-fanout-logs obs-offboarding-fanout-down
+$(FANOUT_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := true
+$(FANOUT_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := $(FANOUT_MAX_SHARD_POLLS)
+$(FANOUT_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := $(FANOUT_MATCHING_SHARDS)
+$(FANOUT_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
+$(FANOUT_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
 obs-up:
@@ -82,6 +100,26 @@ obs-offboarding-test-100b:
 
 obs-offboarding-ps:
 	$(OBS_COMPOSE) --profile offboarding-load ps
+
+# One command for the full fanout experiment: PostgreSQL + both matching Hubs
+# + HA load balancer + four matching shards + native-only processor replicas.
+# Requires obs-setup (configured scaling/observability/.env) before first run.
+obs-offboarding-fanout-up:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=0 --scale processor=$(OFFBOARD_PROCESSORS)
+
+# Use the identical three-file topology for k6, inspection and cleanup.
+obs-offboarding-fanout-test:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+obs-offboarding-fanout-ps:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load ps
+
+obs-offboarding-fanout-logs:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load logs --tail=100 processor hub hub-2 hub-lb
+
+# This only stops the stack. It does not delete PostgreSQL or other volumes.
+obs-offboarding-fanout-down:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
 obs-down:
 	$(OBS_COMPOSE) down
