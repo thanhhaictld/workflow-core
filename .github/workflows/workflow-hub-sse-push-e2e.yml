@@ -8,6 +8,8 @@ on:
       - 'scaling/src/WorkflowCore.RemoteExecution/**'
       - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseTaskDistributorTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseWorkerCreditCoordinatorTests.cs'
+      - 'scaling/observability/nginx.matching-ha.conf'
       - 'scaling/observability/compose.yaml'
       - 'Makefile'
   workflow_dispatch:
@@ -51,7 +53,7 @@ jobs:
       - name: Build and test SSE distributor credit protocol
         run: |
           dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
-            -c Release --filter FullyQualifiedName~HubSseTaskDistributorTests --verbosity minimal
+            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
       - name: Start PostgreSQL and two fenced matching Hubs
         run: |
           set -euo pipefail
@@ -92,6 +94,27 @@ jobs:
               --mode "$mode" --run-id "$run" --count 100 \
               --output "scaling/observability/results/sse-push/$mode.json"
           done
+      - name: Kill original Hub and verify SSE owner failover under real workload
+        run: |
+          set -euo pipefail
+          # The healthy SSE subscribers have no *executing* tasks here. Their
+          # outstanding offers are allowed to time out / be reclaimed; unit
+          # tests independently prove the zero-credit owner-epoch path.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" stop -t 0 hub
+          # Matching ownership is PostgreSQL-fenced with an 8 s lease.
+          sleep 12
+          curl -fsS http://127.0.0.1:5110/health/ready
+          run="sse-owner-failover-keyed-$GITHUB_RUN_ID"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+            -e K6_POLICY_MODE=keyed -e K6_POLICY_COUNT=100 \
+            -e K6_POLICY_VUS=40 -e K6_POLICY_TIMEOUT_SECONDS=360 \
+            -e K6_POLICY_RUN_ID="$run" k6-policy
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode keyed --run-id "$run" --count 100 \
+            --output "scaling/observability/results/sse-push/failover-keyed.json"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" up -d hub
+          echo 'PASS: SSE worker reconnection and matching-shard takeover after Hub A failure'
       - name: Upload ordering evidence
         if: always()
         uses: actions/upload-artifact@v4
