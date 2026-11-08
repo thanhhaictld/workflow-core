@@ -1,11 +1,15 @@
 # Workflow Hub observability and local k6 stress lab
 
+For current runtime boundaries, transport selection and Hub replica scaling,
+start with the [current runtime guide](../docs/current-runtime.md).
+
 This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
 The generic Hub includes an embedded durable timer scheduler. The combined Provisioner runs native `IWorkflow<T>` workflows and typed activities
 over REST/SSE. See [native runtime contracts](../docs/hub-native-fluent-runtime.md).
 Workflow code lives in a separate assembly so host policy edits do not alter its
-implementation fingerprint. New sample runs use v3; existing v1/v2 data is retained
-and unfinished old runs require their matching binary. If reusing an existing
+implementation fingerprint. The onboarding host registers v3 and v4 definitions; the default workload uses v3.
+Existing v1/v2 data is retained and unfinished old runs require hosts registering
+those versions. Build fingerprints are informational, not an execution gate. If reusing an existing
 `.env`, set `K6_VERSION=3` for new native runs.
 
 ## Architecture
@@ -17,9 +21,9 @@ flowchart LR
   UI -->|legacy /backend proxy| API["Workflow Core monitor API"]
   API --> P
   H --> P[("PostgreSQL")]
-  H -. SSE workflow tasks .-> PR["Provisioner workflow lane"]
-  H -. SSE activity tasks .-> W["Provisioner activity lane"]
-  PR -->|REST transition commands| H
+  H -. SSE readiness hints .-> PR["Provisioner workflow lane"]
+  H -. SSE readiness hints .-> W["Provisioner activity lane"]
+  PR -->|REST claim or poll / native commit| H
   W -->|REST claim/complete| H
   H -->|local internal module| S["Embedded Timer Scheduler"]
   S -->|durable timer transactions| P
@@ -80,7 +84,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
-The migrate container applies SQL migrations 002â€“011, followed by the
+The migrate container applies SQL migrations 002–022, followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow

@@ -13,41 +13,33 @@ https://github.com/danielgerlag/conductor
 
 ## Documentation
 
-### OpenTelemetry + Grafana + k6 local stress lab
+### Distributed Workflow Core (this fork)
 
-The experimental [Workflow Hub observability stack](scaling/observability/README.md)
-adds OTLP metrics/traces/logs for Hub and workers, a Docker Compose
-Prometheus/Grafana/Tempo/Loki stack, provisioned resource/throughput dashboards,
-and a k6 script for 1,000 code-first three-step remote workflows.
-A separate CI job starts the Compose stack and verifies exported telemetry.
+Start with the **[current distributed runtime guide](scaling/docs/current-runtime.md)**
+for implemented architecture, task assignment, SSE versus long polling, Hub
+replicas, matching partitions, migrations and source references. The
+[documentation index](scaling/docs/README.md) separates current guides from
+historical designs and benchmark reports.
 
-### Standalone Workflow Hub Gateway and concurrency policies (experimental)
+This fork contains two experimental distributed runtimes under `scaling/`:
 
-The `feat/workflow-hub-gateway-concurrency` branch adds a standalone REST +
-SSE Hub Gateway, a bounded PostgreSQL connection pool, DB-free remote activity
-workers, and code-first concurrency policies (limited, exclusive, strict FIFO
-and cross-hub resource constraints).
+- **Hub native runtime:** generic REST Hub with an embedded scheduler;
+  application hosts execute native C# workflows and typed activities without
+  database access. See [native workflow contracts](scaling/docs/hub-native-fluent-runtime.md).
+- **Direct PostgreSQL runtime:** `DistributedWorkPump` workers access PostgreSQL
+  directly and reuse the upstream executor with a separate durable work ledger.
+  See [direct runtime architecture](scaling/docs/architecture.md).
 
-See the [Hub architecture and local runbook](scaling/docs/workflow-hub-gateway.md).
-The [1,000-concurrent-workflow benchmark](scaling/docs/workflow-hub-1000-performance.md)
-completed 1,000 three-step remote workflows with zero failures and a maximum
-of 12 observed PostgreSQL connections (two GitHub CI runs).
-**Scope:** this is a tested remote-*activity* slice; existing Workflow Core
-instance execution has not yet been migrated to Hub-hosted persistence.
+For local setup, use the [observability/Compose runbook](scaling/observability/README.md)
+or [monitor and development stack](scaling/monitor/README.md). Both runtimes
+remain experimental; development authentication and benchmark results do not
+establish production readiness.
 
-### Experimental distributed PostgreSQL runtime (this fork branch)
+### Upstream Workflow Core
 
-The `feat/distributed-postgres-runtime` branch includes a separate .NET 10
-distributed runtime with PostgreSQL leased work, fenced workflow commits and
-a hosted worker pool. It intentionally does **not** preserve the original
-scheduler/queue API and is **not yet production-certified**.
-
-Start with the **[distributed runtime documentation index](scaling/docs/README.md)**,
-then read the [architecture](scaling/docs/architecture.md),
-[execution semantics](scaling/docs/execution-semantics.md),
-[deployment guide](scaling/docs/deployment.md), and
-[production-readiness gaps](scaling/docs/production-readiness.md).
-The original Workflow Core documentation below describes the legacy engine.
+The tutorial and API examples below describe the original engine in `src/` and
+`test/`. Distributed runtime submission and host APIs differ; use the selected
+runtime guide when developing under `scaling/`.
 
 See [Tutorial here.](https://workflow-core.readthedocs.io)
 

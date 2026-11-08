@@ -27,6 +27,10 @@ The `scaling/src` projects reference original Workflow Core assemblies from
 are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 
 
+> **Start here:** [Current runtime architecture, task delivery and Hub scaling](docs/current-runtime.md).
+> This page describes the direct PostgreSQL runtime below; the Hub native runtime
+> uses DB-free application hosts instead.
+
 > **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
 
 For REST/SSE execution through a generic Hub, use the combined
@@ -68,10 +72,10 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/003_signal_delivery.sql`,
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
-   Hub Gateway deployments additionally require migrations 006 through
-   `scaling/sql/014_hub_work_ready_notifications.sql` in numeric order.
-   Migration 015 persists optional activity execution-order policies; it must
-   be applied before deploying a Hub that accepts the new registration field.
+   Current Hub deployments apply migrations 006 through
+   `scaling/sql/022_hub_claim_index_selectivity.sql` in numeric order, as
+   configured in Compose and `scripts/dev.ps1`. Migrations 015–019 add activity
+   ordering and matching ownership/hints; 020–022 add reconciliation and claim indexes.
    Migration 014 enables transaction-committed cross-pod work-ready hints;
    2-second PostgreSQL reconciliation continues to recover missed hints.
 2. Add project reference to `scaling/src/WorkflowCore.Scaling.PostgreSQL`.

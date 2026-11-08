@@ -9,7 +9,11 @@ export interface OperationsSnapshot {
     values: Partial<Record<
       "sseConnections" | "hubClaimP95Seconds" | "workerExecutionP95Seconds" |
       "httpP95Seconds" | "timerLagP95Seconds" | "timerSchedulerErrors5m" |
-      "workerInflight" | "taskClaimsPerSecond" | "workflowFailures5m",
+      "workerInflight" | "taskClaimsPerSecond" | "workflowFailures5m" |
+      "postgresCpuPercent" | "postgresDatabaseBytes" | "postgresDeadTaskRows" |
+      "postgresCommitsPerSecond" | "postgresRollbacksPerSecond" |
+      "taskSeqRowsPerSecond" | "taskSeqScansPerSecond" | "taskIndexRowsPerSecond" | "taskIndexScansPerSecond" |
+      "workflowSeqRowsPerSecond" | "workflowSeqScansPerSecond" | "workflowIndexRowsPerSecond" | "workflowIndexScansPerSecond",
       number | null
     >>;
   };

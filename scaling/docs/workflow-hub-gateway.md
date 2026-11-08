@@ -1,6 +1,12 @@
 # Workflow Hub Gateway and Code-First Concurrency
 
-**Status: functional remote-activity prototype, not a complete remote Workflow Core runtime.**
+> Historical **activity-only Gateway** runbook. The Hub now also persists native
+> workflow snapshots/inboxes and runs an embedded scheduler; application hosts
+> execute workflow decisions. Use [current runtime](current-runtime.md) for present
+> architecture and [native contracts](hub-native-fluent-runtime.md) for application setup.
+> The activity-v1 commands below are compatibility examples, not the current onboarding setup.
+
+**Scope: original remote-activity slice; retained for compatibility and history.**
 
 ## Architecture
 

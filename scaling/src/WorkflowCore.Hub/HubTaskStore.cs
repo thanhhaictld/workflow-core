@@ -361,7 +361,14 @@ public sealed class HubTaskStore : IAsyncDisposable
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
-                SELECT t.id FROM wfc_scale.hub_task t
+                -- Preserve sequence order while filtering active tasks, so LIMIT
+                -- can stop without sorting the entire ready queue. OFFSET 0
+                -- keeps this ordered scan separate from the outer predicates.
+                SELECT t.id FROM (
+                  SELECT * FROM wfc_scale.hub_task
+                  WHERE state IN (0,1) AND attempts < max_attempts
+                  ORDER BY sequence OFFSET 0
+                ) t
                 WHERE t.hub_id = ANY(@hubs)
                   AND (@matchCount=1 OR partition_id % @matchCount=@matchPartition)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
@@ -422,7 +429,9 @@ public sealed class HubTaskStore : IAsyncDisposable
                           AND w.definition_id=p.definition AND w.definition_version=p.version))
                       AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
                           WHERE w.id=workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
-                      AND attempts < max_attempts
+                      -- Keep the eligibility check, but do not let stale statistics
+                      -- turn this primary-key lookup into an active-queue scan.
+                      AND attempts::bigint < max_attempts
                       AND ((state = 0 AND due_at <= now()) OR
                            (state = 1 AND lease_until < now()))
                     FOR UPDATE SKIP LOCKED

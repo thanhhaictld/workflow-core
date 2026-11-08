@@ -2,6 +2,7 @@ name: workflow-hub-observability
 services:
   postgres:
     image: postgres:17
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "compute_query_id=on"]
     environment:
       POSTGRES_USER: ${PG_USER:-workflow}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
@@ -47,6 +48,9 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/017_hub_matching_capability_hints.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/018_hub_matching_partition_ownership.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/019_hub_matching_partition_hints.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/020_hub_reconciliation_indexes.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/021_hub_active_task_indexes.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
     restart: "no"
 
   # The original Next.js execution monitor reads the legacy workflow API.
@@ -220,6 +224,13 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      PG_USER: ${PG_USER:-workflow}
+      PG_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
+      PG_DATABASE: ${PG_DATABASE:-workflow}
+      PGUSER: ${PG_USER:-workflow}
+      PGPASSWORD: ${PG_PASSWORD:-workflow_dev_only}
+      PGDATABASE: ${PG_DATABASE:-workflow}
     volumes:
       - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
@@ -237,6 +248,15 @@ services:
       - hub_prometheus:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  postgres-process-exporter:
+    image: ncabatoff/process-exporter:0.8.7
+    pid: service:postgres
+    command: ["-procnames=postgres", "-threads=false"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
 
   tempo:
     image: grafana/tempo:2.10.10

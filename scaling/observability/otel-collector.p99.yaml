@@ -1,4 +1,43 @@
 receivers:
+  sqlquery/table_scans:
+    driver: postgres
+    datasource: "host=postgres port=5432 sslmode=disable"
+    collection_interval: 15s
+    queries:
+      - sql: >-
+          SELECT schemaname, relname, seq_scan, seq_tup_read,
+                 COALESCE(idx_scan, 0) AS idx_scan,
+                 COALESCE(idx_tup_fetch, 0) AS idx_tup_fetch
+          FROM pg_stat_user_tables WHERE schemaname = 'wfc_scale'
+        metrics:
+          - metric_name: workflow.postgres.table.seq_scans
+            value_column: seq_scan
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.seq_rows_read
+            value_column: seq_tup_read
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.index_scans
+            value_column: idx_scan
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.index_rows_fetched
+            value_column: idx_tup_fetch
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+  postgresql:
+    endpoint: postgres:5432
+    username: ${env:PG_USER}
+    password: ${env:PG_PASSWORD}
+    databases: ["${env:PG_DATABASE}"]
+    collection_interval: 15s
+    tls:
+      insecure: true
   otlp:
     protocols:
       grpc:
@@ -32,7 +71,7 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [otlp]
+      receivers: [otlp, postgresql, sqlquery/table_scans]
       processors: [memory_limiter, batch]
       exporters: [prometheus]
     traces:

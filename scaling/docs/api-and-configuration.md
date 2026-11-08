@@ -1,5 +1,10 @@
 # API, hosting and configuration reference
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 ## Target and registration
 
 New runtime project: `scaling/src/WorkflowCore.Scaling.PostgreSQL`,

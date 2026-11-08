@@ -1,5 +1,10 @@
 # Tenant onboarding demo — Workflow Core distributed monitor
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 This deliberately synthetic demo exercises an actual persisted, fenced workflow.
 It is not a real tenant provisioning integration, and no external systems
 are called. Its purpose is to populate the monitoring UI with real execution

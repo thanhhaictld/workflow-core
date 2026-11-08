@@ -295,6 +295,32 @@ export function OperationsDashboard() {
           <Kpi label="PostgreSQL connections" value={data.database.connections} caption="Connections to Hub database" />
           <Kpi label="Active SQL connections" value={data.database.activeConnections} caption="Currently executing queries" />
         </div>
+        <div>
+          <h2 className="mb-2 text-lg font-semibold">PostgreSQL telemetry</h2>
+          <p className="mb-3 text-xs text-muted-foreground">Global metrics from the PostgreSQL collector; rates use a one-minute window. Missing samples show N/A.</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <Kpi label="PostgreSQL CPU" value={data.processMetrics.values.postgresCpuPercent == null ? "N/A" : formatCount(data.processMetrics.values.postgresCpuPercent) + "%"} caption="Sampled PostgreSQL processes; 100% = one core" />
+            <Kpi label="Database size" value={data.processMetrics.values.postgresDatabaseBytes == null ? "N/A" : formatCount(data.processMetrics.values.postgresDatabaseBytes / 1048576) + " MiB"} caption="Configured database" />
+            <Kpi label="Dead task rows" value={data.processMetrics.values.postgresDeadTaskRows ?? "N/A"} caption="Estimated; includes rows awaiting vacuum" />
+            <Kpi label="Commits / sec" value={data.processMetrics.values.postgresCommitsPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
+            <Kpi label="Rollbacks / sec" value={data.processMetrics.values.postgresRollbacksPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
+          </div>
+        </div>
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">PostgreSQL table scan rates</h2>
+          <p className="mt-1 text-xs text-muted-foreground">One-minute rates across all hubs. Sequential rows are read by sequential scans; index rows are live table rows fetched by index scans. Missing samples show N/A.</p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead><tr className="border-b border-border text-xs text-muted-foreground"><th className="py-2 pr-4">Table</th><th className="p-2">Sequential scans / sec</th><th className="p-2">Sequential rows / sec</th><th className="p-2">Index scans / sec</th><th className="p-2">Index rows fetched / sec</th></tr></thead>
+              <tbody>
+                {([
+                  ["hub_task", data.processMetrics.values.taskSeqScansPerSecond, data.processMetrics.values.taskSeqRowsPerSecond, data.processMetrics.values.taskIndexScansPerSecond, data.processMetrics.values.taskIndexRowsPerSecond],
+                  ["hub_workflow", data.processMetrics.values.workflowSeqScansPerSecond, data.processMetrics.values.workflowSeqRowsPerSecond, data.processMetrics.values.workflowIndexScansPerSecond, data.processMetrics.values.workflowIndexRowsPerSecond]
+                ] as const).map(([name, ...values]) => <tr key={name} className="border-b border-border last:border-0"><th className="py-2 pr-4 font-medium">{name}</th>{values.map((value, i) => <td key={i} className="p-2 tabular-nums">{value == null ? "N/A" : formatCount(value)}</td>)}</tr>)}
+              </tbody>
+            </table>
+          </div>
+        </Card>
         <div className="grid gap-4 lg:grid-cols-2">
           <ChartBars title="Activity completion events" description="Terminal tasks per bucket, based on updated_at"
             points={data.trends} property="activityCompleted" />

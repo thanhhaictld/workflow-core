@@ -226,8 +226,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "bytes",
-        "y": 0,
+        "x": 0,
+        "y": 5,
         "w": 12,
         "h": 8
       },
@@ -277,8 +277,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "bytes",
-        "y": 12,
+        "x": 12,
+        "y": 5,
         "w": 12,
         "h": 8
       },
@@ -328,8 +328,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 0,
+        "x": 0,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -386,8 +386,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 12,
+        "x": 12,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -676,8 +676,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 0,
+        "x": 0,
+        "y": 37,
         "w": 12,
         "h": 8
       },
@@ -727,8 +727,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 37,
         "w": 12,
         "h": 8
       },
@@ -778,8 +778,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 0,
+        "x": 0,
+        "y": 45,
         "w": 12,
         "h": 8
       },
@@ -829,8 +829,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 45,
         "w": 12,
         "h": 8
       },
@@ -880,8 +880,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ms",
-        "y": 0,
+        "x": 0,
+        "y": 53,
         "w": 12,
         "h": 8
       },
@@ -938,8 +938,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 53,
         "w": 12,
         "h": 8
       },
@@ -1054,8 +1054,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 12,
+        "x": 12,
+        "y": 61,
         "w": 12,
         "h": 8
       },

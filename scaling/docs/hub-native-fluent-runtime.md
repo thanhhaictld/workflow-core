@@ -1,5 +1,9 @@
 # Native fluent workflows in the Provisioner
 
+Start with the [current runtime guide](current-runtime.md) for architecture,
+task transport, matching and the current migration baseline. This page covers
+the native application contract.
+
 The combined Provisioner runs Workflow Core decisions and activity workers over
 Hub REST/SSE. Hub stores opaque snapshots and durable work. It never loads workflow
 assemblies or evaluates C# expressions. The application host does not open
@@ -117,13 +121,14 @@ Cancellation cannot undo an external effect that already happened.
 
 ## Deploy without changing existing runs
 
-Apply migrations in order through `013_activity_policy_revision.sql`. Migration 012 adds
+Apply migrations in order through `022_hub_claim_index_selectivity.sql`, matching
+the current Compose and development scripts. Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.
 Deploy the updated Hub code before starting native hosts or submitting native runs.
 Older Gateway binaries do not understand native task completion and inbox delivery.
 
-The sample now publishes native workflows and typed activities as **v3** and
+The onboarding sample publishes native **v3 and v4** workflow definitions and
 runs both lanes in `WorkflowCore.Provisioner.Host`. Compose no longer deploys the
 standalone sequential Processor. Sequential adapters remain in the library for
 explicit compatibility deployments, but the sample does not publish or claim v1.
@@ -144,7 +149,7 @@ registered until their runs finish. Existing runs retain their version and durab
 state; registration never restarts them or migrates their snapshots.
 
 Workflow claims advertise definition/version capabilities, so a host cannot claim
-a version it has not registered. The current sample registers v3, so unfinished
+a version it has not registered. The current onboarding sample registers v3/v4 definitions, so unfinished
 v1/v2 runs require application code that registers those versions. No exact binary
 match is enforced. Preserve the PostgreSQL volume when redeploying.
 

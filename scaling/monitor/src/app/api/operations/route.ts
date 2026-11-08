@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 type PrometheusMetric = "sseConnections" | "hubClaimP95Seconds" |
   "workerExecutionP95Seconds" | "httpP95Seconds" | "timerLagP95Seconds" |
   "timerSchedulerErrors5m" | "workerInflight" | "taskClaimsPerSecond" |
-  "workflowFailures5m";
+  "workflowFailures5m" | "postgresCpuPercent" | "postgresDatabaseBytes" |
+  "postgresDeadTaskRows" | "postgresCommitsPerSecond" | "postgresRollbacksPerSecond" |
+  "taskSeqRowsPerSecond" | "taskSeqScansPerSecond" | "taskIndexRowsPerSecond" | "taskIndexScansPerSecond" |
+  "workflowSeqRowsPerSecond" | "workflowSeqScansPerSecond" | "workflowIndexRowsPerSecond" | "workflowIndexScansPerSecond";
 
 const promQueries: Record<PrometheusMetric, string> = {
   sseConnections: "sum(workflow_hub_sse_connections)",
@@ -13,7 +16,20 @@ const promQueries: Record<PrometheusMetric, string> = {
   timerSchedulerErrors5m: "sum(increase(workflow_hub_timer_scheduler_errors_total[5m]))",
   workerInflight: "sum(workflow_hub_worker_inflight)",
   taskClaimsPerSecond: "sum(rate(workflow_hub_tasks_claimed_total[5m]))",
-  workflowFailures5m: "sum(increase(workflow_hub_workflows_failed_total[5m]))"
+  workflowFailures5m: "sum(increase(workflow_hub_workflows_failed_total[5m]))",
+  postgresCpuPercent: '100 * sum(rate(namedprocess_namegroup_cpu_seconds_total{job="postgres-process",groupname="postgres"}[1m]))',
+  postgresDatabaseBytes: "sum(postgresql_db_size_bytes)",
+  postgresDeadTaskRows: 'sum(postgresql_rows{postgresql_table_name="wfc_scale.hub_task",state="dead"})',
+  postgresCommitsPerSecond: "sum(rate(postgresql_commits_total[1m]))",
+  postgresRollbacksPerSecond: "sum(rate(postgresql_rollbacks_total[1m]))",
+  taskSeqRowsPerSecond: 'sum(rate(workflow_postgres_table_seq_rows_read_total{schemaname="wfc_scale",relname="hub_task"}[1m]))',
+  taskSeqScansPerSecond: 'sum(rate(workflow_postgres_table_seq_scans_total{schemaname="wfc_scale",relname="hub_task"}[1m]))',
+  taskIndexRowsPerSecond: 'sum(rate(workflow_postgres_table_index_rows_fetched_total{schemaname="wfc_scale",relname="hub_task"}[1m]))',
+  taskIndexScansPerSecond: 'sum(rate(workflow_postgres_table_index_scans_total{schemaname="wfc_scale",relname="hub_task"}[1m]))',
+  workflowSeqRowsPerSecond: 'sum(rate(workflow_postgres_table_seq_rows_read_total{schemaname="wfc_scale",relname="hub_workflow"}[1m]))',
+  workflowSeqScansPerSecond: 'sum(rate(workflow_postgres_table_seq_scans_total{schemaname="wfc_scale",relname="hub_workflow"}[1m]))',
+  workflowIndexRowsPerSecond: 'sum(rate(workflow_postgres_table_index_rows_fetched_total{schemaname="wfc_scale",relname="hub_workflow"}[1m]))',
+  workflowIndexScansPerSecond: 'sum(rate(workflow_postgres_table_index_scans_total{schemaname="wfc_scale",relname="hub_workflow"}[1m]))'
 };
 
 async function processMetrics() {

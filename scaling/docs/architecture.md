@@ -1,5 +1,9 @@
 # Architecture: PostgreSQL-distributed Workflow Core runtime
 
+> This document covers the **direct PostgreSQL runtime** (`DistributedWorkPump`).
+> Its database-polling architecture is separate from the Hub native runtime.
+> For Hub matching, long polling and replica scaling, read [current runtime](current-runtime.md).
+
 ## 1. Purpose and scope
 
 Support several .NET 10 worker replicas executing durable, long-running
