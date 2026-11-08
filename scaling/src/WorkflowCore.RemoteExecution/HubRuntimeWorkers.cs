@@ -440,15 +440,24 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                                 var task = JsonSerializer.Deserialize<HubLeasedTask>(
                                     payload, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                                     ?? throw new InvalidOperationException("Empty SSE task lease");
-                                if (shard.SessionId == Guid.Empty || shard.Running.Count >= shard.Capacity ||
-                                    !shard.Running.TryAdd(task.Id, ExecuteSseTaskAsync(task, shard, ct)))
+                                if (shard.SessionId == Guid.Empty || shard.Running.Count >= shard.Capacity)
                                     throw new InvalidOperationException("SSE task exceeded reserved execution credits");
-                                var running = shard.Running[task.Id];
-                                _ = running.ContinueWith(completed =>
+                                // Insert a placeholder before starting execution. A duplicate
+                                // delivery must never run a second copy of the same lease.
+                                var done = new TaskCompletionSource(
+                                    TaskCreationOptions.RunContinuationsAsynchronously);
+                                if (!shard.Running.TryAdd(task.Id, done.Task))
+                                    throw new InvalidOperationException("Duplicate SSE task lease received");
+                                _ = Task.Run(async () =>
                                 {
-                                    shard.Running.TryRemove(task.Id, out _);
-                                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
-                                    TaskScheduler.Default);
+                                    try { await ExecuteSseTaskAsync(task, shard, ct); }
+                                    catch (Exception ex) { logger.LogError(ex, "SSE task handling failed"); }
+                                    finally
+                                    {
+                                        shard.Running.TryRemove(task.Id, out _);
+                                        done.TrySetResult();
+                                    }
+                                });
                             }
                             eventName = null;
                             payload = null;
