@@ -67,11 +67,15 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Optional SQL prefilter keeps blocked strict-FIFO successors out of the
     // bounded claim candidate window. Admission is still rechecked under locks.
     private readonly bool _fifoHeadPrefilterEnabled;
+    // Opt-in indexed predecessor frontier. The index/trigger from migration 024
+    // is an optimization only; resource locks and task epochs remain authoritative.
+    private readonly bool _indexedFifoFrontierEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
         bool? enableUnconstrainedBatchClaims = null,
-        bool? enableFifoHeadPrefilter = null)
+        bool? enableFifoHeadPrefilter = null,
+        bool? enableIndexedFifoFrontier = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -109,6 +113,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
         _fifoHeadPrefilterEnabled = enableFifoHeadPrefilter ??
             (Environment.GetEnvironmentVariable("WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED") is "true" or "1" or "True");
+        _indexedFifoFrontierEnabled = enableIndexedFifoFrontier ??
+            (Environment.GetEnvironmentVariable("WFC_HUB_INDEXED_FIFO_FRONTIER_ENABLED") is "true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -381,16 +387,27 @@ public sealed class HubTaskStore : IAsyncDisposable
                     SELECT 1 FROM jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
                     WHERE w.hub_id=p.hub
                       AND w.definition_id=p.definition AND w.definition_version=p.version))
-                  AND (NOT @fifoHeadFilter OR NOT EXISTS (
-                    SELECT 1 FROM wfc_scale.hub_task_constraint c
-                    JOIN wfc_scale.hub_resource r
-                      ON r.resource_key = c.resource_key AND r.strict_fifo
-                    JOIN wfc_scale.hub_task_constraint previous
-                      ON previous.resource_key = c.resource_key
-                    JOIN wfc_scale.hub_task earlier ON earlier.id = previous.task_id
-                    WHERE c.task_id = t.id AND earlier.sequence < t.sequence
-                      AND earlier.state IN (0, 1)
-                  ))
+                  AND (NOT @fifoHeadFilter OR (
+                    @indexedFrontier AND NOT EXISTS (
+                      SELECT 1 FROM wfc_scale.hub_task_constraint c
+                      JOIN wfc_scale.hub_resource r
+                        ON r.resource_key=c.resource_key AND r.strict_fifo
+                      JOIN wfc_scale.hub_task_constraint previous
+                        ON previous.resource_key=c.resource_key
+                       AND previous.fifo_pending
+                       AND previous.queue_sequence < t.sequence
+                      WHERE c.task_id=t.id
+                    )) OR (
+                    NOT @indexedFrontier AND NOT EXISTS (
+                      SELECT 1 FROM wfc_scale.hub_task_constraint c
+                      JOIN wfc_scale.hub_resource r
+                        ON r.resource_key=c.resource_key AND r.strict_fifo
+                      JOIN wfc_scale.hub_task_constraint previous
+                        ON previous.resource_key=c.resource_key
+                      JOIN wfc_scale.hub_task earlier ON earlier.id=previous.task_id
+                      WHERE c.task_id=t.id AND earlier.sequence < t.sequence
+                        AND earlier.state IN (0,1)
+                    )))
                 ORDER BY t.sequence LIMIT 96
                 """.Replace("/*hub_filter*/", hubs.Count == 1
                     ? "hub_id = @hub" : "hub_id = ANY(@hubs)")
@@ -401,7 +418,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                 candidateQuery.Parameters.AddWithValue("hub", hubs[0]);
                 candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
                 candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
-                candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled);
+                candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled || _indexedFifoFrontierEnabled);
+                candidateQuery.Parameters.AddWithValue("indexedFrontier", _indexedFifoFrontierEnabled);
                 candidateQuery.Parameters.AddWithValue("types", supported);
                 candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
@@ -495,13 +513,29 @@ public sealed class HubTaskStore : IAsyncDisposable
                         currentFifo=resourceReader.GetBoolean(1);
                     }
 
-                    await using var check = new NpgsqlCommand("""
+                    // This check runs AFTER taking the canonical resource row
+                    // lock. The prefilter only suggests candidates; the indexed
+                    // pending predecessor set is checked again under this lock.
+                    // When the frontier flag is off retain the original query.
+                    var permitSql = _indexedFifoFrontierEnabled ? """
+                        SELECT
+                          (SELECT count(*) FROM wfc_scale.hub_task_constraint c
+                           JOIN wfc_scale.hub_task t ON t.id=c.task_id
+                           WHERE c.resource_key=@key AND t.state=1
+                             AND t.lease_until>now()),
+                          CASE WHEN EXISTS (
+                            SELECT 1 FROM wfc_scale.hub_task_constraint previous
+                            WHERE previous.resource_key=@key AND previous.fifo_pending
+                              AND previous.queue_sequence < @seq
+                          ) THEN 1::bigint ELSE 0::bigint END
+                        """ : """
                         SELECT count(*) FILTER (WHERE t.state = 1 AND t.lease_until > now()),
                                count(*) FILTER (WHERE t.sequence < @seq AND t.state IN (0,1))
                         FROM wfc_scale.hub_task_constraint c
                         JOIN wfc_scale.hub_task t ON t.id = c.task_id
                         WHERE c.resource_key = @key
-                        """, db, tx);
+                        """;
+                    await using var check = new NpgsqlCommand(permitSql, db, tx);
                     check.Parameters.AddWithValue("key", constraint.Key);
                     check.Parameters.AddWithValue("seq", sequence);
                     await using var reader = await check.ExecuteReaderAsync(ct);
