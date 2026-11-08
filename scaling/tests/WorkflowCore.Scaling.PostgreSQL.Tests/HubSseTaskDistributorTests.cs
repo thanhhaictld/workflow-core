@@ -158,6 +158,44 @@ public sealed class HubSseTaskDistributorTests
     }
 
     [Fact]
+    public async Task OwnershipLossClosesStreamAfterCreditWasConsumedByRunningTask()
+    {
+        // The server has no free worker credits once it delivered the task.
+        // It must still notice loss of the matching epoch, and stop pushing.
+        var ownershipValid = 1;
+        var leased = Lease();
+        var sessionReady = new TaskCompletionSource<Guid>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var taskDelivered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var distributor = new HubSseTaskDistributor((_, _) =>
+            Task.FromResult<IReadOnlyList<HubLeasedTask>>([leased]));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var streaming = distributor.StreamAsync(Subscribe(capacity: 1), 40,
+            _ => Task.FromResult(Volatile.Read(ref ownershipValid) == 1),
+            (frame, _) =>
+            {
+                if (frame.StartsWith("event: session", StringComparison.Ordinal))
+                {
+                    using var data = ParseData(frame);
+                    sessionReady.TrySetResult(
+                        data.RootElement.GetProperty("sessionId").GetGuid());
+                }
+                if (frame.StartsWith("event: task.leased", StringComparison.Ordinal))
+                    taskDelivered.TrySetResult(true);
+                return Task.CompletedTask;
+            }, timeout.Token);
+        var session = await sessionReady.Task.WaitAsync(timeout.Token);
+        Assert.True(distributor.Offer(new(session, 40,
+            "worker-a", "test-hub", 0, Guid.NewGuid())));
+        await taskDelivered.Task.WaitAsync(timeout.Token);
+        Interlocked.Exchange(ref ownershipValid, 0);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await streaming.WaitAsync(timeout.Token));
+        Assert.Equal(0, distributor.ActiveSessions);
+    }
+
+    [Fact]
     public async Task InvalidInitialCreditsAndEpochAreRejected()
     {
         var distributor = new HubSseTaskDistributor((_, _) =>
