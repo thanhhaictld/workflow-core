@@ -1,6 +1,6 @@
 {
   "uid": "workflow-postgresql",
-  "title": "Workflow Hub • PostgreSQL",
+  "title": "Workflow Hub â€¢ PostgreSQL",
   "tags": ["workflow-core", "postgres"],
   "timezone": "browser",
   "schemaVersion": 41,
@@ -96,7 +96,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Top statements are cumulative for the current database since the statistics reset, not the selected time range. Total execution time includes waits and sums concurrent calls; it is not CPU time. Entries may be evicted and query text may be hidden by PostgreSQL permissions. If the panels fail, check the PostgreSQL datasource, permissions, pg_stat_statements preload, and extension."
+        "content": "Top statements show estimated execution time during the selected time range, sampled every 15 seconds. Execution time includes waits and concurrent calls; it is not CPU time. New or evicted statements and collection gaps can make totals incomplete. At least two samples are required. Query text is truncated to 500 characters."
       }
     },
     {
@@ -133,11 +133,11 @@
     {
       "id": 13,
       "type": "table",
-      "title": "Top queries by cumulative execution time",
-      "description": "Ten statements in the current database with the highest cumulative total execution time. Values are not restricted to the dashboard time range.",
+      "title": "Top queries by execution time in selected range",
+      "description": "Estimated execution milliseconds in the selected range, ranked by total execution time. Counters are sampled every 15 seconds and require at least two samples; newly observed or evicted statements may be undercounted.",
       "datasource": {
-        "type": "postgres",
-        "uid": "postgresql"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
@@ -148,9 +148,10 @@
       "targets": [
         {
           "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT queryid::text AS \"Query ID\", left(query, 4000) AS \"Query\", calls AS \"Calls\", total_exec_time AS \"Total execution (ms)\", mean_exec_time AS \"Mean execution (ms)\", rows AS \"Rows\" FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY total_exec_time DESC, queryid LIMIT 10"
+          "expr": "topk(10, sum by (query_id, query) (increase(workflow_postgres_statement_execution_time_ms_total[$__range])) > 0)",
+          "instant": true,
+          "range": false,
+          "format": "table"
         }
       ],
       "options": {
@@ -158,9 +159,39 @@
         "cellHeight": "md"
       },
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "decimals": 2
+        },
         "overrides": []
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "query_id": "Query ID",
+              "query": "Query",
+              "Value": "Execution time (ms)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Execution time (ms)",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }

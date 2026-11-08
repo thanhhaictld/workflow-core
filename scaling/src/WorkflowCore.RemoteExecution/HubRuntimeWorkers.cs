@@ -116,6 +116,16 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var matchingPoll=options.LongPollingEnabled &&
             capabilities.Select(c => c.HubId).Distinct().Count() == 1;
         var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        // Experimental: reserve one actual execution slot for each outstanding
+        // shard poll. The current single rotating poll stays the default.
+        // Do not enable for multi-Hub lanes, which still use SSE/REST fallback.
+        if (matchingPoll && options.MatchingPartitions > 1 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_CAPACITY_FANOUT") is
+                ("true" or "1" or "True"))
+        {
+            await RunCapacityAwarePollsAsync(effectiveConcurrency, ct);
+            return;
+        }
         // Rotating one outstanding long poll per worker lane avoids racing
         // multiple matching partitions into leasing more tasks than slots.
         // A 4-second server hold bounds discovery when a shard has no pollers.
@@ -230,6 +240,115 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         {
             await Task.WhenAll(running);
             try{await listener;}catch(OperationCanceledException)when(ct.IsCancellationRequested) { }
+        }
+    }
+
+    /// <summary>
+    /// The worker reserves a free execution slot per concurrent long-poll.
+    /// Watching multiple shards eliminates serial four-second shard rotation,
+    /// but cannot increase leased tasks beyond the worker's execution limit.
+    /// Each request asks for MaxTasks=1. This is deliberately NOT Hub push,
+    /// a durable credit registry, or a replacement for PostgreSQL eligibility.
+    /// </summary>
+    private async Task RunCapacityAwarePollsAsync(int capacity, CancellationToken ct)
+    {
+        if (capacity < 1) return;
+        var upperBound = Math.Min(4, Math.Min(capacity, options.MatchingPartitions));
+        var maxPolls = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_SHARD_POLLS"),
+            out var requested) ? Math.Clamp(requested, 1, upperBound) : upperBound;
+        var planner = new HubShardCapacityPlanner(capacity, options.MatchingPartitions,
+            maxPolls, Random.Shared.Next(options.MatchingPartitions));
+        logger.LogInformation("Capacity-aware shard polling enabled: {Credits} slots, {ShardPolls} concurrent polls, {Shards} matching shards",
+            capacity, maxPolls, options.MatchingPartitions);
+        var active = new List<Task>();
+        var pending = new Dictionary<int, Task<HubLeasedTask[]>>();
+        using var pollStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                active.RemoveAll(task => task.IsCompleted);
+                while (planner.TryReserve(active.Count, out var shard))
+                {
+                    HubTelemetry.WorkerShardPollCredits.Add(1, _lane);
+                    pending.Add(shard, PollReservedShardAsync(shard, pollStop.Token));
+                }
+                var all = active.Concat(pending.Values.Cast<Task>()).ToArray();
+                if (all.Length == 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
+                    continue;
+                }
+                await Task.WhenAny(all);
+                // Release only after each reply has arrived; a pending HTTP
+                // request still consumes one reserved execution credit.
+                foreach (var (shard, poll) in pending.Where(x => x.Value.IsCompleted).ToArray())
+                {
+                    pending.Remove(shard);
+                    planner.Release(shard);
+                    HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
+                    try
+                    {
+                        foreach (var lease in await poll)
+                            active.Add(Run(lease, ct));
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Capacity-aware shard poll failed; retrying");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            await pollStop.CancelAsync();
+            try { await Task.WhenAll(pending.Values); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex) { logger.LogDebug(ex, "Shard polls ended during shutdown"); }
+            foreach (var shard in pending.Keys)
+            {
+                planner.Release(shard);
+                HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
+            }
+            await Task.WhenAll(active);
+        }
+    }
+
+    private async Task<HubLeasedTask[]> PollReservedShardAsync(int shard, CancellationToken ct)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "error";
+        try
+        {
+            var leased = await client.PostAsync<HubLeasedTask[]>(
+                "api/hub/workers/tasks:poll",
+                new HubClaimRequest(_owner,
+                    capabilities.Select(c => c.HubId).Distinct().ToArray(), capabilities,
+                    MaxTasks: 1, Workflows: workflows,
+                    MatchingPartition: shard, MatchingPartitionCount: options.MatchingPartitions), ct);
+            outcome = leased.Length > 0 ? "claimed" : "empty";
+            HubTelemetry.WorkerClaimRequests.Add(1, _lane,
+                new KeyValuePair<string, object?>("outcome", outcome));
+            return leased;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            HubTelemetry.WorkerClaimRequests.Add(1, _lane,
+                new KeyValuePair<string, object?>("outcome", "error"));
+            logger.LogWarning(ex, "Capacity-aware poll of matching shard {Shard} failed", shard);
+            // A failed owner-forwarding or networking path must not turn into
+            // a tight retry loop across multiple outstanding shard polls.
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            return [];
+        }
+        finally
+        {
+            HubTelemetry.WorkerClaimHttpDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalSeconds, _lane,
+                new KeyValuePair<string, object?>("outcome", outcome));
         }
     }
 
