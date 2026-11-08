@@ -47,3 +47,26 @@ On Hub failover, outstanding REST requests may return errors or time out. Worker
 Only if measurable matching gaps remain after this experiment, consider true Hub-side session/credit registration and gRPC push. It requires additional protocol semantics for stream ownership, ACK loss, fencing during failover, bounded credits, fair scheduling and worker reconnection. The gateway would remain a transport/auth boundary, and PostgreSQL would remain the authority for task admission.
 
 For the existing bottleneck evidence and scope limitations see [throughput investigation report](throughput-investigation-report.md).
+
+
+## First completed CI outcome (2026-11-08)
+
+[Capacity-aware OFF→ON→OFF run 42447369071](https://github.com/thanhhaictld/workflow-core/actions/runs/42447369071) **passed** all 9 cohorts with 200 workflows each, durable history and FIFO/partition ordering checks. This tests **eight worker replicas**, two Hubs and four matching shards on shared GitHub-hosted infrastructure with migrations 020–022.
+
+| Policy | OFF1 WF/s | ON WF/s | OFF2 WF/s | ON / mean OFF | OFF drift |
+|---|---:|---:|---:|---:|---:|
+| Unordered | 5.85 | **8.54** | 5.97 | **1.45x** | +2.1% |
+| Partition FIFO | 4.35 | 5.00 | 6.50 | 0.92x | **+49.3%** |
+| Keyed FIFO | 7.21 | **14.36** | 7.26 | **1.99x** | +0.6% |
+
+| Policy | OFF1 p95 / ON p95 / OFF2 p95 (s) | OFF1 p99 / ON p99 / OFF2 p99 (s) | PostgreSQL commits/WF OFF1 / ON / OFF2 | Host CPU busy OFF1 / ON / OFF2 |
+|---|---|---|---|---|
+| Unordered | 30.08 / **22.25** / 25.34 | 33.40 / **22.43** / 32.43 | 60.8 / **75.8** / 61.1 | 73.7% / **99.7%** / 76.5% |
+| Partition FIFO | 40.74 / 17.47 / 29.91 | 45.24 / 39.27 / 30.22 | 73.8 / 94.7 / 67.8 | 37.7% / 45.6% / 56.3% |
+| Keyed FIFO | 26.74 / **13.29** / 23.44 | 27.29 / **13.41** / 27.09 | 65.8 / **76.1** / 64.2 | 51.2% / **97.8%** / 59.6% |
+
+**Assessment:** Promising unordered (+45% throughput) and keyed FIFO (+99%) single-run gains with unusually stable OFF controls; cannot interpret partition FIFO because of 49% OFF drift. **Important costs:** extra HTTP polls claim `MaxTasks=1`, giving ~17–24% more PostgreSQL commits/workflow on unordered and keyed cases, and saturating shared runner CPU when enabled. The measured result shows dispatch parallelism can improve utilization, but is not yet a production scaling or efficiency win. OTel metrics need to break down empty match claims and connection usage, including DB transaction cost per completed activity, before promotion.
+
+**CI integration caveat:** [OTEL Observability Smoke run 42447369037](https://github.com/thanhhaictld/workflow-core/actions/runs/42447369037) failed while waiting for the *removed* legacy monitor service on port 5000. The head inherited a PR #27 change removing the legacy monitor API from Compose; the smoke workflow still asserted its existence. That check runs with capacity fanout OFF and therefore is **not evidence of a feature regression**. Commit `64876e7` updates the smoke test to validate the Hub-only UI and REST proxy. Confirm the replacement CI succeeds before declaring all checks green.
+
+**Next gate:** Re-run the experiment on dedicated Hub/PostgreSQL/processor compute with 4/8/16 worker replicas and repeat each treatment. Monitor resource head handoff latency, ready-to-claim p95/p99, Hub waiter counts, empty SQL claims, PostgreSQL transactions/WAL per completed activity and CPU headroom. If throughput advantage disappears after CPU isolation, keep existing single-poll mode. No gRPC push or durable worker credits are warranted solely from this benchmark.
