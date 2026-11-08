@@ -1,14 +1,17 @@
 # Next.js workflow monitor, with its existing .NET monitor API reverse proxy.
-FROM node:22-alpine AS build
+ARG NODE_IMAGE=node:22-alpine
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY scaling/monitor/package.json scaling/monitor/pnpm-lock.yaml ./
-RUN corepack pnpm install --frozen-lockfile
+RUN --mount=type=secret,id=build_dns,target=/etc/resolv.conf \
+    corepack pnpm install --frozen-lockfile
 COPY scaling/monitor/ ./
 # Next.js rewrites are resolved at build time: use Compose-internal DNS.
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN corepack pnpm run build
+RUN --mount=type=secret,id=build_dns,target=/etc/resolv.conf \
+    corepack pnpm run build
 
-FROM node:22-alpine
+FROM ${NODE_IMAGE}
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

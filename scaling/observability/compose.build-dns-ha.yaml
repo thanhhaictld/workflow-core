@@ -1,0 +1,5 @@
+# Additional build-only DNS override for the matching HA Hub replica.
+services:
+  hub-2:
+    build:
+      secrets: [build_dns]

@@ -1,0 +1,18 @@
+# Optional build-only DNS workaround. No runtime or daemon DNS changes.
+services:
+  hub:
+    build:
+      secrets: [build_dns]
+  processor:
+    build:
+      secrets: [build_dns]
+  provisioner:
+    build:
+      secrets: [build_dns]
+  monitor:
+    build:
+      secrets: [build_dns]
+
+secrets:
+  build_dns:
+    file: ${WFC_BUILD_DNS_FILE:?Set WFC_BUILD_DNS_FILE to a resolv.conf file}

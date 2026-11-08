@@ -15,7 +15,3 @@ services:
   processor:
     environment:
       WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
-
-  provisioner:
-    environment:
-      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
