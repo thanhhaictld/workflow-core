@@ -141,6 +141,17 @@ public sealed class HubMatchingOwnership : BackgroundService
             ? _partitions.OwnsAsync(hub, partition, NodeId, lease.Epoch, ct)
             : Task.FromResult(false);
 
+    /// <summary>
+    /// Unlike checking just the current local owner, this validates the
+    /// exact epoch captured when an SSE stream was registered. Reacquiring
+    /// the shard under a newer generation must invalidate the old stream.
+    /// </summary>
+    public Task<bool> StillOwnsPartitionEpochAsync(
+        string hub, int partition, long epoch, CancellationToken ct) =>
+        _partitionOwned.TryGetValue((hub, partition), out var lease) && lease.Epoch == epoch
+            ? _partitions.OwnsAsync(hub, partition, NodeId, epoch, ct)
+            : Task.FromResult(false);
+
     public Task<HubLeasedTask[]?> ForwardAsync(
         HubMatchingLease owner, HubClaimRequest claim, string authorization, CancellationToken ct) =>
         ForwardToAsync(owner.OwnerUrl, claim, authorization, ct);
