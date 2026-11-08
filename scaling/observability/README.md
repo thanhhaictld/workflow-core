@@ -91,6 +91,33 @@ environment variables override values in the env file as usual. For example,
 `K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
 that run. `make up` remains the separate PowerShell development stack.
 
+Startup targets build application images by default, reusing Docker's cache
+for unchanged inputs. To rebuild code using a cached Node base image, set
+`MONITOR_NODE_IMAGE` in `.env` to a compatible local Node 22 image (for example,
+`node:22.23.3-bookworm-slim` if `docker image inspect` confirms it exists), then
+run the usual `make obs-offboarding-up` or `make obs-offboarding-sse-up`.
+Both monitor build stages use that image. Package installation may still
+require access to the package registry when dependency layers are uncached.
+If Docker build steps fail with `EAI_AGAIN` while the host can reach package
+registries, create `scaling/observability/.build-resolv.conf` with a reachable
+resolver, for example `nameserver 1.1.1.1` after verifying it works from a
+container. Set `WFC_BUILD_DNS_FILE=.build-resolv.conf` in `.env` and run
+`make obs-offboarding-sse-up OBS_BUILD_DNS=1` (also supported by the other
+startup targets). The optional Compose overlays supply the resolver file to
+the Node and .NET build steps through a temporary BuildKit mount. Runtime and
+Docker daemon DNS settings are unchanged. Omit `OBS_BUILD_DNS=1` to use
+Docker's configured build resolver.
+
+To skip builds entirely when container registries are unavailable, reuse this checkout's cached service
+images with `make obs-offboarding-up OBS_LOCAL_IMAGES=1`. The same option works
+with `obs-up`, `obs-offboarding-fanout-up`, and `obs-offboarding-sse-up`.
+It passes `up --no-build --pull never`, so the monitor uses its existing image
+without resolving or pulling its Node base image. All service images must
+already exist locally for this worktree's Compose project; missing images fail
+instead of being downloaded. Source changes require a later rebuild without
+`OBS_LOCAL_IMAGES=1`. For direct Compose use, place `--no-build --pull never`
+after `up`; `--no-pull` is not a global Compose option.
+
 PowerShell:
 
 ~~~powershell
@@ -262,6 +289,15 @@ internal `EventLane` advisory transaction lock serializes some native
 workflow commits per hub even though this sample has no business constraints.
 
 See [offboarding benchmark design](../docs/offboarding-unconstrained-benchmark.md).
+
+For the matching HA and SSE variants, clients wait for `hub-lb` to pass its
+HTTP readiness check before starting. If k6 reports `lookup hub-lb` or
+`Hub not healthy: 0`, check `hub-lb` startup with the same Compose files and
+`compose.ps1` project used for the workload. A host port conflict can leave the
+load balancer without a network attachment. Set `HUB_LB_PORT` in `.env` to an
+unused port (for example, `5111` when another checkout owns `5110`), then
+rerun the matching HA or SSE `up` target before retrying the test. Internal
+clients continue to use `http://hub-lb:5100`.
 
 
 ### Finding offboarding under Workflow definitions

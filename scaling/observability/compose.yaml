@@ -61,6 +61,8 @@ services:
     build:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.monitor
+      args:
+        NODE_IMAGE: ${MONITOR_NODE_IMAGE:-node:22-alpine}
     depends_on:
       hub:
         condition: service_healthy
@@ -121,33 +123,6 @@ services:
       start_period: 20s
     ports:
       - "127.0.0.1:${HUB_PORT:-5100}:5100"
-
-
-  provisioner:
-    build:
-      context: ../..
-      dockerfile: scaling/observability/Dockerfile.app
-      args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj
-    command: ["WorkflowCore.Provisioner.Host.dll"]
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
-      WORKERS: "${WORKERS:-16}"
-      WORKFLOW_WORKERS: "${WORKFLOW_WORKERS:-8}"
-      WFC_HUB_ADAPTIVE_CLAIMS: "${WFC_HUB_ADAPTIVE_CLAIMS:-true}"
-      ACTIVITY_WORKERS: "${ACTIVITY_WORKERS:-16}"
-      WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE: "${WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE:-0}"
-      WFC_HUB_WORKER_CAPACITY_FANOUT: "${WFC_HUB_WORKER_CAPACITY_FANOUT:-false}"
-      WFC_HUB_TASK_SSE_PUSH: "${WFC_HUB_TASK_SSE_PUSH:-false}"
-      WFC_HUB_WORKER_MAX_SHARD_POLLS: "${WFC_HUB_WORKER_MAX_SHARD_POLLS:-4}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      WFC_OTEL_LOGS_ENABLED: "true"
-    restart: unless-stopped
 
   # Native-only offboarding processor: 8 replicas, no DB credentials,
   # no routed activities, and no explicit per-resource/FIFO policy.

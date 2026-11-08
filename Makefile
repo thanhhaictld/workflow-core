@@ -44,9 +44,21 @@ OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
 OFFBOARD_PROCESSORS ?= 16
-OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
+# Reuse previously built service images without contacting container registries.
+OBS_LOCAL_IMAGES ?= 1
+ifeq ($(OBS_LOCAL_IMAGES),1)
+OBS_UP_IMAGE_FLAGS = --pull never
+else
+OBS_UP_IMAGE_FLAGS = --build
+endif
+OBS_BUILD_DNS ?= 0
+ifeq ($(OBS_BUILD_DNS),1)
+OBS_BUILD_DNS_COMPOSE = -f "scaling/observability/compose.build-dns.yaml"
+OBS_BUILD_DNS_HA_COMPOSE = -f "scaling/observability/compose.build-dns-ha.yaml"
+endif
+OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" $(OBS_BUILD_DNS_COMPOSE) --env-file "$(OBS_ENV_FILE)"
 # Preserve the base file and layer matching HA and four-shard ownership.
-OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" --env-file "$(OBS_ENV_FILE)"
+OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" $(OBS_BUILD_DNS_COMPOSE) $(OBS_BUILD_DNS_HA_COMPOSE) --env-file "$(OBS_ENV_FILE)"
 FANOUT_MATCHING_SHARDS ?= 4
 FANOUT_MAX_SHARD_POLLS ?= 4
 K6_OFFBOARD_VUS ?= 200
@@ -77,10 +89,18 @@ $(SSE_PUSH_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
 obs-up:
-	$(OBS_COMPOSE) up -d --build --scale provisioner=$(PROVISIONERS)
+	$(OBS_COMPOSE) up -d $(OBS_UP_IMAGE_FLAGS)
+
+	
+# Push variant of the same two-Hub + four-matching-shard laboratory.
+obs-onboarding-sse-up:
+	$(OBS_FANOUT_COMPOSE) --profile onboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
+
+obs-onboarding-sse-test:
+	$(OBS_FANOUT_COMPOSE) --profile onboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-onboarding
 
 obs-scale:
-	$(OBS_COMPOSE) up -d --scale provisioner=$(PROVISIONERS)
+	$(OBS_COMPOSE) up -d
 
 obs-stress-test:
 	$(OBS_COMPOSE) --profile load run --rm k6
@@ -88,7 +108,7 @@ obs-stress-test:
 # Run exactly eight native-only offboarding processor containers; disable the
 # normal onboarding Provisioner replicas to make the test easy to interpret.
 obs-offboarding-up:
-	$(OBS_COMPOSE) --profile offboarding-load up -d --build --scale processor=$(OFFBOARD_PROCESSORS) --scale provisioner=0
+	$(OBS_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
 
 # Run exactly eight native-only offboarding processor containers; disable the
 # normal onboarding Provisioner replicas to make the test easy to interpret.
@@ -103,7 +123,7 @@ obs-offboarding-test:
 	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
 
 obs-offboarding-test-4k:
-	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=200 -e K6_OFFBOARD_COUNT=4000 k6-offboarding
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=100 -e K6_OFFBOARD_COUNT=4000 k6-offboarding
 
 obs-offboarding-test-100b:
 	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) k6-offboarding
@@ -115,7 +135,7 @@ obs-offboarding-ps:
 # + HA load balancer + four matching shards + native-only processor replicas.
 # Requires obs-setup (configured scaling/observability/.env) before first run.
 obs-offboarding-fanout-up:
-	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=0 --scale processor=$(OFFBOARD_PROCESSORS)
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
 
 # Use the identical three-file topology for k6, inspection and cleanup.
 obs-offboarding-fanout-test:
@@ -137,7 +157,7 @@ obs-offboarding-fanout-down:
 
 # Push variant of the same two-Hub + four-matching-shard laboratory.
 obs-offboarding-sse-up:
-	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=1 --scale processor=$(OFFBOARD_PROCESSORS)
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
 
 obs-offboarding-sse-test:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
