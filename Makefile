@@ -43,7 +43,7 @@ COMPOSE ?= $(PWSH) -NoProfile -File scaling/observability/compose.ps1
 OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
-OFFBOARD_PROCESSORS ?= 8
+OFFBOARD_PROCESSORS ?= 16
 OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
 # Preserve the base file and layer matching HA and four-shard ownership.
 OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" --env-file "$(OBS_ENV_FILE)"
@@ -126,11 +126,11 @@ obs-offboarding-fanout-down:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
 obs-down:
-	$(OBS_COMPOSE) down
+	$(OBS_COMPOSE) --profile * down
 
 # Destructive: deletes named volumes belonging to this Compose project.
 obs-clean:
-	$(OBS_COMPOSE) down --volumes
+	$(OBS_COMPOSE) --profile * down --volumes
 
 obs-ps:
-	$(OBS_COMPOSE) ps -a
+	$(OBS_COMPOSE) --profile * ps -a
