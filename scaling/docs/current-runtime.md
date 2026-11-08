@@ -147,7 +147,7 @@ pwsh -NoProfile -File ./scripts/dev.ps1 test
 ```
 
 The current Compose migrator and `scripts/dev.ps1` apply ordered SQL migrations
-002 through 022. Preserve existing data and apply additive migrations in order;
+002 through 023. Preserve existing data and apply additive migrations in order;
 do not reset volumes to upgrade. The direct PostgreSQL runtime additionally uses
 the upstream EF schema. Compose initializes that schema through the separate
 monitor API migration service.

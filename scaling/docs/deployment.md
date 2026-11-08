@@ -2,7 +2,7 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For current Hub deployments, apply migrations through `022_hub_claim_index_selectivity.sql`
+For current Hub deployments, apply migrations through `023_hub_claim_hub_sequence.sql`
 as configured in Compose and the development script. Start with the
 [current runtime guide](current-runtime.md) and
 follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012

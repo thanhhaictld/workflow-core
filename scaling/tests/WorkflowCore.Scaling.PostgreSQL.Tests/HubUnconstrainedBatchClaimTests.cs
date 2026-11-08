@@ -32,6 +32,28 @@ public sealed class HubUnconstrainedBatchClaimTests
             max, Lease, CancellationToken.None);
 
     [Fact]
+    public async Task LegacyClaims_FilterHubsAndPreserveGlobalSequence()
+    {
+        if (Database is null) return;
+        var firstHub = Hub();
+        var secondHub = Hub();
+        var registry = new HubPolicyRegistry()
+            .Register(firstHub, "work", 1, 1, _ => { })
+            .Register(secondHub, "work", 1, 1, _ => { });
+        await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: false);
+        var first = await Enqueue(store, registry, firstHub, "work", "a");
+        var second = await Enqueue(store, registry, secondHub, "work", "b");
+        var third = await Enqueue(store, registry, firstHub, "work", "c");
+
+        var single = await Claim(store, secondHub, "single", 1, "work");
+        Assert.Equal(second, Assert.Single(single).Id);
+        var both = await store.ClaimAsync("both", [firstHub, secondHub],
+            [new(firstHub, "work", 1), new(secondHub, "work", 1)],
+            2, Lease, CancellationToken.None);
+        Assert.Equal(new[] { first, third }, both.Select(task => task.Id));
+    }
+
+    [Fact]
     public async Task BatchClaims_AreUniqueAcrossCompetingWorkers_AndFenced()
     {
         if (Database is null) return;

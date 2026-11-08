@@ -361,12 +361,12 @@ public sealed class HubTaskStore : IAsyncDisposable
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();
             await using (var candidateQuery = new NpgsqlCommand("""
-                -- Preserve sequence order while filtering active tasks, so LIMIT
-                -- can stop without sorting the entire ready queue. OFFSET 0
-                -- keeps this ordered scan separate from the outer predicates.
+                -- For a single hub, scan its queue in sequence order. Multi-hub
+                -- requests retain the global ordered scan and outer hub filter.
                 SELECT t.id FROM (
                   SELECT * FROM wfc_scale.hub_task
                   WHERE state IN (0,1) AND attempts < max_attempts
+                    AND /*hub_filter*/
                   ORDER BY sequence OFFSET 0
                 ) t
                 WHERE t.hub_id = ANY(@hubs)
@@ -393,9 +393,11 @@ public sealed class HubTaskStore : IAsyncDisposable
                       AND earlier.state IN (0, 1)
                   ))
                 ORDER BY sequence LIMIT 96
-                """, db))
+                """.Replace("/*hub_filter*/", hubs.Count == 1
+                    ? "hub_id = @hub" : "TRUE"), db))
             {
                 candidateQuery.Parameters.AddWithValue("hubs", hubs.ToArray());
+                candidateQuery.Parameters.AddWithValue("hub", hubs[0]);
                 candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
                 candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
                 candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled);
