@@ -30,6 +30,25 @@ receivers:
             attribute_columns: [schemaname, relname]
             data_type: sum
             monotonic: true
+  sqlquery/statements:
+    driver: postgres
+    datasource: "host=postgres port=5432 sslmode=disable"
+    collection_interval: 15s
+    queries:
+      - sql: >-
+          SELECT queryid::text AS query_id, left(query, 500) AS query,
+                 sum(total_exec_time) AS total_exec_time_ms
+          FROM pg_stat_statements
+          WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND queryid IS NOT NULL AND query IS NOT NULL
+          GROUP BY queryid, left(query, 500)
+        metrics:
+          - metric_name: workflow.postgres.statement.execution_time_ms
+            value_column: total_exec_time_ms
+            value_type: double
+            attribute_columns: [query_id, query]
+            data_type: sum
+            monotonic: true
   postgresql:
     endpoint: postgres:5432
     username: ${env:PG_USER}
@@ -67,7 +86,7 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [otlp, postgresql, sqlquery/table_scans]
+      receivers: [otlp, postgresql, sqlquery/table_scans, sqlquery/statements]
       processors: [memory_limiter, batch]
       exporters: [prometheus]
     traces:
