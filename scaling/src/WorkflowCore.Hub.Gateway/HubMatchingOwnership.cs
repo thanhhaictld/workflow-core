@@ -200,7 +200,17 @@ public sealed class HubMatchingOwnership : BackgroundService
         context.Response.Headers.CacheControl = "no-cache, no-transform";
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
-        await response.Content.CopyToAsync(context.Response.Body, ct);
+        // CopyToAsync only flushes when the stream ends, which is wrong for
+        // long-lived SSE frames. Relay and flush every received chunk so
+        // owner-forwarded tasks are actually pushed to the worker promptly.
+        await using var upstream = await response.Content.ReadAsStreamAsync(ct);
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = await upstream.ReadAsync(buffer, ct)) > 0)
+        {
+            await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+            await context.Response.Body.FlushAsync(ct);
+        }
     }
 
     public async Task<bool> ForwardSseCreditToAsync(string url,
