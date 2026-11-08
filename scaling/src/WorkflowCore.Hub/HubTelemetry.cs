@@ -134,6 +134,10 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_matching_poll_duration_seconds", "s");
     public static readonly Counter<long> WorkerClaimRequests =
         Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
+    // Credits are worker-local reservations for pending shard polls (not durable
+    // task leases). Each reserved credit is paired with MaxTasks=1.
+    public static readonly UpDownCounter<long> WorkerShardPollCredits =
+        Meter.CreateUpDownCounter<long>("workflow_hub_worker_shard_poll_credits", "{credit}");
     // Client-observed claim/poll latency, including long-poll queueing and
     // HTTP transport. Guardrail against hiding latency by deferring server SQL.
     public static readonly Histogram<double> WorkerClaimHttpDuration =
