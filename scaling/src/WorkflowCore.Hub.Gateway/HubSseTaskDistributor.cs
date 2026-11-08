@@ -10,11 +10,20 @@ namespace WorkflowCore.Hub.Gateway;
 /// existing event-gated matcher, obtains a PostgreSQL-fenced lease and pushes
 /// the leased task as an SSE event. SSE itself never transfers ownership.
 /// </summary>
-public sealed class HubSseTaskDistributor(HubTaskMatcher matcher)
+public sealed class HubSseTaskDistributor
 {
+    private readonly Func<HubClaimRequest, CancellationToken, Task<IReadOnlyList<HubLeasedTask>>> _poll;
+
+    public HubSseTaskDistributor(HubTaskMatcher matcher) : this(matcher.LongPollAsync) { }
+
+    // Injectable matching delegate enables deterministic tests without a DB.
+    public HubSseTaskDistributor(Func<HubClaimRequest, CancellationToken,
+        Task<IReadOnlyList<HubLeasedTask>>> poll) => _poll = poll;
+
     public sealed record Subscribe(HubClaimRequest Claim, int Capacity, int InitialCredits);
     public sealed record Credit(Guid SessionId, string WorkerId, string HubId,
         int MatchingPartition, Guid TaskId, long Epoch);
+    private readonly object _registryGate = new();
     private readonly ConcurrentDictionary<Guid, Session> _sessions = new();
     private readonly ConcurrentDictionary<(string Worker, string Hub, int Shard), Guid> _active = new();
     private const int MaxSessions = 2048;
@@ -129,17 +138,19 @@ public sealed class HubSseTaskDistributor(HubTaskMatcher matcher)
             subscribe.InitialCredits < 0 || subscribe.InitialCredits > subscribe.Capacity)
             throw new ArgumentException("Invalid SSE worker capacity/capability registration");
 
-        if (_sessions.Count >= MaxSessions)
-            throw new InvalidOperationException("SSE session capacity exceeded");
-
         var session = new Session(subscribe);
         var key = (subscribe.Claim.WorkerId, subscribe.Claim.Hubs[0],
             subscribe.Claim.MatchingPartition.Value);
-        if (_active.TryGetValue(key, out var previous) &&
-            _sessions.TryGetValue(previous, out var prior))
-            prior.Cancel();
-        _sessions[session.Id] = session;
-        _active[key] = session.Id;
+        lock (_registryGate)
+        {
+            if (_sessions.Count >= MaxSessions)
+                throw new InvalidOperationException("SSE session capacity exceeded");
+            if (_active.TryGetValue(key, out var previous) &&
+                _sessions.TryGetValue(previous, out var prior))
+                prior.Cancel();
+            _sessions[session.Id] = session;
+            _active[key] = session.Id;
+        }
         HubTelemetry.SseTaskSessions.Add(1);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, session.Closed.Token);
         var token = linked.Token;
@@ -159,7 +170,7 @@ public sealed class HubSseTaskDistributor(HubTaskMatcher matcher)
                 }
                 await take;
                 IReadOnlyList<HubLeasedTask> leases;
-                try { leases = await matcher.LongPollAsync(subscribe.Claim, token); }
+                try { leases = await _poll(subscribe.Claim, token); }
                 catch
                 {
                     // If ownership is lost or claim fails, close the stream.
@@ -186,10 +197,13 @@ public sealed class HubSseTaskDistributor(HubTaskMatcher matcher)
         finally
         {
             session.Cancel();
-            _sessions.TryRemove(session.Id, out _);
-            // Do not erase a replacement generation's ownership.
-            if (_active.TryGetValue(key, out var current) && current == session.Id)
-                _active.TryRemove(key, out _);
+            lock (_registryGate)
+            {
+                _sessions.TryRemove(session.Id, out _);
+                // Do not erase a replacement generation's ownership.
+                if (_active.TryGetValue(key, out var current) && current == session.Id)
+                    _active.TryRemove(key, out _);
+            }
             HubTelemetry.SseTaskSessions.Add(-1);
             session.Closed.Dispose();
         }
