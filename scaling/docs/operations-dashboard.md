@@ -135,15 +135,21 @@ is down. The collector's SQL query receiver is experimental. The query reads
 statistics views and does not scan workflow or task tables.
 
 
-The PostgreSQL Grafana dashboard also shows the ten statements with the highest
-cumulative `pg_stat_statements.total_exec_time` in the configured database and
-the statistics reset time. This ranking ignores the dashboard time range;
-execution time includes waits and sums concurrent calls, and is not CPU time.
-Individual entries can be reset or evicted, and text visibility depends on
-PostgreSQL permissions. The local Compose stack preloads and creates the
-extension during startup; for other deployments, install and preload it and
-configure the PostgreSQL datasource. Panel errors expose missing extensions,
-permissions, or datasource failures rather than reporting an empty ranking.
+The collector samples `pg_stat_statements` every 15 seconds for the configured
+database, exporting cumulative execution time by query ID and the first 500
+characters of normalized query text to Prometheus. Grafana ranks the ten largest
+estimated increases over the selected time range. The values include waits and
+concurrent calls and are not CPU time. Increases are extrapolated estimates and
+need at least two samples; new entries, eviction, resets, collection gaps and
+short ranges can lead to missing or incomplete results. Historical data starts
+when collection is enabled and is limited by Prometheus retention (seven days
+in this stack). The dashboard also shows the current statistics reset time.
+The query reads a statistics view, but exports a series for every tracked
+statement: query text can contain sensitive data and statement churn increases
+Prometheus cardinality and storage. Use this development setup only with access
+and retention controls appropriate for the data. The local Compose stack
+preloads and creates the extension during startup; other deployments must
+install and preload it and provide a suitable collector database role.
 
 The local Grafana server uses the existing database credentials for its
 server-side datasource. These development credentials have broad database
