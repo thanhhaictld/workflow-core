@@ -56,6 +56,13 @@ jobs:
             scaling/observability/benchmark/compare_capacity_shard_fanout.py
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" config --quiet
+          # Parse the PowerShell-backed Make targets and verify they include
+          # both HA overlays and the native-only processor scale.
+          make --dry-run obs-offboarding-fanout-up obs-offboarding-fanout-test \
+            > /tmp/offboarding-fanout-make.txt
+          grep -Fq 'compose.matching-ha.yaml' /tmp/offboarding-fanout-make.txt
+          grep -Fq 'compose.matching-shards.yaml' /tmp/offboarding-fanout-make.txt
+          grep -Fq -- '--scale processor=8' /tmp/offboarding-fanout-make.txt
           echo "host cpu count=$(nproc)"
           cat /proc/loadavg
       - name: Verify worker credit reservations and compile the runtime
