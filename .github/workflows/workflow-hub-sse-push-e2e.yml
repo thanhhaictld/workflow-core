@@ -40,6 +40,9 @@ jobs:
       WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
       WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
       WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      # The verifier must use the surviving load-balanced gateway after we
+      # deliberately stop Hub A (which normally publishes port 5100).
+      WFC_HUB_VERIFY_URL: 'http://127.0.0.1:5110'
     steps:
       - uses: actions/checkout@v4
       - name: Validate PowerShell-first Make targets and Compose
