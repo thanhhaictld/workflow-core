@@ -6,7 +6,6 @@ import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Clock3, GitBranch, L
 import { durationMs, formatDate, formatDuration, shortId } from "@/lib/format";
 import type { WorkflowItem, WorkflowOverview, WorkflowPage } from "@/lib/types";
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Select, StatusBadge, buttonClasses } from "./ui";
-import { DemoOnboarding } from "./demo-onboarding";
 
 const PAGE_SIZE = 20;
 const statusOptions = ["All", "Runnable", "Ready", "Running", "Complete", "Suspended", "Failed", "Terminated"];
@@ -37,8 +36,7 @@ function Metric({ icon, label, value, hint, tone }: {
 }
 
 function WorkflowRow({ workflow }: { workflow: WorkflowItem }) {
-  const path = `/workflows/${workflow.id}` +
-    (workflow.source === "hub" ? "?source=hub" : "");
+  const path = `/workflows/${workflow.id}`;
   const duration = durationMs(workflow.createdAt, workflow.completedAt);
   const age = workflow.completedAt ? duration : durationMs(workflow.createdAt, new Date().toISOString());
   return <tr className="border-t border-border/75 transition-colors hover:bg-muted/40">
@@ -52,8 +50,8 @@ function WorkflowRow({ workflow }: { workflow: WorkflowItem }) {
     </td>
     <td className="max-w-[220px] truncate px-5 py-4 text-xs text-muted-foreground">{workflow.reference || "—"}</td>
     <td className="px-5 py-4">
-      <Badge tone={workflow.source === "hub" ? "blue" : "slate"}>
-        {workflow.source === "hub" ? workflow.hubId || "Hub" : "Legacy"}
+      <Badge tone="blue">
+        {workflow.hubId || "Hub"}
       </Badge>
     </td>
     <td className="px-5 py-4"><StatusBadge status={workflow.status} /></td>
@@ -88,7 +86,7 @@ export function WorkflowList() {
 
   useEffect(() => {
     const selection = new URLSearchParams(window.location.search).get("hub");
-    if (selection && /^[a-zA-Z0-9_.:-]{1,80}$/.test(selection)) setHub(selection);
+    if (selection && selection !== "legacy" && /^[a-zA-Z0-9_.:-]{1,80}$/.test(selection)) setHub(selection);
   }, []);
 
   function changeHub(value: string) {
@@ -167,7 +165,7 @@ export function WorkflowList() {
     </div>
 
     {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-300/50 bg-rose-500/5 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-      <span className="flex items-center gap-2"><AlertTriangle size={16} />{error}. Check the legacy monitoring API and Workflow Hub connectivity.</span>
+      <span className="flex items-center gap-2"><AlertTriangle size={16} />{error}. Check Workflow Hub connectivity.</span>
       <Button size="sm" onClick={reload}>Retry</Button>
     </div>}
 
@@ -177,15 +175,13 @@ export function WorkflowList() {
 
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <Metric icon={<GitBranch size={19} />} label="Total workflows" value={overview?.total} hint={`${overview?.created24h ?? "—"} started in the last 24 hours`} tone="slate" />
-      <Metric icon={<Activity size={19} />} label="Runnable / active" value={overview?.running} hint="Legacy runnable plus Hub ready/running instances" tone="blue" />
+      <Metric icon={<Activity size={19} />} label="Runnable / active" value={overview?.running} hint="Hub ready/running instances" tone="blue" />
       <Metric icon={<CheckCircle2 size={19} />} label="Completed" value={overview?.completed} hint={`${overview?.completed24h ?? "—"} completed in the last 24 hours`} tone="green" />
-      <Metric icon={<AlertTriangle size={19} />} label="With execution errors" value={overview?.withErrors} hint="Legacy errors and failed Hub runs" tone="red" />
+      <Metric icon={<AlertTriangle size={19} />} label="With execution errors" value={overview?.withErrors} hint="Failed Hub runs" tone="red" />
     </div>
 
-    {(hub === "all" || hub === "legacy") && <DemoOnboarding onCreated={reload} />}
-
     <Card className="overflow-hidden">
-      <CardHeader title="Workflow runs" description="Latest executions across legacy Workflow Core and Workflow Hub · click a run for history"
+      <CardHeader title="Workflow runs" description="Latest executions across Workflow Hubs · click a run for history"
         action={<span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {loading && <LoaderCircle size={13} className="animate-spin" />}
           {lastUpdated ? `Updated ${new Date(lastUpdated).toLocaleTimeString()}` : "Awaiting API"}
@@ -198,9 +194,7 @@ export function WorkflowList() {
             <Input aria-label="Search workflow ID, definition or reference" className="pl-9" placeholder="Search workflow ID, definition, reference..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <Select aria-label="Filter by hub" value={hub} onChange={e => changeHub(e.target.value)}>
-            <option value="all">All hubs &amp; legacy</option>
-            <option value="legacy">Legacy Workflow Core</option>
-            <option value="hub">All Workflow Hubs</option>
+            <option value="all">All hubs</option>
             {hubs.map(id => <option key={id} value={id}>Hub: {id}</option>)}
           </Select>
           <Select aria-label="Filter by status" value={status} onChange={e => { setStatus(e.target.value); setPage(1); }}>

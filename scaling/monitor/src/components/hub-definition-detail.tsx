@@ -99,8 +99,7 @@ export function HubDefinitionDetail({ hubId, definitionId }: {
     </div>
 
     <p className="text-xs leading-5 text-muted-foreground">
-      This registry is persisted in the Hub's PostgreSQL database, separately from the legacy
-      archived definition catalog. Version comparison covers distinct published versions.
+      This registry is persisted in the Hub's PostgreSQL database. Version comparison covers distinct published versions.
       Re-registering the same Hub definition version overwrites its current metadata;
       earlier same-version snapshots are not retained.
     </p>
