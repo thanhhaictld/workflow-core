@@ -99,6 +99,10 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_pg_notify_listeners", "{connection}");
     public static readonly UpDownCounter<long> SseConnections =
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_connections", "{connection}");
+    public static readonly UpDownCounter<long> SseTaskSessions =
+        Meter.CreateUpDownCounter<long>("workflow_hub_sse_task_sessions", "{session}");
+    public static readonly Counter<long> SseTasksDispatched =
+        Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
     public static readonly UpDownCounter<long> WorkerInflight =
         Meter.CreateUpDownCounter<long>("workflow_hub_worker_inflight", "{task}");
     public static readonly Counter<long> WorkerExecutions =

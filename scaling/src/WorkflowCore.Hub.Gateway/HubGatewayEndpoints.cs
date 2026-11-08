@@ -31,6 +31,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubMatchingOwnership>();
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
         services.AddSingleton<HubTaskMatcher>();
+        services.AddSingleton<HubSseTaskDistributor>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -605,6 +606,9 @@ public static class HubGatewayEndpoints
             }
         });
 
+        // Opt-in worker SSE task distribution; existing events and long-poll
+        // endpoints are preserved for backward compatibility and rollback.
+        routes.MapSseTaskStreaming();
         return app;
     }
 
