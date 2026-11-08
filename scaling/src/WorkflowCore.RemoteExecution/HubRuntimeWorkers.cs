@@ -259,6 +259,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             out var requested) ? Math.Clamp(requested, 1, upperBound) : upperBound;
         var planner = new HubShardCapacityPlanner(capacity, options.MatchingPartitions,
             maxPolls, Random.Shared.Next(options.MatchingPartitions));
+        logger.LogInformation("Capacity-aware shard polling enabled: {Credits} slots, {ShardPolls} concurrent polls, {Shards} matching shards",
+            capacity, maxPolls, options.MatchingPartitions);
         var active = new List<Task>();
         var pending = new Dictionary<int, Task<HubLeasedTask[]>>();
         using var pollStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -268,7 +270,10 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             {
                 active.RemoveAll(task => task.IsCompleted);
                 while (planner.TryReserve(active.Count, out var shard))
+                {
+                    HubTelemetry.WorkerShardPollCredits.Add(1, _lane);
                     pending.Add(shard, PollReservedShardAsync(shard, pollStop.Token));
+                }
                 var all = active.Concat(pending.Values.Cast<Task>()).ToArray();
                 if (all.Length == 0)
                 {
@@ -282,6 +287,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 {
                     pending.Remove(shard);
                     planner.Release(shard);
+                    HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
                     try
                     {
                         foreach (var lease in await poll)
@@ -301,6 +307,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             try { await Task.WhenAll(pending.Values); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
             catch (Exception ex) { logger.LogDebug(ex, "Shard polls ended during shutdown"); }
+            foreach (var shard in pending.Keys)
+            {
+                planner.Release(shard);
+                HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
+            }
             await Task.WhenAll(active);
         }
     }
