@@ -1,12 +1,5 @@
 import type { NextConfig } from "next";
 
-const upstream = (process.env.WORKFLOW_API_URL || "http://localhost:5000").replace(/\/$/, "");
-
-const nextConfig: NextConfig = {
-  output: "standalone",
-  async rewrites() {
-    return [{ source: "/backend/:path*", destination: `${upstream}/api/:path*` }];
-  }
-};
+const nextConfig: NextConfig = { output: "standalone" };
 
 export default nextConfig;

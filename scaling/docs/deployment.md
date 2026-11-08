@@ -2,7 +2,9 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For Hub deployments, apply migrations through `012_hub_native_runtime.sql` and
+For current Hub deployments, apply migrations through `023_hub_claim_hub_sequence.sql`
+as configured in Compose and the development script. Start with the
+[current runtime guide](current-runtime.md) and
 follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012
 preserves existing sequential runs. The procedure below describes the direct
 PostgreSQL runtime.

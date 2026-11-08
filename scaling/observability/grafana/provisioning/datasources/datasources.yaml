@@ -28,3 +28,16 @@ datasources:
     access: proxy
     url: http://loki:3100
     editable: false
+  - name: PostgreSQL
+    uid: postgresql
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: $PG_USER
+    secureJsonData:
+      password: $PG_PASSWORD
+    jsonData:
+      database: $PG_DATABASE
+      sslmode: disable
+      postgresVersion: 1700
+    editable: false

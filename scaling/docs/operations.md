@@ -1,5 +1,10 @@
 # Operations and recovery runbook
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 **Caution:** This is a development-stage runbook. Any manual replay can
 repeat external provisioning actions.
 

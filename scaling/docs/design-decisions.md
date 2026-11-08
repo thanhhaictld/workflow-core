@@ -1,5 +1,10 @@
 # Architecture decision records (ADRs)
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 Each decision reflects **implemented behavior** at the documented baseline,
 not a claim that the option is optimal for every workload.
 

@@ -1,0 +1,166 @@
+{
+  "uid": "workflow-postgresql",
+  "title": "Workflow Hub • PostgreSQL",
+  "tags": ["workflow-core", "postgres"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "PostgreSQL process CPU",
+      "description": "Sampled PostgreSQL processes; 100% is one CPU core. Very short-lived processes may be missed.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "100 * sum(rate(namedprocess_namegroup_cpu_seconds_total{job=\"postgres-process\",groupname=\"postgres\"}[1m]))", "legendFormat": "CPU" }],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "PostgreSQL backend connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum(postgresql_backends)", "legendFormat": "Connections" }, { "refId": "B", "expr": "max(postgresql_connection_max)", "legendFormat": "Maximum" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Transaction rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum(rate(postgresql_commits_total[1m]))", "legendFormat": "Commits" }, { "refId": "B", "expr": "sum(rate(postgresql_rollbacks_total[1m]))", "legendFormat": "Rollbacks" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Hub task rows",
+      "description": "PostgreSQL's estimated live and dead row counts; dead rows are not necessarily reclaimable immediately.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (state) (postgresql_rows{postgresql_table_name=\"wfc_scale.hub_task\"})", "legendFormat": "{{state}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Database size",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum(postgresql_db_size_bytes)", "legendFormat": "Database" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Table block access rate",
+      "description": "PostgreSQL table and index block hits and reads by source.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (source) (rate(postgresql_blocks_read_total[1m]))", "legendFormat": "{{source}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Sequential rows read / sec by table",
+      "description": "Rows read by sequential scans, including rows later rejected by filters. PostgreSQL table statistics, one-minute rate.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_seq_rows_read_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Sequential scans / sec by table",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_seq_scans_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Index rows fetched / sec by table",
+      "description": "Live table rows fetched by index scans; not index entries examined or rows from index-only scans.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_index_rows_fetched_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Index scans / sec by table",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_index_scans_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "text",
+      "title": "Statement statistics",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Top statements are cumulative for the current database since the statistics reset, not the selected time range. Total execution time includes waits and sums concurrent calls; it is not CPU time. Entries may be evicted and query text may be hidden by PostgreSQL permissions. If the panels fail, check the PostgreSQL datasource, permissions, pg_stat_statements preload, and extension."
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Statistics reset (all databases)",
+      "description": "pg_stat_statements reset time applies across databases. Individual entries can also be reset or evicted.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT stats_reset AS \"Statistics reset\" FROM pg_stat_statements_info"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Top queries by cumulative execution time",
+      "description": "Ten statements in the current database with the highest cumulative total execution time. Values are not restricted to the dashboard time range.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT queryid::text AS \"Query ID\", left(query, 4000) AS \"Query\", calls AS \"Calls\", total_exec_time AS \"Total execution (ms)\", mean_exec_time AS \"Mean execution (ms)\", rows AS \"Rows\" FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY total_exec_time DESC, queryid LIMIT 10"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

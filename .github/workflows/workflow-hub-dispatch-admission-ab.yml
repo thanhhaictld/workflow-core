@@ -1,0 +1,208 @@
+name: Workflow Hub Demand-Aware Dispatch / FIFO A-B
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/observability/compose.matching-ha.yaml'
+      - 'scaling/observability/compose.matching-shards.yaml'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/**'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/benchmark/summarize_linear_scaling.py'
+      - '.github/workflows/workflow-hub-dispatch-admission-ab.yml'
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Workflow count per policy and processor count'
+        required: false
+        default: '200'
+
+concurrency:
+  group: workflow-hub-dispatch-admission-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        dispatch_mode: ['baseline', 'scoped', 'fifo', 'combined']
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: ${{ (matrix.dispatch_mode == 'scoped' || matrix.dispatch_mode == 'combined') && 'true' || 'false' }}
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: ${{ (matrix.dispatch_mode == 'fifo' || matrix.dispatch_mode == 'combined') && 'true' || 'false' }}
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_DB_POOL: '12'
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      COUNT: ${{ github.event.inputs.count || '200' }}
+      DISPATCH_MODE: ${{ matrix.dispatch_mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scaling/observability/benchmark/summarize_linear_scaling.py
+          # Verify that the run matrix includes the script\'s required 1-worker baseline.
+          grep -Eq '^[[:space:]]*for processors in 1 2 4 8 16; do
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          echo "cpu_count=$(nproc) batch_claims=$WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS"
+      - name: Start two matching Hubs and the telemetry services
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+      - name: Benchmark fixed workload at 1, 2, 4, 8 and 16 processors
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/linear-scale
+          chmod 0777 scaling/observability/results scaling/observability/results/linear-scale
+          # The scaling summarizer requires a 1-processor baseline for every
+          # policy; do not omit it when changing benchmark stages.
+          for processors in 1 2 4 8 16; do
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --build --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 12
+            for mode in unordered partition keyed; do
+              run="dispatch-$DISPATCH_MODE-$processors-$mode-$GITHUB_RUN_ID"
+              echo "::group::mode=$DISPATCH_MODE workers=$processors policy=$mode"
+              python3 .github/scripts/sample_postgres_waits.py \
+                --output "scaling/observability/results/linear-scale/waits-$processors-$mode.json" \
+                >"/tmp/linear-waits-$processors-$mode.log" 2>&1 &
+              waits_pid=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/linear-k6-$processors-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$waits_pid" 2>/dev/null || true
+              wait "$waits_pid" || true
+              test "$k6_rc" -eq 0
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/linear-scale/k6-$processors-$mode.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/linear-scale/verify-$processors-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/summarize_linear_scaling.py \
+            --input scaling/observability/results/linear-scale \
+            --output scaling/observability/results/linear-scale/speedup.csv \
+            --label "$DISPATCH_MODE" \
+            | tee scaling/observability/results/linear-scale/speedup.txt
+      - name: Upload scaling data and PostgreSQL waits
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-dispatch-admission-${{ matrix.dispatch_mode }}
+          path: |
+            scaling/observability/results/linear-scale/
+            /tmp/linear-k6-*.log
+            /tmp/linear-waits-*.log
+          if-no-files-found: warn
+      - name: Stop benchmark services
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load --profile policy-k6 down --remove-orphans || true
+ .github/workflows/workflow-hub-dispatch-admission-ab.yml
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          echo "cpu_count=$(nproc) batch_claims=$WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS"
+      - name: Start two matching Hubs and the telemetry services
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+      - name: Benchmark fixed workload at 1, 2, 4, 8 and 16 processors
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/linear-scale
+          chmod 0777 scaling/observability/results scaling/observability/results/linear-scale
+          # The scaling summarizer requires a 1-processor baseline for every
+          # policy; do not omit it when changing benchmark stages.
+          for processors in 1 2 4 8 16; do
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --build --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 12
+            for mode in unordered partition keyed; do
+              run="dispatch-$DISPATCH_MODE-$processors-$mode-$GITHUB_RUN_ID"
+              echo "::group::mode=$DISPATCH_MODE workers=$processors policy=$mode"
+              python3 .github/scripts/sample_postgres_waits.py \
+                --output "scaling/observability/results/linear-scale/waits-$processors-$mode.json" \
+                >"/tmp/linear-waits-$processors-$mode.log" 2>&1 &
+              waits_pid=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/linear-k6-$processors-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$waits_pid" 2>/dev/null || true
+              wait "$waits_pid" || true
+              test "$k6_rc" -eq 0
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/linear-scale/k6-$processors-$mode.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/linear-scale/verify-$processors-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/summarize_linear_scaling.py \
+            --input scaling/observability/results/linear-scale \
+            --output scaling/observability/results/linear-scale/speedup.csv \
+            --label "$DISPATCH_MODE" \
+            | tee scaling/observability/results/linear-scale/speedup.txt
+      - name: Upload scaling data and PostgreSQL waits
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-dispatch-admission-${{ matrix.dispatch_mode }}
+          path: |
+            scaling/observability/results/linear-scale/
+            /tmp/linear-k6-*.log
+            /tmp/linear-waits-*.log
+          if-no-files-found: warn
+      - name: Stop benchmark services
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load --profile policy-k6 down --remove-orphans || true

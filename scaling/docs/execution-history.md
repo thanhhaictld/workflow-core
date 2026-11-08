@@ -1,5 +1,10 @@
 # Durable execution history (experimental)
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 This branch extends the PostgreSQL-distributed runtime with an **append-only**
 execution journal at `wfc_scale.execution_history`. The existing
 `wfc."ExecutionPointer"` rows remain the current-state snapshot and are not

@@ -89,15 +89,20 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
         throw "Native progression mismatch: expected $Steps completions, got $($completed.Count), distinct pointers $(@($completed.executionPointerId | Sort-Object -Unique).Count)"
     }
     $trace = @(Call-Hub GET "workflows/$Id/trace")
-    if ($trace.Count -ne 3 -or @($trace | Where-Object { -not $_.executionPointerId -or -not $_.dispatchKey }).Count) {
-        throw 'Activity trace is missing native pointer/dispatch identities'
+    # A native timer/inline step is now a valid independent waterfall row.
+    # The remote onboarding path must still yield exactly three activity
+    # lanes with their durable task pointer/dispatch identifiers.
+    $routed = @($trace | Where-Object { $_.dispatchKey })
+    if ($routed.Count -ne 3 -or @($routed | Where-Object { -not $_.executionPointerId }).Count) {
+        $lanes = @($trace | ForEach-Object { "step=$($_.stepIndex),type=$($_.activityType),pointer=$($_.executionPointerId),dispatch=$($_.dispatchKey),attempts=$(@($_.attempts).Count)" })
+        throw "Activity trace expected three routed lanes with pointer/dispatch identity; got $($routed.Count) routed / $($trace.Count) total: $($lanes -join '; ')"
     }
 }
 
 try {
     if ([string]::IsNullOrWhiteSpace($HubToken)) { throw 'Set WFC_HUB_AUTH_TOKEN or pass -HubToken' }
     if ($ManageHosts) {
-        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 013 applied' }
+        if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw '-ManageHosts requires WFC_TEST_PG or -ConnectionString, with migrations through 015 applied' }
         $hub = Start-ManagedHost WorkflowCore.Hub.Server
         Wait-For { try { (Invoke-RestMethod "$ApiUrl/health/ready" -TimeoutSec 2).status -eq 'ready' } catch { $false } } 'Hub readiness'
         $publisher = Start-ManagedHost WorkflowCore.Provisioner.Host -RegisterOnly

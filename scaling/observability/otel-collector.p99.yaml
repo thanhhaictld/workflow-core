@@ -1,0 +1,84 @@
+receivers:
+  sqlquery/table_scans:
+    driver: postgres
+    datasource: "host=postgres port=5432 sslmode=disable"
+    collection_interval: 15s
+    queries:
+      - sql: >-
+          SELECT schemaname, relname, seq_scan, seq_tup_read,
+                 COALESCE(idx_scan, 0) AS idx_scan,
+                 COALESCE(idx_tup_fetch, 0) AS idx_tup_fetch
+          FROM pg_stat_user_tables WHERE schemaname = 'wfc_scale'
+        metrics:
+          - metric_name: workflow.postgres.table.seq_scans
+            value_column: seq_scan
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.seq_rows_read
+            value_column: seq_tup_read
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.index_scans
+            value_column: idx_scan
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.table.index_rows_fetched
+            value_column: idx_tup_fetch
+            attribute_columns: [schemaname, relname]
+            data_type: sum
+            monotonic: true
+  postgresql:
+    endpoint: postgres:5432
+    username: ${env:PG_USER}
+    password: ${env:PG_PASSWORD}
+    databases: ["${env:PG_DATABASE}"]
+    collection_interval: 15s
+    tls:
+      insecure: true
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    resource_to_telemetry_conversion:
+      enabled: true
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+  file/p99:
+    path: /results/traces.json
+    format: json
+    flush_interval: 1s
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, postgresql, sqlquery/table_scans]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/tempo, file/p99]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

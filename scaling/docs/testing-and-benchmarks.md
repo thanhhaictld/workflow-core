@@ -1,5 +1,10 @@
 # Testing evidence, benchmark plan and acceptance criteria
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 ## Verified CI evidence
 
 At source commit `b475e877141f0d8626c0a2ca5281302227928d4a`,

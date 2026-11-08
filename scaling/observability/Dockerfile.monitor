@@ -5,7 +5,6 @@ COPY scaling/monitor/package.json scaling/monitor/pnpm-lock.yaml ./
 RUN corepack pnpm install --frozen-lockfile
 COPY scaling/monitor/ ./
 # Next.js rewrites are resolved at build time: use Compose-internal DNS.
-ENV WORKFLOW_API_URL=http://monitor-api:5000
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN corepack pnpm run build
 

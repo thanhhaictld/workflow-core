@@ -1,5 +1,10 @@
 # Production readiness: gaps, risks and release checklist
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 **Current verdict:** experimental implementation validated with a small
 PostgreSQL integration suite; **not production-certified**.
 

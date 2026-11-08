@@ -42,6 +42,7 @@ jobs:
       - name: Validate k6 syntax and provisioned dashboard JSON
         run: |
           node --input-type=module --check < scaling/observability/k6/hub-workflows.js
+          node --input-type=module --check < scaling/observability/k6/offboarding-unconstrained.js
           python3 - <<'PY'
           import json
           path='scaling/observability/grafana/dashboards/workflow-hub-runtime.json'
@@ -59,25 +60,21 @@ jobs:
         run: |
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale provisioner=2
           docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
-      - name: Verify Hub, legacy monitoring API, Next.js UI and Grafana readiness
+      - name: Verify Hub, Next.js UI and Grafana readiness
         run: |
           set -euo pipefail
           for i in {1..100}; do
             if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
                curl -fsS http://127.0.0.1:3001/api/health >/dev/null &&
-               curl -fsS http://127.0.0.1:5000/health/ready >/dev/null &&
                curl -fsS http://127.0.0.1:3002/hub >/dev/null &&
-               curl -fsS http://127.0.0.1:3002/backend/monitor/overview >/dev/null; then break; fi
+               curl -fsS http://127.0.0.1:3002/api/hub-overview >/dev/null; then break; fi
             sleep 2
           done
           curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
-          curl --fail-with-body -fsS http://127.0.0.1:5000/health/ready
-          curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/legacy-monitor.html
           curl --fail-with-body -fsSL http://127.0.0.1:3002/hub >/tmp/hub-monitor.html
-          curl --fail-with-body -fsS http://127.0.0.1:3002/backend/monitor/overview >/tmp/legacy-monitor-overview.json
           curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
 
           # Verify real PostgreSQL-backed dashboard through the Next.js
@@ -106,13 +103,11 @@ jobs:
           PY
           python3 - <<'PY'
           import json
-          legacy=json.load(open('/tmp/legacy-monitor-overview.json'))
           hub=json.load(open('/tmp/hub-monitor-overview.json'))
-          assert isinstance(legacy,dict), 'Legacy monitor API did not return JSON'
           assert isinstance(hub.get('runs'),list), 'Next.js Hub proxy did not return run list'
           assert 'databaseConnections' in hub['diagnostics']
           assert b'Workflow monitoring' in open('/tmp/hub-monitor.html','rb').read()
-          print('Next.js monitor, legacy backend and authenticated Hub proxy are online.')
+          print('Next.js monitor and authenticated Hub proxy are online.')
           PY
           curl --fail-with-body -fsS -u admin:local-grafana-change-this \
             http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel >/tmp/grafana-dashboard.json
@@ -158,6 +153,88 @@ jobs:
           assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
           print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
           PY
+      - name: Run eight native offboarding processors and standalone k6 smoke
+        run: |
+          set -euo pipefail
+          # The processor profile does not auto-run the offboarding k6 service.
+          # Build/start ONLY the new processor. Rebuilding the whole
+          # observability stack here restarts the Hub/monitor mid-test and
+          # races the very next registration check.
+          OFFBOARD_PROCESSOR_WORKERS=4 docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps \
+            --scale processor=8 processor
+          replicas="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+          test "$replicas" -eq 8
+          # The offboarding processor publishes through Hub REST. The Definitions
+          # page must use the Hub's persisted definition catalog.
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json && python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
+          assert any(d['hubId']=='offboarding' and
+                     d['definitionId']=='tenant-offboarding-fast' and
+                     d['version']==1 and d['executionMode']=='native' and
+                     len(d['steps'])==3 and len(d['metadata']['steps'])==3
+                     for d in defs), defs
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
+          assert any(d['hubId']=='offboarding' and
+                     d['definitionId']=='tenant-offboarding-fast' and
+                     d['version']==1 and len(d['steps'])==3 for d in defs),defs
+          print('PASS: offboarding definition is published and visible via the authenticated Next.js Hub registry')
+          PY
+          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions >/dev/null
+          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions/hub/offboarding/tenant-offboarding-fast >/dev/null
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm \
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 k6-offboarding
+          test -s scaling/observability/results/k6-offboarding-summary.json
+          # Ensure there are no FIFO/capacity policy constraints for this workload.
+          constraints="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T postgres psql -U workflow -d workflow -Atc \
+            "SELECT count(*) FROM wfc_scale.hub_task_constraint c JOIN wfc_scale.hub_task t ON t.id=c.task_id WHERE t.hub_id='offboarding'")"
+          test "$constraints" -eq 0
+          # The old API silently excluded native workflow steps from /trace and
+          # showed a misleading "predates the attempt journal" warning.
+          # A finished native-only flow must now have three timestamped spans.
+          python3 - <<'PY'
+          import json,datetime,urllib.request
+          root='http://127.0.0.1:5100/api/hub/'
+          token=next(line.split('=',1)[1].strip() for line in
+              open('scaling/observability/.env.example') if line.startswith('WFC_HUB_AUTH_TOKEN='))
+          def get(path):
+              req=urllib.request.Request(root+path,headers={'Authorization':'Bearer '+token})
+              with urllib.request.urlopen(req,timeout=15) as r:return json.load(r)
+          page=get('workflows?hub=offboarding&take=10')
+          completed=[row for row in page['items'] if row['definitionId']=='tenant-offboarding-fast'
+                     and row['state']=='Complete']
+          assert completed, page
+          workflow=completed[0]['id']
+          trace=get('workflows/'+workflow+'/trace')
+          native=[step for step in trace if any(a.get('source')=='native-step'
+                      for a in step['attempts'])]
+          assert {step['stepIndex'] for step in native}=={0,1,2}, trace
+          for step in native:
+              assert step['state']=='Completed' and step['executionPointerId']
+              for attempt in step['attempts']:
+                  assert attempt['source']=='native-step' and attempt['outcome']=='Completed'
+                  started=datetime.datetime.fromisoformat(attempt['claimedAt'].replace('Z','+00:00'))
+                  finished=datetime.datetime.fromisoformat(attempt['finishedAt'].replace('Z','+00:00'))
+                  assert finished>=started
+          history=get('workflows/'+workflow+'/history')
+          assert len([e for e in history if e['eventType']=='NativeStepSpan'])>=3
+          print('PASS: three native worker-timed spans persisted and included in Hub trace')
+          PY
+          echo 'PASS: eight offboarding processor containers completed 1000 native-only workflows, zero resource constraints'
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --no-deps --scale processor=0 processor
       - name: Verify embedded timer scheduler and durable wait history
         run: |
           python3 - <<'PY'
@@ -196,37 +273,30 @@ jobs:
           assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
           print('PASS: native combined Provisioner + embedded scheduler + durable timer journal')
           PY
-      - name: Verify unified workflow list, Hub filtering and durable step history
+      - name: Verify Hub workflow list, filtering and durable step history
         run: |
           set -euo pipefail
-          # One legacy instance creates a mixed-source monitor feed.
-          curl --fail-with-body -fsS -X POST \
-            -H 'Content-Type: application/json' \
-            -d '{"tenantId":"smoke-legacy-otel","organizationName":"Smoke Test"}' \
-            http://127.0.0.1:5000/api/demo/onboardings > /tmp/legacy-created.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
+          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&status=Complete&take=10&page=1' > /tmp/unified-onboarding.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&take=10&page=2' > /tmp/unified-hub-page2.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=legacy' > /tmp/unified-legacy.json
           curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=all' > /tmp/unified-all.json
           python3 - <<'PY'
           import json
           hub=json.load(open('/tmp/unified-hub.json'))
+          onboarding=json.load(open('/tmp/unified-onboarding.json'))
           p2=json.load(open('/tmp/unified-hub-page2.json'))
-          legacy=json.load(open('/tmp/unified-legacy.json'))
           combined=json.load(open('/tmp/unified-all.json'))
           assert hub['total']>=20, hub
-          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in hub['items'])
+          assert all(x['source']=='hub' and x['status']=='Complete' for x in hub['items'])
+          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in onboarding['items'])
           assert p2['items'] and p2['total']>=20
-          assert legacy['total']>=1, legacy
-          assert all(x['source']=='legacy' for x in legacy['items'])
-          assert combined['total']>=21 and combined['total']==hub['total']+legacy['total']
-          assert {'hub','legacy','onboarding'}.issubset({'hub','legacy',*combined['hubs']})
-          assert any(x['source']=='legacy' for x in combined['items'])
-          assert any(x['source']=='hub' for x in combined['items'])
-          print('PASS: unified list returns both sources and hub/status/pagination filters')
+          assert combined['total']>=hub['total']
+          assert {'onboarding'}.issubset(set(combined['hubs']))
+          assert all(x['source']=='hub' for x in combined['items'])
+          print('PASS: Hub list returns durable executions with Hub/status/pagination filters')
           # The preceding timer test also creates a completed 4-step workflow.
           # Only validate the 3-step activity workload in this assertion.
-          selected=next(x for x in hub['items'] if x['definitionId']=='tenant-onboarding')
+          selected=next(x for x in onboarding['items'] if x['definitionId']=='tenant-onboarding')
           open('/tmp/hub-workflow-id','w').write(selected['id'])
           PY
           workflow_id="$(cat /tmp/hub-workflow-id)"

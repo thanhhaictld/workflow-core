@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/WorkflowCore.Scaling.PostgreSQL/WorkflowCore.Scaling.PostgreSQL.csproj" />
     <ProjectReference Include="../../src/WorkflowCore.Hub/WorkflowCore.Hub.csproj" />
+    <ProjectReference Include="../../src/WorkflowCore.Hub.Gateway/WorkflowCore.Hub.Gateway.csproj" />
     <ProjectReference Include="../../src/WorkflowCore.RemoteExecution/WorkflowCore.RemoteExecution.csproj" />
     <ProjectReference Include="../../sample/onboarding/WorkflowCore.Provisioner.Workflows/WorkflowCore.Provisioner.Workflows.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />

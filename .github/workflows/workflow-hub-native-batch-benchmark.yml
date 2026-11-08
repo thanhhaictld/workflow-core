@@ -1,0 +1,176 @@
+name: Workflow Hub Native History A-B Benchmark
+
+on:
+  push:
+    branches:
+      - feat/native-commit-metrics-batch-history
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-native-batch-benchmark.yml'
+  pull_request:
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-native-batch-benchmark.yml'
+  workflow_dispatch:
+
+# Keep only the latest A/B execution for this branch or PR, rather than
+# spending multiple runners on obsolete intermediate commits.
+concurrency:
+  group: native-history-ab-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  native-batch-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+      # This inherited A/B compares history INSERT algorithms ONLY. Keep Hub
+      # lock policy constant in both phases; the new workflow tests lock policy.
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: hub
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Hub, PostgreSQL, and Prometheus (legacy history mode)
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+          WFC_HUB_BATCH_HISTORY_ENABLED=false docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            up -d --build hub prometheus
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          OFFBOARD_PROCESSOR_WORKERS=4 docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+          mkdir -p scaling/observability/results/ab
+          chmod 0777 scaling/observability/results scaling/observability/results/ab
+
+      - name: Baseline — old per-event INSERTs (1000 workflows)
+        run: |
+          set -euo pipefail
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED)" = "false"
+          # --no-deps is essential: 'compose run' otherwise recreates the Hub
+          # with default batch=true, silently invalidating the control arm.
+          WFC_HUB_BATCH_HISTORY_ENABLED=false docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
+            -e K6_OFFBOARD_RUN_ID=ci-legacy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
+            k6-offboarding | tee /tmp/k6-legacy.log
+          cp scaling/observability/results/k6-offboarding-summary.json \
+            scaling/observability/results/ab/k6-legacy-summary.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED)" = "false"
+          python3 scaling/observability/benchmark/collect_p0_metrics.py \
+            --mode legacy --output scaling/observability/results/ab/p0-legacy.json
+
+      - name: Switch only Hub to batched history without changing processors
+        run: |
+          set -euo pipefail
+          WFC_HUB_BATCH_HISTORY_ENABLED=true docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            up -d --no-deps --force-recreate hub
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED)" = "true"
+
+      - name: Treatment — new ordered batched INSERTs (1000 workflows)
+        run: |
+          set -euo pipefail
+          WFC_HUB_BATCH_HISTORY_ENABLED=true docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
+            -e K6_OFFBOARD_RUN_ID=ci-batch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
+            k6-offboarding | tee /tmp/k6-batch.log
+          cp scaling/observability/results/k6-offboarding-summary.json \
+            scaling/observability/results/ab/k6-batch-summary.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T hub \
+            printenv WFC_HUB_BATCH_HISTORY_ENABLED)" = "true"
+          python3 scaling/observability/benchmark/collect_p0_metrics.py \
+            --mode batch --output scaling/observability/results/ab/p0-batch.json
+
+      - name: Calculate p95 p99, throughput, and P0 DB-contention percentiles
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime,json,math,os,time,urllib.parse,urllib.request
+          out='scaling/observability/results/ab'
+          token=next(v.split('=',1)[1].strip() for v in open('scaling/observability/.env.example')
+                     if v.startswith('WFC_HUB_AUTH_TOKEN='))
+          def get(url, authenticated=False):
+              headers={'Authorization':'Bearer '+token} if authenticated else {}
+              with urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=45) as r:
+                  return json.load(r)
+          def ts(t): return datetime.datetime.fromisoformat(t.replace('Z','+00:00'))
+          report={}
+          for mode in ('legacy','batch'):
+              runid='ci-'+mode+'-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
+              summary=get('http://127.0.0.1:5100/api/hub/runs/'+runid+'/summary',True)
+              assert summary['total']==summary['completed']==1000 and summary['failed']==0,summary
+              seconds=(ts(summary['lastCompletedAt'])-ts(summary['firstCreatedAt'])).total_seconds()
+              report[mode]={
+                  'runId':runid,
+                  'completed':summary['completed'],
+                  'failed':summary['failed'],
+                  'elapsedSeconds':round(seconds,3),
+                  'throughputWorkflowsPerSecond':round(1000/seconds,3),
+                  'workflowP95Ms':round(summary['p95CompletionMs'],3),
+                  'workflowP99Ms':round(summary['p99CompletionMs'],3),
+              }
+              # Verify persisted history and trace shape for every treatment.
+              page=get('http://127.0.0.1:5100/api/hub/workflows?hub=offboarding&search='+
+                  urllib.parse.quote(runid)+'&take=1',True)
+              assert page['items'],page
+              wid=page['items'][0]['id']
+              history=get('http://127.0.0.1:5100/api/hub/workflows/'+wid+'/history',True)
+              completed=[h for h in history if h['eventType']=='StepCompleted']
+              spans=[h for h in history if h['eventType']=='NativeStepSpan']
+              assert [h['stepIndex'] for h in completed]==[0,1,2],completed
+              assert [h['stepIndex'] for h in spans]==[0,1,2],spans
+              trace=get('http://127.0.0.1:5100/api/hub/workflows/'+wid+'/trace',True)
+              assert {s['stepIndex'] for s in trace if any(
+                  a.get('source')=='native-step' for a in s['attempts'])}=={0,1,2},trace
+          # Snapshot each mode's histograms BEFORE the Hub is replaced.
+          # Aggregating after both phases may lose the retired Prometheus series.
+          for mode in ('legacy','batch'):
+              with open(out+'/p0-'+mode+'.json') as f:
+                  report[mode].update(json.load(f))
+          result={
+              'baseline':report['legacy'],
+              'batched':report['batch'],
+              'speedup':round(report['batch']['throughputWorkflowsPerSecond']/
+                                report['legacy']['throughputWorkflowsPerSecond'],3),
+              'environment':'same GitHub runner; 8 native processors; 100 k6 VUs; one Hub and one Postgres; sequential A/B',
+              'caveat':'Queueing included in workflow p95/p99; single sequential A/B pair is not a statistical guarantee'
+          }
+          path=out+'/comparison.json'
+          with open(path,'w') as f:json.dump(result,f,indent=2)
+          print(json.dumps(result,indent=2))
+          assert all(report[m]['completed']==1000 for m in report)
+          print('PASS: legacy and batched native workflow histories preserved; 1000/1000 complete in both arms')
+          PY
+
+      - name: Publish benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-native-batch-ab
+          path: |
+            scaling/observability/results/ab/*.json
+            /tmp/k6-legacy.log
+            /tmp/k6-batch.log
+          if-no-files-found: warn
+      - name: Print diagnostics if benchmark fails
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=180 hub postgres processor || true

@@ -1,5 +1,7 @@
 # Workflow Core Monitor
 
+> The workflow list, trace, and definition registry now read Hub data only. The legacy onboarding playground and legacy monitor API views have been removed from the UI. Use the k6 Hub workload in `scaling/observability/k6/hub-workflows.js` to create runs. The legacy local development commands and API descriptions below have not yet been updated and do not describe the current monitor UI.
+
 Read-only monitoring UI for the distributed PostgreSQL Workflow Core runtime.
 
 The monitor and its .NET API host live under `scaling/monitor/`. The API host

@@ -1,5 +1,10 @@
 # Implementation inventory and history audit
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 **Scope:** files present in `feat/distributed-postgres-runtime` at baseline
 commit `b475e877141f0d8626c0a2ca5281302227928d4a`, plus this
 documentation. A commit message is not proof a change survives in the branch

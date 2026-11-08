@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -11,12 +12,25 @@ namespace WorkflowCore.Hub.Gateway;
 /// </summary>
 public static class HubGatewayEndpoints
 {
+    // Optional: the matcher verifies the current PostgreSQL ownership epoch
+    // immediately before every SQL task claim. The Gateway has already read
+    // the live partition owner to route the HTTP poll, so another gateway-side
+    // OwnsAsync query is redundant when the dispatcher enforces the check.
+    // Default OFF until same-runner and crash-recovery A/B validation.
+    private static readonly bool DeferInitialMatchingOwnerCheck =
+        Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_DEFER_OWNER_CHECK") is "true" or "1" or "True";
+
     public static IServiceCollection AddHubGateway(
         this IServiceCollection services, string connectionString)
     {
         var maxConnections = int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_DB_POOL"), out var max)
             ? Math.Clamp(max, 1, 100) : 12;
         services.AddSingleton(new HubTaskStore(connectionString, maxConnections));
+        services.AddSingleton<HubMatchingLeaseStore>();
+        services.AddSingleton<HubMatchingPartitionLeaseStore>();
+        services.AddSingleton<HubMatchingOwnership>();
+        services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
+        services.AddSingleton<HubTaskMatcher>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -30,6 +44,14 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubOperationsStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<HubReadinessBroadcaster>());
+        // Each Gateway pod holds one dedicated LISTEN session. The existing
+        // PostgreSQL sweep remains authoritative if hints are lost or disabled.
+        var notifyFlag = Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_ENABLED");
+        if (notifyFlag != "0" && !string.Equals(notifyFlag, "false", StringComparison.OrdinalIgnoreCase))
+            services.AddHostedService(sp => new PostgresHubNotificationListener(
+                Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_CONNECTION") ?? connectionString,
+                sp.GetRequiredService<HubReadinessBroadcaster>(),
+                sp.GetRequiredService<ILogger<PostgresHubNotificationListener>>()));
         services.AddHostedService<HubMetricsSampler>();
         return services;
     }
@@ -75,7 +97,10 @@ public static class HubGatewayEndpoints
             var remote=await published.DefinitionsAsync(ct);
             return Results.Ok(registry.Describe().Cast<object>().Concat(
                 remote.Select(d=> (object)new {
-                    d.HubId,d.DefinitionId,d.Version,d.Partitions,
+                    d.HubId,d.DefinitionId,d.Version,d.Partitions,d.StepCount,
+                    ExecutionMode=d.Metadata.TryGetProperty("executionMode",out var mode)
+                        ? mode.GetString() : "remote",
+                    Metadata=d.Metadata,
                     Steps=d.Metadata.TryGetProperty("steps",out var steps)
                         ? steps : default(System.Text.Json.JsonElement)
                 })));
@@ -302,7 +327,7 @@ public static class HubGatewayEndpoints
             {
                 var id = await store.EnqueueAsync(route, request.Payload.GetRawText(),
                     request.WorkflowId, request.IdempotencyKey, ct);
-                readiness.Publish(request.HubId);
+                readiness.Publish(request.HubId, request.TaskType, request.Version);
                 return Results.Accepted($"/api/hub/tasks/{id}", new { taskId = id });
             }
             catch (InvalidOperationException ex)
@@ -316,6 +341,133 @@ public static class HubGatewayEndpoints
         {
             var task = await store.GetAsync(id, ct);
             return task is null ? Results.NotFound() : Results.Ok(task);
+        });
+
+        // Temporal-inspired demand-driven task matching. An incoming request
+        // is routed to the active per-Hub owner, which parks the worker in memory
+        // and only claims PostgreSQL tasks when demand and readiness intersect.
+        routes.MapPost("/workers/tasks:poll", async (
+            HttpContext context, HubClaimRequest request,
+            HubMatchingOwnership ownership, HubTaskMatcher matcher, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled) return Results.NotFound();
+            // Multi-hub capability sets continue using the original claim API
+            // until explicit fan-out to multiple matching owners is implemented.
+            if (request.Hubs is not { Length: 1 } ||
+                request.Capabilities is not { Length: > 0 and <= 128 } ||
+                request.MaxTasks is < 1 or > 32 ||
+                string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length > 128 ||
+                string.IsNullOrWhiteSpace(request.Hubs[0]) || request.Hubs[0].Length > 80 ||
+                request.Capabilities.Any(c => c.HubId != request.Hubs[0] ||
+                    string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
+                    c.Version < 1))
+                return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            if (!ownership.Sharded &&
+                (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
+                return Results.Conflict(new { error = "Matching partition topology mismatch" });
+            if (ownership.Sharded &&
+                (request.MatchingPartitionCount != ownership.PartitionCount ||
+                 request.MatchingPartition is null ||
+                 request.MatchingPartition < 0 ||
+                 request.MatchingPartition >= ownership.PartitionCount))
+                return Results.Conflict(new { error = "Matching partition topology mismatch" });
+            try
+            {
+                if (ownership.Sharded)
+                {
+                    var hub = request.Hubs[0];
+                    var partition = request.MatchingPartition!.Value;
+                    var forwarded = context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded");
+                    var current = await ownership.ResolvePartitionAsync(hub, partition, ct);
+                    if (current is null)
+                    {
+                        // Unowned/expired partition: prefer a deterministic owner
+                        // so healthy replicas share the matching workload.
+                        if (!forwarded)
+                        {
+                            try
+                            {
+                                var routed = await ownership.ForwardToAsync(
+                                    ownership.PreferredUrl(partition), request,
+                                    context.Request.Headers.Authorization.ToString(), ct);
+                                if (routed is not null) return Results.Ok(routed);
+                            }
+                            catch (HttpRequestException) { /* preferred peer unavailable */ }
+                            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
+                        }
+                        // Owner failed: elect locally using PostgreSQL's fenced
+                        // UPSERT. Concurrent replicas cannot both win.
+                        current = await ownership.AcquirePartitionAsync(hub, partition, ct);
+                    }
+                    if (!ownership.IsLocal(current))
+                    {
+                        if (forwarded) return Results.StatusCode(503);
+                        var leases = await ownership.ForwardToAsync(current.OwnerUrl,
+                            request, context.Request.Headers.Authorization.ToString(), ct);
+                        return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
+                    }
+                    // Valid local lease was observed in ResolvePartitionAsync.
+                    // HubTaskMatcher still verifies DB ownership immediately
+                    // before claiming, including after a long-poll wait.
+                    if (!DeferInitialMatchingOwnerCheck &&
+                        !await ownership.StillOwnsPartitionAsync(hub, partition, ct))
+                        return Results.StatusCode(503);
+                    return Results.Ok(await matcher.LongPollAsync(request, ct));
+                }
+
+                var owner = await ownership.ResolveAsync(request.Hubs[0], ct);
+                if (!ownership.IsLocal(owner))
+                {
+                    // One forwarding hop only. An owner transition is retried
+                    // by the worker through the load-balanced Gateway.
+                    if (context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded"))
+                        return Results.StatusCode(503);
+                    var leases = await ownership.ForwardAsync(owner, request,
+                        context.Request.Headers.Authorization.ToString(), ct);
+                    return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
+                }
+                if (!DeferInitialMatchingOwnerCheck &&
+                    !await ownership.StillOwnsAsync(request.Hubs[0], ct))
+                    return Results.StatusCode(503);
+                return Results.Ok(await matcher.LongPollAsync(request, ct));
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.StatusCode(503);
+            }
+            catch (HttpRequestException)
+            {
+                return Results.StatusCode(503);
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return Results.StatusCode(503);
+            }
+        });
+
+        routes.MapGet("/matching/owner/{hub}", async (string hub,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled) return Results.NotFound();
+            var lease = await ownership.ReadAsync(hub, ct);
+            return lease is null ? Results.NotFound() :
+                Results.Ok(new { lease.HubId, lease.OwnerId, lease.OwnerUrl,
+                    lease.Epoch, lease.LeaseUntil, ThisNode = ownership.NodeId });
+        });
+
+        routes.MapGet("/matching/partitions/{hub}", async (string hub,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Sharded) return Results.NotFound();
+            if (string.IsNullOrWhiteSpace(hub) || hub.Length > 80)
+                return Results.BadRequest(new { error = "Invalid hub" });
+            var leases = await ownership.ListPartitionsAsync(hub, ct);
+            return Results.Ok(new { hub, partitions = ownership.PartitionCount,
+                thisNode = ownership.NodeId,
+                owners = leases.Select(l => new {
+                    l.Partition, l.OwnerId, l.OwnerUrl, l.Epoch, l.LeaseUntil,
+                    Active = l.LeaseUntil > DateTime.UtcNow
+                }) });
         });
 
         routes.MapPost("/workers/tasks:claim", async (HubClaimRequest request,
@@ -355,23 +507,52 @@ public static class HubGatewayEndpoints
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
                 return Results.BadRequest(new { error = "Invalid activity result" });
-            var remoteActivity=await remote.IsRemoteActivityAsync(id,ct);
-            var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
-            var nativeActivity=await native.IsActivityAsync(id,ct);
-            var done = nativeActivity
-                ? await native.CompleteActivityAsync(id,request.WorkerId,request.Epoch,request.Result,ct)
-                : remoteActivity
-                ? await remote.CompleteActivityAsync(id,request.WorkerId,
-                    request.Epoch,request.Result.GetRawText(),ct)
-                : managed
-                    ? await workflows.CompleteAsync(id, request.WorkerId, request.Epoch,
-                        request.Result.GetRawText(), ct)
-                    : await store.CompleteAsync(id, request.WorkerId, request.Epoch,
-                        request.Result.GetRawText(), ct);
+            using var completionSpan = HubTelemetry.Traces.StartActivity("hub.gateway.activity.complete");
+            var routingStarted = Stopwatch.GetTimestamp();
+            // Keep the legacy classification as an A/B control for the p95 experiment.
+            var fastPath = Environment.GetEnvironmentVariable("WFC_HUB_COMPLETION_FAST_PATH_ENABLED")
+                is not ("0" or "false" or "False");
+            HubCompletionRoute? route;
+            if (fastPath)
+            {
+                route = await store.GetCompletionRouteAsync(id, ct);
+            }
+            else
+            {
+                var remoteActivity = await remote.IsRemoteActivityAsync(id, ct);
+                var managed = !remoteActivity && await store.IsManagedWorkflowStepAsync(id, ct);
+                var nativeActivity = await native.IsActivityAsync(id, ct);
+                var kind = nativeActivity ? HubCompletionKind.Native
+                    : remoteActivity ? HubCompletionKind.Remote
+                    : managed ? HubCompletionKind.Managed : HubCompletionKind.Standalone;
+                route = new HubCompletionRoute(string.Empty, kind);
+            }
+            completionSpan?.AddEvent(new ActivityEvent("completion.route.resolved",
+                tags: new ActivityTagsCollection {
+                    { "elapsed.seconds", Stopwatch.GetElapsedTime(routingStarted).TotalSeconds },
+                    { "route.kind", route?.Kind.ToString() ?? "NotFound" },
+                    { "route.optimized", fastPath } }));
+            if (route is null)
+                return Results.Conflict(new { error = "Task is stale or lease expired" });
+            var done = route.Kind switch
+            {
+                HubCompletionKind.Native => await native.CompleteActivityAsync(
+                    id, request.WorkerId, request.Epoch, request.Result, ct),
+                HubCompletionKind.Remote => await remote.CompleteActivityAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct),
+                HubCompletionKind.Managed => await workflows.CompleteAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct),
+                _ => await store.CompleteAsync(
+                    id, request.WorkerId, request.Epoch, request.Result.GetRawText(), ct)
+            };
             if (done)
             {
-                var task = await store.GetAsync(id, ct);
-                if (task is not null) readiness.Publish(task.HubId);
+                if (fastPath) readiness.Publish(route.HubId);
+                else
+                {
+                    var task = await store.GetAsync(id, ct);
+                    if (task is not null) readiness.Publish(task.HubId);
+                }
             }
             return done ? Results.NoContent() :
                 Results.Conflict(new { error = "Task is stale or lease expired" });

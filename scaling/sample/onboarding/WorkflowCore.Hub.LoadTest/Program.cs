@@ -14,7 +14,7 @@ var runId = Environment.GetEnvironmentVariable("WFC_LOAD_RUN_ID")
 var reportFile = Environment.GetEnvironmentVariable("WFC_LOAD_REPORT")
     ?? "/tmp/workflow-hub-load.json";
 var phase = Environment.GetEnvironmentVariable("WFC_LOAD_PHASE") ?? "submit";
-var definitionVersion = ReadInt("WFC_LOAD_VERSION", 2, 1, 10000);
+var definitionVersion = ReadInt("WFC_LOAD_VERSION", 3, 1, 10000);
 var count = ReadInt("WFC_LOAD_COUNT", 1000, 1, 100000);
 var submitters = ReadInt("WFC_LOAD_SUBMISSION_CONCURRENCY", 200, 1, 2000);
 var timeoutSeconds = ReadInt("WFC_LOAD_TIMEOUT_SECONDS", 300, 15, 1800);

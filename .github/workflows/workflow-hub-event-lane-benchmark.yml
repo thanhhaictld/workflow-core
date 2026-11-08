@@ -1,0 +1,172 @@
+name: Workflow Hub Native Commit Lock A-B Benchmark
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-event-lane-benchmark.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: native-event-lane-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  event-lane-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+      WFC_HUB_BATCH_HISTORY_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Compose and benchmark scripts
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scaling/observability/benchmark/collect_event_lane_metrics.py
+          node --input-type=module --check < scaling/observability/k6/offboarding-unconstrained.js
+          WFC_HUB_NATIVE_EVENT_LANE_MODE=hub docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+      - name: Launch baseline Hub with globally serialized native commits
+        run: |
+          set -euo pipefail
+          WFC_HUB_NATIVE_EVENT_LANE_MODE=hub docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            up -d --build hub prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          test "$(WFC_HUB_NATIVE_EVENT_LANE_MODE=hub docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_NATIVE_EVENT_LANE_MODE)" = "hub"
+          test "$(WFC_HUB_NATIVE_EVENT_LANE_MODE=hub docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_BATCH_HISTORY_ENABLED)" = "true"
+          OFFBOARD_PROCESSOR_WORKERS=4 WFC_HUB_NATIVE_EVENT_LANE_MODE=hub \
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+          mkdir -p scaling/observability/results/event-lane
+          chmod 0777 scaling/observability/results scaling/observability/results/event-lane
+
+      - name: Control — Hub-wide advisory lock (1000 workflows, batched history)
+        run: |
+          set -euo pipefail
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_NATIVE_EVENT_LANE_MODE)" = "hub"
+          # IMPORTANT: --no-deps prevents k6 from silently recreating Hub
+          # with its Compose default lock policy during the control phase.
+          WFC_HUB_NATIVE_EVENT_LANE_MODE=hub docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
+            -e K6_OFFBOARD_RUN_ID=ci-hub-lock-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
+            k6-offboarding | tee /tmp/k6-hub-lock.log
+          cp scaling/observability/results/k6-offboarding-summary.json \
+            scaling/observability/results/event-lane/k6-hub-lock.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_NATIVE_EVENT_LANE_MODE)" = "hub"
+          python3 scaling/observability/benchmark/collect_event_lane_metrics.py \
+            --mode hub --output scaling/observability/results/event-lane/p0-hub.json
+
+      - name: Change ONLY Hub advisory lock mode (processors remain running)
+        run: |
+          set -euo pipefail
+          WFC_HUB_NATIVE_EVENT_LANE_MODE=subscriptions \
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            up -d --no-deps --force-recreate hub
+          for i in {1..45}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_NATIVE_EVENT_LANE_MODE)" = "subscriptions"
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+
+      - name: Treatment — event-free commits bypass shared lock (1000 workflows)
+        run: |
+          set -euo pipefail
+          WFC_HUB_NATIVE_EVENT_LANE_MODE=subscriptions \
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-k6 run --rm --no-deps \
+            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
+            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
+            -e K6_OFFBOARD_RUN_ID=ci-row-lock-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} \
+            k6-offboarding | tee /tmp/k6-row-lock.log
+          cp scaling/observability/results/k6-offboarding-summary.json \
+            scaling/observability/results/event-lane/k6-row-lock.json
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            exec -T hub printenv WFC_HUB_NATIVE_EVENT_LANE_MODE)" = "subscriptions"
+          python3 scaling/observability/benchmark/collect_event_lane_metrics.py \
+            --mode subscriptions --output scaling/observability/results/event-lane/p0-row-lock.json
+
+      - name: Verify 2k durable completions, event spans, and compare p95 p99
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime,json,os,urllib.parse,urllib.request
+          run=os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
+          directory='scaling/observability/results/event-lane'
+          token=next(v.split('=',1)[1].strip() for v in
+              open('scaling/observability/.env.example') if v.startswith('WFC_HUB_AUTH_TOKEN='))
+          def api(path):
+              request=urllib.request.Request('http://127.0.0.1:5100/api/hub/'+path,
+                  headers={'Authorization':'Bearer '+token})
+              with urllib.request.urlopen(request,timeout=40) as response:return json.load(response)
+          def timestamp(value):return datetime.datetime.fromisoformat(value.replace('Z','+00:00'))
+          output={}
+          for key, prefix, metrics in (
+              ('hub','ci-hub-lock-','p0-hub.json'),
+              ('subscriptions','ci-row-lock-','p0-row-lock.json'),
+          ):
+              runid=prefix+run
+              summary=api('runs/'+runid+'/summary')
+              assert summary['total']==summary['completed']==1000 and summary['failed']==0,summary
+              seconds=(timestamp(summary['lastCompletedAt'])-timestamp(summary['firstCreatedAt'])).total_seconds()
+              with open(directory+'/'+metrics) as f: p0=json.load(f)
+              output[key]={
+                  'completed':summary['completed'],
+                  'failed':summary['failed'],
+                  'serverElapsedSeconds':round(seconds,3),
+                  'throughputWorkflowsPerSecond':round(1000/seconds,3),
+                  'workflowP95Ms':round(summary['p95CompletionMs'],3),
+                  'workflowP99Ms':round(summary['p99CompletionMs'],3),
+                  **p0
+              }
+              sample=api('workflows?hub=offboarding&search='+urllib.parse.quote(runid)+'&take=1')
+              assert sample['items'], sample
+              wid=sample['items'][0]['id']
+              history=api('workflows/'+wid+'/history')
+              assert [x['stepIndex'] for x in history if x['eventType']=='StepCompleted']==[0,1,2],history
+              assert [x['stepIndex'] for x in history if x['eventType']=='NativeStepSpan']==[0,1,2],history
+              trace=api('workflows/'+wid+'/trace')
+              assert {s['stepIndex'] for s in trace if any(
+                  a.get('source')=='native-step' for a in s['attempts'])}=={0,1,2},trace
+          assert output['subscriptions']['lockBypassCount']>0, output
+          output['speedup']=round(output['subscriptions']['throughputWorkflowsPerSecond']/
+                                  output['hub']['throughputWorkflowsPerSecond'],3)
+          output['test']='Same runner, 8 processors, 100 k6 VUs, batched history in both phases; Hub lock mode checked'
+          output['caveat']='One sequential A/B pair; repeat reversed order for robust result; workflow latency includes queue waiting'
+          with open(directory+'/comparison.json','w') as f:json.dump(output,f,indent=2)
+          print(json.dumps(output,indent=2))
+          print('PASS: 2000 real native workflows and durable history; same-Hub event-free lock bypass confirmed')
+          PY
+
+      - name: Upload reproducible benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-native-event-lane-ab
+          path: |
+            scaling/observability/results/event-lane/*.json
+            /tmp/k6-hub-lock.log
+            /tmp/k6-row-lock.log
+          if-no-files-found: warn
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true

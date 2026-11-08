@@ -1,0 +1,161 @@
+name: Workflow Hub Distributed Matching HA (2 Gateways)
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/sql/016_hub_matching_ownership.sql'
+      - 'scaling/observability/compose.matching-ha.yaml'
+      - 'scaling/observability/nginx.matching-ha.conf'
+      - '.github/workflows/workflow-hub-matching-ha.yml'
+  workflow_dispatch:
+
+jobs:
+  two-hub-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: "true"
+      WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "true"
+      WFC_HUB_ADAPTIVE_CLAIMS: "true"
+      WFC_HUB_DB_POOL: "12"
+      # Query a surviving Gateway even when the original :5100 owner is down.
+      WFC_HUB_VERIFY_URL: http://127.0.0.1:5110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate two-hub topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" config --quiet
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py
+      - name: Start PostgreSQL, two Hub gateways and load balancer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results
+          chmod 0777 scaling/observability/results
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb prometheus
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" --profile offboarding-load \
+            up -d --build --no-deps --scale processor=8 processor
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+               http://127.0.0.1:5110/api/hub/definitions >/tmp/matching-definitions.json && \
+               python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/matching-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+              {d['definitionId'] for d in x if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/matching-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+              {d['definitionId'] for d in x if d['hubId']=='policy-benchmark'})
+          PY
+          echo 'PASS: two Gateway processes and matching-enabled processor registered'
+      - name: Test normal operation and kill current matching owner mid-load
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/matching-ha
+          chmod 0777 scaling/observability/results/matching-ha
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..30}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/matching/owner/policy-benchmark \
+              >/tmp/matching-owner-before.json; then break; fi
+            sleep 1
+          done
+          test -s /tmp/matching-owner-before.json
+          python3 - <<'PY'
+          import json
+          owner=json.load(open('/tmp/matching-owner-before.json'))
+          assert owner['ownerId'] in ('hub-a','hub-b'),owner
+          print('initial matching owner:',owner)
+          PY
+          owner="$(python3 -c "import json; print(json.load(open('/tmp/matching-owner-before.json'))['ownerId'])")"
+          if [ "$owner" = "hub-a" ]; then stopped=hub; survivor=hub-2; else stopped=hub-2; survivor=hub; fi
+          echo "Stopping elected owner service=$stopped; survivor=$survivor"
+          (
+            K6_POLICY_MODE=partition docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" \
+              --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=partition \
+              -e K6_POLICY_COUNT=150 -e K6_POLICY_VUS=60 \
+              -e K6_POLICY_TIMEOUT_SECONDS=300 \
+              -e K6_POLICY_RUN_ID="matching-ha-failover-$GITHUB_RUN_ID" k6-policy \
+              >scaling/observability/results/matching-ha/k6-failover.log 2>&1
+          ) &
+          k6_pid=$!
+          sleep 4
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" stop "$stopped"
+          set +e
+          wait "$k6_pid"
+          result=$?
+          set -e
+          cat scaling/observability/results/matching-ha/k6-failover.log | tail -100
+          test "$result" -eq 0
+          # After lease expiry, the surviving Hub should own the matching queue.
+          for i in {1..25}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/matching/owner/policy-benchmark \
+              >/tmp/matching-owner-after.json && \
+              python3 -c "import json,sys; x=json.load(open('/tmp/matching-owner-after.json')); sys.exit(0 if x['ownerId']=='$([ "$survivor" = hub ] && echo hub-a || echo hub-b)' else 1)"; then break; fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json,os
+          before=json.load(open('/tmp/matching-owner-before.json'))
+          after=json.load(open('/tmp/matching-owner-after.json'))
+          assert after['ownerId'] != before['ownerId'],(before,after)
+          assert after['epoch'] > before['epoch'],(before,after)
+          print('PASS: matching takeover',before,'=>',after)
+          PY
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode partition --run-id "matching-ha-failover-$GITHUB_RUN_ID" --count 150 \
+            --max-extra-attempts 30 \
+            --output scaling/observability/results/matching-ha/verify-partition.json
+          # Recover the stopped Hub and check that completion and query history
+          # remain visible regardless of the REST replica used.
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" start "$stopped"
+          sleep 10
+          curl -fsS http://127.0.0.1:5110/health/ready
+          K6_POLICY_MODE=keyed docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" \
+            --profile policy-k6 run --rm --no-deps -e K6_POLICY_MODE=keyed \
+            -e K6_POLICY_COUNT=100 -e K6_POLICY_VUS=60 \
+            -e K6_POLICY_TIMEOUT_SECONDS=300 \
+            -e K6_POLICY_RUN_ID="matching-ha-recovered-$GITHUB_RUN_ID" k6-policy \
+            | tee scaling/observability/results/matching-ha/k6-recovered.log
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode keyed --run-id "matching-ha-recovered-$GITHUB_RUN_ID" --count 100 \
+            --output scaling/observability/results/matching-ha/verify-keyed.json
+          cp /tmp/matching-owner-before.json scaling/observability/results/matching-ha/owner-before.json
+          cp /tmp/matching-owner-after.json scaling/observability/results/matching-ha/owner-after.json
+      - name: Upload matching HA results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matching-ha-two-gateways
+          path: scaling/observability/results/matching-ha/**
+          if-no-files-found: warn
+      - name: Print logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" --env-file "$ENVFILE" logs --tail=200 hub hub-2 hub-lb postgres processor || true

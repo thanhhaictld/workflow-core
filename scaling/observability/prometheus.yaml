@@ -8,3 +8,7 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["prometheus:9090"]
+  - job_name: postgres-process
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["postgres-process-exporter:9256"]

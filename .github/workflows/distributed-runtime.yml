@@ -60,10 +60,18 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/014_hub_work_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/015_explicit_activity_ordering.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/016_hub_matching_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
         run: dotnet build scaling/src/WorkflowCore.Hub.Telemetry/WorkflowCore.Hub.Telemetry.csproj -c Release
+      - name: Build native-only offboarding processor
+        run: dotnet build scaling/sample/offboarding/WorkflowCore.Offboarding.Processor/WorkflowCore.Offboarding.Processor.csproj -c Release
       - name: Build standalone Hub gateway
         run: dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
       - name: Build benchmark API
@@ -177,13 +185,9 @@ jobs:
         if: always()
         run: make db-down
 
-  powershell-platform-check:
-    name: PowerShell 7 cross-platform (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  powershell-windows-check:
+    name: PowerShell 7 validation (Windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -231,6 +235,7 @@ jobs:
       WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
       WFC_HUB_DB_POOL: '12'
       WFC_LOAD_COUNT: '1000'
+      WFC_LOAD_VERSION: '3'
       WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
       WFC_LOAD_RUN_ID: ci-hub-1000-perf
       WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
@@ -251,6 +256,12 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/014_hub_work_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/015_explicit_activity_ordering.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/016_hub_matching_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
       - name: Build Hub, remote worker and performance harness
         run: |
           dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release

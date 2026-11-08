@@ -1,0 +1,12 @@
+# CI-only PostgreSQL query-cost diagnostics. Never add this overlay to
+# production: pg_stat_statements tracks and stores normalized SQL statements.
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - track_io_timing=on

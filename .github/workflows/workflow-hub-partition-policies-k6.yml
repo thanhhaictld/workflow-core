@@ -1,0 +1,127 @@
+name: Workflow Hub Explicit Partition/Key Ordering K6
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/**'
+      - '.github/workflows/workflow-hub-partition-policies-k6.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-policy-k6-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  explicit-policy-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCH_ACTIVITY_WORKERS: "8"
+      OFFBOARD_PROCESSOR_WORKERS: "4"
+      COUNT: "1000"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate benchmark syntax and Compose configuration
+        run: |
+          set -euo pipefail
+          node --input-type=module --check < scaling/observability/k6/partition-ordering.js
+          python3 -m py_compile scaling/observability/benchmark/verify_ordering.py scaling/observability/benchmark/compare_processor_scaling.py
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
+      - name: Start Hub, PostgreSQL, telemetry and baseline 8 policy processors
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build hub prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
+               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5100/health/ready
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          test "$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+          mkdir -p scaling/observability/results/policy
+          chmod 0777 scaling/observability/results scaling/observability/results/policy
+          # Policy definitions are published through Hub REST, not DB access
+          # by workers; wait until they are all durably registered.
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/definitions >/tmp/policy-definitions.json &&
+              python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          PY
+            then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          defs=json.load(open('/tmp/policy-definitions.json'))
+          assert {'policy-unordered','policy-partition-fifo','policy-keyed-fifo'}.issubset(
+            {d['definitionId'] for d in defs if d['hubId']=='policy-benchmark'})
+          print('PASS: three execution-policy definitions registered through Hub REST')
+          PY
+
+      - name: Bracket 16 processors with identical 8-processor k6 controls
+        run: |
+          set -euo pipefail
+          echo "Runner CPUs: $(nproc); memory:"
+          free -h
+          echo "Same Hub, PostgreSQL, 60 k6 VUs, 1000 workflows per mode/phase"
+          mkdir -p scaling/observability/results/policy-scaling
+          chmod 0777 scaling/observability/results/policy-scaling
+          for stage in 8a 16 8b; do
+            case "$stage" in
+              8a|8b) processors=8 ;;
+              16) processors=16 ;;
+            esac
+            echo "::group::Processor stage $stage (desired replicas: $processors)"
+            docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors" || { echo "ERROR: got $active replicas, expected $processors"; exit 1; }
+            # Allow newly added processors to register and subscribe; same wait
+            # for all stages ensures startup isn't counted inside the test.
+            sleep 15
+            for mode in unordered partition keyed; do
+              run="ci-scale-${stage}-${mode}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "=== E2E $stage / $mode : $COUNT workflows; $processors processors ==="
+              K6_POLICY_MODE="$mode" docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
+                --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" \
+                -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 \
+                -e K6_POLICY_TIMEOUT_SECONDS=900 \
+                -e K6_POLICY_RUN_ID="$run" \
+                k6-policy | tee "/tmp/k6-policy-${stage}-${mode}.log"
+              cp scaling/observability/results/k6-policy-summary.json \
+                "scaling/observability/results/policy-scaling/k6-${stage}-${mode}.json"
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "scaling/observability/results/policy-scaling/${stage}-${mode}.json"
+              echo "Verified $COUNT completed, no failed workflows; mode=$mode stage=$stage"
+            done
+            echo "::endgroup::"
+          done
+          python3 scaling/observability/benchmark/compare_processor_scaling.py
+      - name: Upload 8 versus 16 scaling reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-8-vs-16-processors-scaling
+          path: |
+            scaling/observability/results/policy-scaling/*.json
+            /tmp/k6-policy-*.log
+          if-no-files-found: warn
+      - name: Print logs on failures
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=200 hub postgres processor || true

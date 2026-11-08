@@ -30,7 +30,8 @@ function Submit([string]$Hub, [string]$Type, [hashtable]$Payload, [string]$Key) 
     $answer = Request 'tasks' 'POST' @{
         hubId = $Hub
         taskType = $Type
-        version = 1
+        # The current sample provisioner registers both activity types at v3.
+        version = 3
         payload = $Payload
         idempotencyKey = "$Suffix-$Key"
     }

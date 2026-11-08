@@ -17,7 +17,24 @@ public sealed class HubRuntimeOptions
     public bool AllowInsecureHttp { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true";
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
+    // Opt-in processor-side cap. Applies independently to workflow and
+    // activity lanes, including long-poll demand; 0 keeps legacy settings.
+    public int WorkerConcurrencyCap { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE"),
+            out var laneCap) ? laneCap : 0;
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+    // Only enable against matching-capable, load-balanced Hub replicas.
+    // Polls wait server-side; failed long-poll requests retry with backoff.
+    public bool LongPollingEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_LONG_POLL_ENABLED") is "true" or "1" or "True";
+    // Every processor and Hub replica must use the same count. The Hub also
+    // enforces an immutable per-namespace count stored in PostgreSQL.
+    public int MatchingPartitions { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PARTITIONS"),
+            out var count) ? count : 1;
+    // Feature flag for controlled baseline/optimized benchmark runs.
+    public bool AdaptiveClaimsEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
     public TimeSpan ErrorRetryInterval { get; set; } = TimeSpan.FromSeconds(60);
     public bool RegisterOnly { get; set; }
     public bool SequentialVersionOneCompatibility { get; set; }
@@ -37,6 +54,9 @@ public sealed class HubActivityOptions<TStep> where TStep : class, IStepBody
     public string? ResourceField { get; set; }
     public int ResourceCapacity { get; set; } = 1;
     public bool StrictFifo { get; set; }
+    // New definitions should opt in explicitly. Legacy preserves older
+    // registrations until they can be migrated without policy drift.
+    public HubActivityOrdering Ordering { get; set; } = HubActivityOrdering.Legacy;
     public HubActivityOptions<TStep> Input<T>(Expression<Func<TStep,T>> property) { Inputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> Output<T>(Expression<Func<TStep,T>> property) { Outputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> SequentialOutput<T>(Expression<Func<TStep,T>> property) { SequentialOutputs.Add(Property(property));return this; }
@@ -107,7 +127,8 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
         var options=new HubActivityOptions<TStep>();configure(options);
         if(string.IsNullOrWhiteSpace(hubId)||hubId.Length>80||string.IsNullOrWhiteSpace(name)||name.Length>80||
            name.StartsWith("__",StringComparison.Ordinal)||version<1||options.Partitions is <1 or >4096||
-           options.Concurrency<1||options.HubConcurrency<1||options.ResourceCapacity<1)
+           options.Concurrency<1||options.HubConcurrency<1||options.ResourceCapacity<1||
+           !Enum.IsDefined(options.Ordering))
             throw new ArgumentException("Invalid typed activity registration");
         if(options.Inputs.Distinct().Count()!=options.Inputs.Count || options.Outputs.Distinct().Count()!=options.Outputs.Count ||
            options.SequentialOutputs.Distinct().Count()!=options.SequentialOutputs.Count)
@@ -116,6 +137,14 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
             throw new ArgumentException("ActivityParameters maps the entire native Activity input to one declared property");
         if(options.ResourceField is not null && !options.Inputs.Any(p=>HubTypedActivity.PropertyName(p)==options.ResourceField))
             throw new ArgumentException("Resource field must be a declared activity input");
+        var keyed = options.Ordering is HubActivityOrdering.KeyedExclusive or
+            HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded;
+        if(keyed && (string.IsNullOrWhiteSpace(options.ResourceName) ||
+                     string.IsNullOrWhiteSpace(options.ResourceField)))
+            throw new ArgumentException("Keyed activity ordering requires ResourceName and ResourceField");
+        if((options.Ordering is HubActivityOrdering.Unordered or HubActivityOrdering.PartitionSerial) &&
+           (options.ResourceName is not null || options.ResourceField is not null))
+            throw new ArgumentException("Resource fields are invalid for unordered/partition policy");
         var contract=JsonSerializer.SerializeToElement(new{
             inputs=options.Inputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
             outputs=options.Outputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
@@ -126,7 +155,7 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
         services.TryAddTransient<TStep>();
         services.AddSingleton(new HubTypedActivity(typeof(TStep),new(hubId,name,version,options.Partitions,
             options.HubConcurrency,options.Concurrency,options.ResourceName,options.ResourceField,
-            options.ResourceCapacity,options.StrictFifo,contract),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
+            options.ResourceCapacity,options.StrictFifo,contract,options.Ordering),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
             options.SequentialOutputs.ToArray()));
         return this;
     }
@@ -138,7 +167,9 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
-           options.PollInterval<TimeSpan.FromMilliseconds(10))throw new ArgumentException("Invalid Hub worker options");
+           options.WorkerConcurrencyCap is < 0 or > 256 ||
+           options.PollInterval<TimeSpan.FromMilliseconds(10) ||
+           options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
             o.EnableWorkflows=false;o.EnableEvents=false;o.EnableIndexes=false;o.EnablePolling=false;

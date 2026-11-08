@@ -4,8 +4,7 @@ import type { WorkflowItem, WorkflowOverview, WorkflowPage } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// The list is a merged, correctly paginated view across independent
-// persistence backends. Source API credentials never leave this route.
+// Hub credentials remain on the server.
 type HubItem = {
   id: string; hubId: string; definitionId: string; version: number;
   runId: string | null; state: string; nextStep: number; stepCount: number;
@@ -24,7 +23,7 @@ const MAX_PAGE = 100;
 const PAGE_CHUNK = 100;
 
 function validHub(input: string) {
-  return input === "all" || input === "legacy" || input === "hub" ||
+  return input === "all" || input === "hub" ||
     /^[a-zA-Z0-9_.:-]{1,80}$/.test(input);
 }
 
@@ -46,7 +45,6 @@ function newOverview(): WorkflowOverview {
 function compareRows(a: WorkflowItem, b: WorkflowItem) {
   const date = Date.parse(b.createdAt) - Date.parse(a.createdAt);
   return (Number.isFinite(date) ? date : 0) ||
-    (a.source ?? "legacy").localeCompare(b.source ?? "legacy") ||
     a.id.localeCompare(b.id);
 }
 
@@ -57,13 +55,6 @@ function hubStatus(status: string): string | null | "skip" {
     case "Ready": case "Running": case "Complete": case "Failed": case "Suspended": case "Terminated": return status;
     default: return "skip";
   }
-}
-
-function legacyStatus(status: string): string | "skip" {
-  if (status === "All" || status === "Runnable" || status === "Complete" ||
-      status === "Suspended" || status === "Terminated") return status;
-  if (status === "Running") return "Runnable";
-  return "skip";
 }
 
 function toItem(item: HubItem): WorkflowItem {
@@ -98,12 +89,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid workflow list filters" }, { status: 400 });
   }
 
-  const includeLegacy = hub === "all" || hub === "legacy";
-  const includeHub = hub !== "legacy";
+  const includeHub = true;
   const hubId = hub === "hub" || hub === "all" ? null : hub;
   const hubBase = process.env.WORKFLOW_HUB_URL?.replace(/\/$/, "");
   const hubToken = process.env.WORKFLOW_HUB_TOKEN;
-  const legacyBase = process.env.WORKFLOW_API_URL?.replace(/\/$/, "") ?? "http://localhost:5000";
   const warnings: string[] = [];
   const rows: WorkflowItem[] = [];
   const overview = newOverview();
@@ -111,46 +100,6 @@ export async function GET(request: NextRequest) {
   let total = 0;
   let succeeded = 0;
   let hubs: string[] = [];
-
-  // The two sources can fail independently: show partial data explicitly,
-  // rather than hiding valid Hub runs when the legacy monitor is down.
-  async function readLegacy() {
-    if (!includeLegacy) return;
-    const selected = legacyStatus(status);
-    try {
-      const stats = await fetchJson<WorkflowOverview>(legacyBase + "/api/monitor/overview");
-      overview.total += stats.total;
-      overview.running += stats.running;
-      overview.completed += stats.completed;
-      overview.suspended += stats.suspended;
-      overview.terminated += stats.terminated;
-      overview.withErrors += stats.withErrors;
-      overview.created24h += stats.created24h;
-      overview.completed24h += stats.completed24h;
-
-      if (selected !== "skip") {
-        const params = new URLSearchParams({
-          page: "1", take: "1", status: selected, search,
-        });
-        const initial = await fetchJson<WorkflowPage>(
-          legacyBase + "/api/monitor/workflows?" + params,
-        );
-        total += initial.total;
-        const pages = Math.ceil(Math.min(wanted, initial.total) / PAGE_CHUNK);
-        for (let p = 1; p <= pages; p++) {
-          params.set("page", String(p));
-          params.set("take", String(PAGE_CHUNK));
-          const result = await fetchJson<WorkflowPage>(
-            legacyBase + "/api/monitor/workflows?" + params,
-          );
-          rows.push(...result.items.map(row => ({ ...row, source: "legacy" as const, hubId: null })));
-        }
-      }
-      succeeded++;
-    } catch {
-      warnings.push("Legacy Workflow Core monitor is unavailable; legacy results are omitted.");
-    }
-  }
 
   async function readHub() {
     if (!hubBase || !hubToken) {
@@ -207,7 +156,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  await Promise.all([readLegacy(), readHub()]);
+  await readHub();
   if (succeeded === 0) {
     return NextResponse.json(
       { error: warnings.join(" ") || "No workflow sources are available" },

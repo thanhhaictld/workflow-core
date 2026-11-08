@@ -97,6 +97,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     protected HubRestClient Client => client;
     private readonly string _owner=Environment.MachineName+":"+Guid.NewGuid().ToString("N");
     private readonly Channel<bool> _hints=Channel.CreateBounded<bool>(new BoundedChannelOptions(1){FullMode=BoundedChannelFullMode.DropWrite});
+    private readonly KeyValuePair<string, object?> _lane =
+        new("lane", workflows is null ? "activity" : "workflow");
     protected abstract Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct);
     protected abstract string ResultPath(HubLeasedTask task);
 
@@ -104,32 +106,124 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     {
         if(capabilities.Length==0)return;
         await startup.Published.WaitAsync(ct);
+        // Each worker lane is bounded before leasing; no task waits locally
+        // after lease acquisition merely to obtain an execution slot.
+        var effectiveConcurrency = options.WorkerConcurrencyCap > 0
+            ? Math.Min(concurrency, options.WorkerConcurrencyCap) : concurrency;
         var running=new List<Task>();
-        var listener=Listen(ct);
+        // A matching poll requires one Hub namespace. Multi-hub workers retain
+        // the proven PR #18 SSE/adaptive path until per-Hub fan-out is added.
+        var matchingPoll=options.LongPollingEnabled &&
+            capabilities.Select(c => c.HubId).Distinct().Count() == 1;
+        var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        // Rotating one outstanding long poll per worker lane avoids racing
+        // multiple matching partitions into leasing more tasks than slots.
+        // A 4-second server hold bounds discovery when a shard has no pollers.
+        var matchingPartition = Random.Shared.Next(options.MatchingPartitions);
+        var emptyClaims=0;
+        long nextClaimAt=0;
+        var hintPreempted=false;
         try
         {
             while(!ct.IsCancellationRequested)
             {
                 running.RemoveAll(t=>t.IsCompleted);
-                if(running.Count<concurrency)
+                if(running.Count<effectiveConcurrency &&
+                    (matchingPoll || !options.AdaptiveClaimsEnabled ||
+                     Stopwatch.GetTimestamp()>=nextClaimAt))
                 {
                     try
                     {
-                        var leases=await client.PostAsync<HubLeasedTask[]>("api/hub/workers/tasks:claim",
-                            new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
-                                Math.Min(16,concurrency-running.Count),workflows),ct);
+                        var endpoint = matchingPoll
+                            ? "api/hub/workers/tasks:poll"
+                            : "api/hub/workers/tasks:claim";
+                        var claimHttpStarted = Stopwatch.GetTimestamp();
+                        var claimHttpOutcome = "error";
+                        HubLeasedTask[] leases;
+                        try
+                        {
+                            leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
+                                new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
+                                    Math.Min(16,effectiveConcurrency-running.Count),workflows,
+                                    matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
+                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                            claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
+                        }
+                        finally
+                        {
+                            HubTelemetry.WorkerClaimHttpDuration.Record(
+                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane,
+                                new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
+                        }
+                        if (matchingPoll && options.MatchingPartitions > 1)
+                            matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
+                        HubTelemetry.WorkerClaimRequests.Add(1,_lane,
+                            new KeyValuePair<string,object?>("outcome",leases.Length>0?"claimed":"empty"));
                         foreach(var lease in leases)running.Add(Run(lease,ct));
-                        if(leases.Length>0)continue;
+                        if(leases.Length>0)
+                        {
+                            emptyClaims=0;
+                            nextClaimAt=0;
+                            hintPreempted=false;
+                            continue;
+                        }
+                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
+                        {
+                            emptyClaims=Math.Min(emptyClaims+1,8);
+                            // Back off only after empty claims; successful work is claimed immediately.
+                            // Jitter keeps different hosts from waking together on the periodic sweep.
+                            var baseMilliseconds=Math.Max(1000,options.PollInterval.TotalMilliseconds);
+                            var milliseconds=Math.Min(8000,baseMilliseconds*(1<<Math.Min(emptyClaims-1,3)));
+                            var backoff=TimeSpan.FromMilliseconds(milliseconds*(0.8+Random.Shared.NextDouble()*0.4));
+                            nextClaimAt=Stopwatch.GetTimestamp()+(long)(backoff.TotalSeconds*Stopwatch.Frequency);
+                            hintPreempted=false;
+                            HubTelemetry.WorkerEmptyClaimBackoff.Record(backoff.TotalSeconds,_lane);
+                        }
                     }
                     catch(OperationCanceledException)when(ct.IsCancellationRequested){break;}
-                    catch(Exception ex){logger.LogWarning(ex,"Hub claim failed; retrying");}
+                    catch(Exception ex)
+                    {
+                        HubTelemetry.WorkerClaimRequests.Add(1,_lane,
+                            new KeyValuePair<string,object?>("outcome","error"));
+                        logger.LogWarning(ex,"Hub claim failed; retrying");
+                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
+                            nextClaimAt=Stopwatch.GetTimestamp()+
+                                (long)(Math.Max(1,options.PollInterval.TotalSeconds)*Stopwatch.Frequency);
+                        if(matchingPoll)
+                        {
+                            if (options.MatchingPartitions > 1)
+                                matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
+                            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                        }
+                    }
                 }
+                if (matchingPoll && running.Count < concurrency)
+                    continue; // next server-held poll; no local jitter/backoff
                 using var wait=CancellationTokenSource.CreateLinkedTokenSource(ct);
-                var poll=Task.Delay(options.PollInterval,wait.Token);
+                var pollDelay=options.PollInterval;
+                if(options.AdaptiveClaimsEnabled && running.Count<effectiveConcurrency)
+                {
+                    var ticksRemaining=nextClaimAt-Stopwatch.GetTimestamp();
+                    if(ticksRemaining>0)
+                        pollDelay=TimeSpan.FromSeconds((double)ticksRemaining/Stopwatch.Frequency);
+                }
+                var poll=Task.Delay(pollDelay,wait.Token);
                 var hint=_hints.Reader.WaitToReadAsync(wait.Token).AsTask();
                 await Task.WhenAny(running.Append(poll).Append(hint));
                 await wait.CancelAsync();
-                while(_hints.Reader.TryRead(out _)) { }
+                var hinted=false;
+                while(_hints.Reader.TryRead(out _)) hinted=true;
+                if(hinted && options.AdaptiveClaimsEnabled && emptyClaims>0 &&
+                    running.Count<effectiveConcurrency && !hintPreempted)
+                {
+                    // A fresh readiness hint may preempt one long empty-queue backoff,
+                    // but never triggers an immediate, unbounded claim stampede.
+                    var minHintMilliseconds=Math.Max(250,Math.Min(500,options.PollInterval.TotalMilliseconds/2));
+                    var due=Stopwatch.GetTimestamp()+
+                        (long)(minHintMilliseconds*Stopwatch.Frequency/1000);
+                    nextClaimAt=Math.Min(nextClaimAt,due);
+                    hintPreempted=true;
+                }
             }
         }
         finally
@@ -166,6 +260,8 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         using var span=HubTelemetry.Traces.StartActivity(isActivity?"hub.worker.activity.execute":"hub.worker.workflow.execute");
         span?.SetTag("hub",task.HubId);span?.SetTag("activity.type",task.TaskType);
         span?.SetTag("workflow.id",task.WorkflowId?.ToString());
+        span?.SetTag("task.id",task.Id.ToString());
+        span?.SetTag("task.epoch",task.Epoch);
         var started=Stopwatch.GetTimestamp();var outcome="failure";
         if(isActivity)HubTelemetry.WorkerInflight.Add(1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType));
         using var execution=CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -174,13 +270,36 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var heartbeat=Heartbeat(task,execution,heartbeatStop.Token);
         try
         {
-            var result=await Execute(task,_owner,execution.Token);
+            object result;
+            using (var bodySpan = HubTelemetry.Traces.StartActivity("hub.worker.execute.body"))
+            {
+                bodySpan?.SetTag("task.id", task.Id.ToString());
+                bodySpan?.SetTag("workflow.id", task.WorkflowId?.ToString());
+                var bodyStarted = Stopwatch.GetTimestamp();
+                try { result = await Execute(task,_owner,execution.Token); }
+                finally
+                {
+                    var bodySeconds = Stopwatch.GetElapsedTime(bodyStarted).TotalSeconds;
+                    bodySpan?.SetTag("body.duration_seconds", bodySeconds);
+                    HubTelemetry.WorkerBodyDuration.Record(bodySeconds,
+                        HubTelemetry.ActivityTag(task.TaskType));
+                }
+            }
             // Transport failures retry the frozen result, never the body or decisions.
             for(var attempt=0;;attempt=Math.Min(attempt+1,5))
             {
                 try
                 {
+                    using var completionSpan=HubTelemetry.Traces.StartActivity("hub.worker.completion.http");
+                    completionSpan?.SetTag("task.id",task.Id.ToString());
+                    completionSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
+                    var completionStarted=Stopwatch.GetTimestamp();
                     using var response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token);
+                    var completionSeconds=Stopwatch.GetElapsedTime(completionStarted).TotalSeconds;
+                    completionSpan?.SetTag("http.response.status_code",(int)response.StatusCode);
+                    completionSpan?.SetTag("completion.duration_seconds",completionSeconds);
+                    HubTelemetry.WorkerCompletionDuration.Record(completionSeconds,
+                        HubTelemetry.ActivityTag(task.TaskType));
                     if(response.StatusCode==HttpStatusCode.Conflict){outcome="fenced";return;}
                     if((int)response.StatusCode>=500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
                         throw new HttpRequestException("Hub completion temporarily unavailable: "+response.StatusCode);

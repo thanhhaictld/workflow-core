@@ -1,5 +1,10 @@
 # PostgreSQL persistence and invariants
 
+> Scope: **direct PostgreSQL runtime** (`WorkflowCore.Scaling.PostgreSQL`).
+> For the Hub native runtime, task transport and matching, start with the
+> [current runtime guide](current-runtime.md). Historical branch/baseline notes
+> below refer to this document's original review.
+
 ## Database layout
 
 Two schemas are used by the default implementation:

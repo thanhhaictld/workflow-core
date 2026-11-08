@@ -1,5 +1,9 @@
 # Embedded scheduler and remote Processor/Provisioner implementation
 
+For the consolidated architecture, task-delivery protocol, Hub scaling modes
+and current configuration baseline, start with [current runtime](current-runtime.md).
+This runbook supplies detailed endpoints, setup and verification context.
+
 Status: **experimental native fluent runtime and sequential compatibility path**.
 Branch: `feat/hub-remote-processor-scheduler`; based on `refactor/scaling-project-layout`.
 See [final architecture plan](hub-embedded-scheduler-final-plan.md).
@@ -14,6 +18,10 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 - `scaling/sample/onboarding/WorkflowCore.Processor.Host` was historical v1-only tooling; the project has been removed. New deployments use the combined native workflow/activity lanes in `WorkflowCore.Provisioner.Host`. The reusable sequential runtime remains in `WorkflowCore.RemoteExecution` for v1 compatibility.
 - Removing that sample host does not remove existing v1/v2 data. Unfinished runs require application code that registers their versions; the native Provisioner advertises v3 definitions and does not claim v1/v2 capability. Build fingerprints do not gate registration.
 - `scaling/sql/010_hub_remote_scheduler.sql` is forward-only: it does not discard prior Hub executions or legacy workflow history.
+- Apply `scaling/sql/020_hub_reconciliation_indexes.sql` after 019 to index active native workflows and dead workflow tasks for periodic reconciliation. The Compose and development migration paths apply it automatically; index creation on an existing large database can briefly block writes.
+- Apply `scaling/sql/021_hub_active_task_indexes.sql` after 020 for workflow retirement; index creation can briefly block writes.
+- Apply `scaling/sql/022_hub_claim_index_selectivity.sql` after 021 and before deploying the corresponding Hub query. It narrows the ordered claim index so unrelated point updates do not scan the active queue when statistics are stale.
+- Apply `scaling/sql/023_hub_claim_hub_sequence.sql` after 022 to support hub-selective ordered claims. Creating the index on an existing large database can block writes; plan deployment accordingly.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
 **Contract note:** native runs use execution-pointer snapshots and durable inboxes. Tested scenarios include mappings, branches, loops, parallel joins, delays, schedules, recurrence, events, activities, retries, cancellation, and compensation. Upstream's unimplemented `SubWorkflowStepBody` is rejected. See the [native runtime guide](hub-native-fluent-runtime.md) for contracts and limits. Existing sequential and inline runs retain their execution modes.

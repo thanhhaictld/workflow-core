@@ -1,5 +1,10 @@
 # Architecture decision and implementation plan — Hub-owned embedded scheduler
 
+> Historical proposal retained for design context. Sections below include outdated
+> starting-point statements, project paths and proposed contracts. The
+> [current runtime guide](current-runtime.md) describes implemented transport,
+> matching partitions, current host layout and migration requirements.
+
 Status: **native fluent runtime implemented with experimental verification coverage**. See the [implementation runbook](hub-remote-scheduler-implementation.md) and [native runtime guide](hub-native-fluent-runtime.md). The sections below retain the original architecture proposal; use those guides and source/tests for current behavior. Production hardening remains outstanding.
 The original proposal below included a standalone sequential `WorkflowCore.Processor.Host`; that sample host has since been removed. New deployments use native workflow and activity lanes in the combined `WorkflowCore.Provisioner.Host`. The sequential runtime library remains for existing v1 compatibility.
 Base branch: `refactor/scaling-project-layout`

@@ -105,3 +105,48 @@ worker in-flight counts. The Next.js API queries Prometheus server-side;
 query names match the existing \`workflow-hub-runtime.json\` Grafana
 dashboard. Metrics are global, even if a business Hub filter is active.
 Missing or unavailable series are returned as null and rendered as N/A.
+
+The observability Compose stack collects PostgreSQL database and table metrics
+every 15 seconds with the OpenTelemetry PostgreSQL receiver. The local collector
+uses the development PostgreSQL credentials and connects without TLS on the
+private Compose network; deployments should use a dedicated monitoring role and
+appropriate transport security. PostgreSQL process CPU is sampled separately
+by a process exporter sharing the database container's PID namespace. It is a
+one-minute rate where 100% represents one core, and may miss processes that
+start and exit between scrapes. Recreate the exporter when the PostgreSQL
+container is recreated so it joins the new PID namespace. It is not the
+exporter's own CPU or a Docker container CPU measurement.
+
+The Hub & scheduler view shows CPU, database size, estimated dead task rows,
+and commit and rollback rates. Grafana's **Workflow Hub • PostgreSQL** dashboard
+adds trends for these metrics, connections, and table block accesses. Values are
+global to the configured database and are not filtered by business Hub. Missing
+series, including insufficient samples for rates, remain N/A. Table row counts
+are PostgreSQL estimates; dead rows are not necessarily immediately reclaimable.
+
+The collector also reads `pg_stat_user_tables` every 15 seconds for the
+`wfc_scale` schema. The Hub & scheduler view shows one-minute rates for
+sequential scans, rows read by those scans, index scans, and live table rows
+fetched by index scans for `hub_task` and `hub_workflow`; Grafana shows the
+same rates by table. Index rows fetched exclude index entries examined and
+index-only scan results. Counters may reset when PostgreSQL statistics are
+reset; rates need at least two samples and are unavailable while collection
+is down. The collector's SQL query receiver is experimental. The query reads
+statistics views and does not scan workflow or task tables.
+
+
+The PostgreSQL Grafana dashboard also shows the ten statements with the highest
+cumulative `pg_stat_statements.total_exec_time` in the configured database and
+the statistics reset time. This ranking ignores the dashboard time range;
+execution time includes waits and sums concurrent calls, and is not CPU time.
+Individual entries can be reset or evicted, and text visibility depends on
+PostgreSQL permissions. The local Compose stack preloads and creates the
+extension during startup; for other deployments, install and preload it and
+configure the PostgreSQL datasource. Panel errors expose missing extensions,
+permissions, or datasource failures rather than reporting an empty ranking.
+
+The local Grafana server uses the existing database credentials for its
+server-side datasource. These development credentials have broad database
+access; Grafana users who can query the datasource can execute SQL and view
+statement text, which may contain sensitive information. Restrict access and
+use an appropriately limited database role outside this local stack.

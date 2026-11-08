@@ -39,9 +39,13 @@ COMPOSE ?= docker compose
 OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
+OFFBOARD_PROCESSORS ?= 8
 OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
+K6_OFFBOARD_VUS ?= 200
+K6_OFFBOARD_COUNT ?= 1000
 
-.PHONY: obs-setup obs-up obs-scale obs-stress-test obs-down obs-clean obs-ps
+
+.PHONY: obs-setup obs-up obs-scale obs-stress-test obs-down obs-clean obs-ps obs-offboarding-up obs-offboarding-test obs-offboarding-ps
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
 obs-up:
@@ -52,6 +56,32 @@ obs-scale:
 
 obs-stress-test:
 	$(OBS_COMPOSE) --profile load run --rm k6
+
+# Run exactly eight native-only offboarding processor containers; disable the
+# normal onboarding Provisioner replicas to make the test easy to interpret.
+obs-offboarding-up:
+	$(OBS_COMPOSE) --profile offboarding-load up -d --build --scale processor=$(OFFBOARD_PROCESSORS) --scale provisioner=0
+
+# Run exactly eight native-only offboarding processor containers; disable the
+# normal onboarding Provisioner replicas to make the test easy to interpret.
+obs-offboarding-stats:
+	$(OBS_COMPOSE) --profile offboarding-load stats
+
+
+obs-offboarding-test-light:
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=10 -e K6_OFFBOARD_COUNT=100 k6-offboarding
+
+obs-offboarding-test:
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+obs-offboarding-test-4k:
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=200 -e K6_OFFBOARD_COUNT=4000 k6-offboarding
+
+obs-offboarding-test-100b:
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) k6-offboarding
+
+obs-offboarding-ps:
+	$(OBS_COMPOSE) --profile offboarding-load ps
 
 obs-down:
 	$(OBS_COMPOSE) down

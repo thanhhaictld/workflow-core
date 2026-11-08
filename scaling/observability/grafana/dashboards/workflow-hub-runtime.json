@@ -226,8 +226,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "bytes",
-        "y": 0,
+        "x": 0,
+        "y": 5,
         "w": 12,
         "h": 8
       },
@@ -277,8 +277,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "bytes",
-        "y": 12,
+        "x": 12,
+        "y": 5,
         "w": 12,
         "h": 8
       },
@@ -328,8 +328,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 0,
+        "x": 0,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -386,8 +386,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 12,
+        "x": 12,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -676,8 +676,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 0,
+        "x": 0,
+        "y": 37,
         "w": 12,
         "h": 8
       },
@@ -727,8 +727,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 37,
         "w": 12,
         "h": 8
       },
@@ -778,8 +778,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 0,
+        "x": 0,
+        "y": 45,
         "w": 12,
         "h": 8
       },
@@ -829,8 +829,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 45,
         "w": 12,
         "h": 8
       },
@@ -880,8 +880,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ms",
-        "y": 0,
+        "x": 0,
+        "y": 53,
         "w": 12,
         "h": 8
       },
@@ -938,8 +938,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "s",
-        "y": 12,
+        "x": 12,
+        "y": 53,
         "w": 12,
         "h": 8
       },
@@ -1054,8 +1054,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": "ops",
-        "y": 12,
+        "x": 12,
+        "y": 61,
         "w": 12,
         "h": 8
       },
@@ -1213,6 +1213,343 @@
           "range": true
         }
       ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "P0 Native event lane advisory lock p95/p99",
+      "description": "P0 diagnosis: mode isolates old and batched history writes. Percentiles come from histogram buckets, not k6 request latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 77,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, history_mode, operation, event_lane_mode) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{history_mode}} {{operation}} {{event_lane_mode}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, history_mode, operation, event_lane_mode) (rate(workflow_hub_native_event_lane_lock_wait_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{history_mode}} {{operation}} {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "P0 Native commit duration p95/p99",
+      "description": "P0 diagnosis: mode isolates old and batched history writes. Percentiles come from histogram buckets, not k6 request latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 77,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, history_mode) (rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{history_mode}} {{operation}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, history_mode) (rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{history_mode}} {{operation}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "P0 Native history write p95/p99",
+      "description": "P0 diagnosis: mode isolates old and batched history writes. Percentiles come from histogram buckets, not k6 request latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 85,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, history_mode) (rate(workflow_hub_native_history_write_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{history_mode}} {{operation}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, history_mode) (rate(workflow_hub_native_history_write_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{history_mode}} {{operation}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "P0 Claim duration p95/p99",
+      "description": "P0 diagnosis: mode isolates old and batched history writes. Percentiles come from histogram buckets, not k6 request latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 85,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{history_mode}} {{outcome}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{history_mode}} {{outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "P0 Claim candidate scan amplification",
+      "description": "Number of candidate rows scanned for each claim request. A high count with empty claims indicates queue-head contention.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 93,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(workflow_hub_claim_candidates_scanned_sum[2m])) / clamp_min(sum(rate(workflow_hub_claim_tasks_returned_sum[2m])), 1e-6)",
+          "legendFormat": "scanned candidates / claimed task",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Native workflow row lock p95/p99",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 101,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{event_lane_mode}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Native commit p95/p99 by lock mode",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 101,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by(le,event_lane_mode)(rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95 {{event_lane_mode}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99,sum by(le,event_lane_mode)(rate(workflow_hub_native_commit_duration_seconds_bucket[2m])))",
+          "legendFormat": "p99 {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Native commit Hub event-lane bypass per second",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 109,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(event_lane_mode)(rate(workflow_hub_native_event_lane_bypass_total[2m]))",
+          "legendFormat": "bypassed {{event_lane_mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     }
   ],
   "description": "Process memory, workflow throughput, concurrency, PostgreSQL pressure, HTTP latency and k6 load-test metrics."
