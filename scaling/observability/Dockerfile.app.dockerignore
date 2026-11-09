@@ -23,3 +23,5 @@
 src/samples/
 src/extensions/
 src/WorkflowCore.Testing/
+scaling/docs/
+scaling/observability/results/

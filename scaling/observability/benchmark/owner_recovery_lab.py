@@ -1,4 +1,4 @@
-"""Isolated ownership lab. Never operates on containers outside its named prefix.
+"""Ownership lab for identified manual resources or a validated Compose project.
 
 Run from repository root; Python stdlib and Docker only. Resources and volumes
 are retained. Each trace has DB UTC plus monotonic elapsed seconds. Credentials
@@ -24,6 +24,10 @@ EVIDENCE = ROOT / 'scaling/docs/cadence-inspired-evidence'
 PREFIX = 'cadence-owner-20261109'
 TOKEN = os.getenv('OWNER_RECOVERY_TOKEN') or 'owner-lab-development-only'
 COMPOSE_PROJECT = None
+OBSERVABILITY = False
+COMPOSE_BASE = ROOT / 'scaling/observability/compose.yaml'
+PG_USER = 'workflow'
+PG_DATABASE = 'workflow'
 COMPOSE_CONTAINERS = {}
 PORTS = {'hub': 25200, 'hub-2': 25201, 'lb': 25210, 'pg': 25440, 'collector': 25289}
 
@@ -43,6 +47,9 @@ def name(service):
     if COMPOSE_PROJECT:
         if service not in COMPOSE_CONTAINERS:
             compose_service = 'processor' if service.startswith('worker-') else service
+            if OBSERVABILITY:
+                compose_service = {'pg': 'postgres', 'lb': 'hub-lb',
+                                   'collector': 'otel-collector'}.get(compose_service, compose_service)
             filters = ['--filter', 'label=com.docker.compose.project=' + COMPOSE_PROJECT,
                        '--filter', 'label=com.docker.compose.service=' + compose_service]
             if service.startswith('worker-'):
@@ -50,17 +57,22 @@ def name(service):
             ids = docker('ps', '-aq', *filters).splitlines()
             if len(ids) != 1:
                 raise RuntimeError('Expected exactly one suite container for ' + service)
-            label = docker('inspect', '--format', '{{index .Config.Labels "cadence.owner-suite"}}', ids[0])
-            if label != COMPOSE_PROJECT:
-                raise RuntimeError('Container is outside the ownership suite: ' + service)
+            if OBSERVABILITY:
+                files = docker('inspect', '--format', '{{index .Config.Labels "com.docker.compose.project.config_files"}}', ids[0])
+                if Path(files.split(',')[0]).resolve() != COMPOSE_BASE:
+                    raise RuntimeError('Container belongs to another Compose base: ' + service)
+            else:
+                label = docker('inspect', '--format', '{{index .Config.Labels "cadence.owner-suite"}}', ids[0])
+                if label != COMPOSE_PROJECT:
+                    raise RuntimeError('Container is outside the ownership suite: ' + service)
             COMPOSE_CONTAINERS[service] = ids[0]
         return COMPOSE_CONTAINERS[service]
     return PREFIX + '-' + service
 
 
 def sql(query):
-    return docker('exec', '-i', name('pg'), 'psql', '-X', '-U', 'workflow',
-                  '-d', 'workflow', '-At', '-v', 'ON_ERROR_STOP=1', input=query)
+    return docker('exec', '-i', name('pg'), 'psql', '-X', '-U', PG_USER,
+                  '-d', PG_DATABASE, '-At', '-v', 'ON_ERROR_STOP=1', input=query)
 
 
 def http(port, path, body=None, timeout=3):
@@ -401,12 +413,20 @@ def snapshot():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['setup', 'experiment', 'snapshot', 'identity', 'upgrade', 'warmup', 'telemetry', 'benchmark'])
+    parser.add_argument('action', choices=['setup', 'experiment', 'snapshot', 'identity', 'upgrade', 'warmup', 'telemetry', 'benchmark', 'export'])
     parser.add_argument('--tag', default='baseline')
     parser.add_argument('--project', default=PREFIX)
     parser.add_argument('--compose-project', help='Use labeled Compose containers for measurement/fault actions only')
+    parser.add_argument('--observability', action='store_true', help='Use existing observability service names and validate base-file provenance')
+    parser.add_argument('--compose-base-file', type=Path, default=COMPOSE_BASE)
+    parser.add_argument('--db-user', default=PG_USER)
+    parser.add_argument('--database', default=PG_DATABASE)
     parser.add_argument('--evidence-dir', type=Path, default=EVIDENCE)
     parser.add_argument('--port-base', type=int, default=25200)
+    parser.add_argument('--hub-port', type=int)
+    parser.add_argument('--hub2-port', type=int)
+    parser.add_argument('--lb-port', type=int)
+    parser.add_argument('--metrics-port', type=int)
     parser.add_argument('--label', default='baseline-idle-a-1')
     parser.add_argument('--victim', choices=['hub', 'hub-2'], default='hub')
     parser.add_argument('--busy', action='store_true')
@@ -422,13 +442,24 @@ if __name__ == '__main__':
     PREFIX = args.project
     EVIDENCE = args.evidence_dir.resolve()
     if args.compose_project:
-        if args.compose_project != PREFIX or args.action not in ['experiment', 'benchmark', 'warmup']:
-            raise ValueError('Compose project must match --project and only supports experiment/benchmark/warmup')
+        if args.compose_project != PREFIX or args.action not in ['experiment', 'benchmark', 'warmup', 'export']:
+            raise ValueError('Compose project must match --project and only supports experiment/benchmark/warmup/export')
         COMPOSE_PROJECT = args.compose_project
+    OBSERVABILITY = args.observability
+    if OBSERVABILITY and not COMPOSE_PROJECT:
+        raise ValueError('--observability requires --compose-project')
+    COMPOSE_BASE = args.compose_base_file.resolve()
+    PG_USER, PG_DATABASE = args.db_user, args.database
     if not 1024 <= args.port_base <= 65200:
         raise ValueError('Port base must leave room for all loopback ports')
     PORTS = {key: args.port_base + offset for key, offset in
         {'hub': 0, 'hub-2': 1, 'lb': 10, 'pg': 240, 'collector': 89}.items()}
+    for service, port in [('hub', args.hub_port), ('hub-2', args.hub2_port),
+                          ('lb', args.lb_port), ('collector', args.metrics_port)]:
+        if port is not None:
+            if not 1024 <= port <= 65535:
+                raise ValueError('Host port must be 1024..65535')
+            PORTS[service] = port
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     if COMPOSE_PROJECT:
         containers = [name(s) for s in ['pg', 'hub', 'hub-2', 'lb', 'collector'] +
@@ -441,6 +472,13 @@ if __name__ == '__main__':
     elif args.action == 'identity': identity(args.tag)
     elif args.action == 'warmup': print(workload('warmup-' + str(int(time.time())), 40))
     elif args.action == 'benchmark': benchmark(args.label, args.count, args.mode)
+    elif args.action == 'export':
+        out = EVIDENCE / args.label
+        out.mkdir(exist_ok=True)
+        if (out / 'hub_workflow.json').exists():
+            raise FileExistsError('Durable cohort export already exists')
+        export_run(out, args.label)
+        (out / 'cohort.json').write_text(json.dumps({'count': args.count}), encoding='utf-8')
     elif args.action == 'upgrade':
         # Verify build completion before stopping/replacing any owned process.
         docker('image', 'inspect', 'cadence-owner-hub:' + args.tag, 'cadence-owner-worker:' + args.tag)

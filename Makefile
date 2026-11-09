@@ -184,17 +184,21 @@ obs-clean:
 obs-ps:
 	$(OBS_COMPOSE) --profile * ps -a
 
-# Standalone two-Hub/four-shard ownership recovery suite. Its worktree-derived
-# project, ports and retained PostgreSQL volumes are independent of OBS_COMPOSE.
+# Recovery suite uses the existing observability base, HA and shard overlays,
+# Grafana provisioning and k6-policy workload. No second runtime stack.
 OWNER_PROJECT ?=
-OWNER_PORT_BASE ?= 26200
+OWNER_PORT_BASE ?= 0
 OWNER_RESULTS ?= artifacts/owner-recovery
 OWNER_PYTHON ?= python
 OWNER_TEST_FILTER ?=
 OWNER_FAULT_VICTIM ?= both
 OWNER_FAULT_MODE ?= both
 OWNER_FAULT_REPEAT ?= 1
-OWNER_TARGETS := help config build up ps logs down db-test smoke-test test fault-test
+K6_POLICY_MODE ?= unordered
+K6_POLICY_COUNT ?= 300
+K6_POLICY_VUS ?= 60
+K6_POLICY_TIMEOUT_SECONDS ?= 600
+OWNER_TARGETS := help setup config build up ps logs down db-test smoke-test stress-test test fault-test
 .PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))
 $(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
-	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT)
+	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)

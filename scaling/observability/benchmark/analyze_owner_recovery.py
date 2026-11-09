@@ -188,6 +188,7 @@ def recovery(directory):
 
 recovered = []
 benchmarks = []
+cohorts = []
 for directory in sorted(root.iterdir()):
     if not directory.is_dir():
         continue
@@ -237,9 +238,20 @@ for directory in sorted(root.iterdir()):
         result['samplingErrors'] = sum('error' in sample for sample in samples)
         assert result['audit']['completed'] == result['count']
         benchmarks.append(result)
-(root / 'analysis.json').write_text(json.dumps({'faults': recovered, 'benchmarks': benchmarks}, indent=2))
+    elif (directory / 'cohort.json').exists():
+        expected = json.loads((directory / 'cohort.json').read_text())['count']
+        result = audit(directory)
+        assert result['submitted'] == result['completed'] == expected, directory.name + ': incomplete cohort'
+        assert result['failed'] == 0
+        cohorts.append({'label': directory.name, 'audit': result})
+document = {'faults': recovered, 'benchmarks': benchmarks}
+if cohorts:
+    document['cohorts'] = cohorts
+(root / 'analysis.json').write_text(json.dumps(document, indent=2))
 for r in recovered:
     print(r['label'], 'valid=' + str(r['valid']), r.get('completed'), '/', r.get('submitted'),
           'takeover=', [s['newOwnerSampleAfterFaultSeconds'] for s in r.get('shards', [])])
 for b in benchmarks:
     print(b['label'], round(b['workflowsPerSecond'], 2), 'wf/s', b['audit'])
+for c in cohorts:
+    print(c['label'], 'durable k6 cohort:', c['audit'])

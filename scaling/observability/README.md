@@ -3,9 +3,10 @@
 For current runtime boundaries, transport selection and Hub replica scaling,
 start with the [current runtime guide](../docs/current-runtime.md).
 
-For the isolated two-Hub/four-shard recovery lab with full PostgreSQL tests,
-workflow smoke tests and owner-failure tests, see the
-[ownership recovery Compose suite](owner-recovery.md) (`make obs-owner-recovery-test`).
+For recovery testing on this same Grafana/Prometheus/Tempo/Loki stack, see the
+[ownership recovery suite](owner-recovery.md). It layers HA/shard/recovery
+settings on `compose.yaml`, reuses `k6-policy` for smoke/stress workloads, and
+adds isolated PostgreSQL tests (`make obs-owner-recovery-test`).
 
 This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
 The generic Hub includes an embedded durable timer scheduler. The combined Provisioner runs native `IWorkflow<T>` workflows and typed activities
