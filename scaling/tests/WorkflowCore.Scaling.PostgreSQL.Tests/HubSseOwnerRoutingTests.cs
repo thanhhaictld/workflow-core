@@ -97,6 +97,20 @@ public sealed class HubSseOwnerRoutingTests
         var old = await leases.AcquireOrReadAsync(hub, shard, 4, "failed-peer", peer.Urls.Single(),
             TimeSpan.FromSeconds(8), default);
         Assert.True(await leases.ReleaseAsync(hub, shard, old.OwnerId, old.Epoch, default));
+        // Expire decisively using the DB clock, as the existing ownership tests
+        // do. Host/VM clock skew must not make this a near-expiry routing race.
+        await using (var db = new NpgsqlConnection(Database))
+        {
+            await db.OpenAsync();
+            await using var expire = new NpgsqlCommand("""
+                UPDATE wfc_scale.hub_matching_partition_owner
+                SET lease_until=clock_timestamp()-interval '5 seconds'
+                WHERE hub_id=@hub AND matching_partition=@shard
+                """, db);
+            expire.Parameters.AddWithValue("hub", hub);
+            expire.Parameters.AddWithValue("shard", shard);
+            Assert.Equal(1, await expire.ExecuteNonQueryAsync());
+        }
         using var client = new HttpClient();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         var (response, epoch) = await Open(client, app.Urls.Single(), Subscribe(hub, shard), timeout.Token);
@@ -219,5 +233,59 @@ public sealed class HubSseOwnerRoutingTests
         var attempt = Assert.Single(Assert.Single(attempts).Attempts);
         Assert.Equal("Completed", attempt.Outcome);
         Assert.NotNull(attempt.FinishedAt);
+    }
+
+    [Fact]
+    public async Task OwnerDiesAfterClaimBeforeDeliveryKeepsUncertainExecutionLease()
+    {
+        await using var tasks = new HubTaskStore(Database);
+        var owners = new HubMatchingPartitionLeaseStore(tasks);
+        var hub = "route-undelivered-" + Guid.NewGuid().ToString("N");
+        var policy = new HubPolicyRegistry().Register(hub, "activity", 1, 4,
+            p => p.SequentialBy("resource", v => v.GetProperty("resourceId").GetString()));
+        var payload = JsonSerializer.SerializeToElement(new { resourceId = "one" });
+        var id = await tasks.EnqueueAsync(policy.Resolve(hub, "activity", 1, payload),
+            payload.GetRawText(), null, null, default);
+        var task = (await tasks.GetAsync(id, default))!;
+        var shard = task.PartitionId % 4;
+        var old = await owners.AcquireOrReadAsync(hub, shard, 4, "old-owner", "http://old:5100",
+            TimeSpan.FromSeconds(8), default);
+        HubLeasedTask? claimed = null;
+        var distributor = new HubSseTaskDistributor(async (request, ct) =>
+        {
+            var leases = await tasks.ClaimAsync(request.WorkerId, request.Hubs, request.Capabilities,
+                1, TimeSpan.FromSeconds(30), ct);
+            claimed = Assert.Single(leases);
+            Assert.True(await owners.ReleaseAsync(hub, shard, old.OwnerId, old.Epoch, ct));
+            await owners.AcquireOrReadAsync(hub, shard, 4, "new-owner", "http://new:5100",
+                TimeSpan.FromSeconds(8), ct);
+            return leases;
+        });
+        var session = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delivered = false;
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var streaming = distributor.StreamAsync(Subscribe(hub, shard), old.Epoch,
+            ct => owners.OwnsAsync(hub, shard, old.OwnerId, old.Epoch, ct), (frame, _) =>
+            {
+                if (frame.StartsWith("event: session"))
+                {
+                    using var data = JsonDocument.Parse(frame.Split("data: ")[1].Trim());
+                    session.TrySetResult(data.RootElement.GetProperty("sessionId").GetGuid());
+                }
+                if (frame.StartsWith("event: task.leased")) delivered = true;
+                return Task.CompletedTask;
+            }, stop.Token);
+        var sessionId = await session.Task.WaitAsync(stop.Token);
+        Assert.True(distributor.Offer(new(sessionId, old.Epoch, "routing-worker", hub, shard, Guid.NewGuid())));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await streaming);
+        Assert.False(delivered);
+        Assert.NotNull(claimed);
+        Assert.Equal("Leased", (await tasks.GetAsync(id, default))!.State);
+        Assert.Empty(await tasks.ClaimAsync("another-worker", [hub], [new(hub, "activity", 1)],
+            1, TimeSpan.FromSeconds(30), default));
+        // Disconnect/owner turnover does not authorize recycling the lease.
+        Assert.True(await tasks.HeartbeatAsync(id, "routing-worker", claimed.Epoch,
+            TimeSpan.FromSeconds(30), default));
+        Assert.False(distributor.Offer(new(sessionId, old.Epoch, "routing-worker", hub, shard, Guid.NewGuid())));
     }
 }
