@@ -76,6 +76,7 @@ public static class HubOpenTelemetryExtensions
                 metrics.AddView("workflow_hub_worker_completion_http_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_worker_claim_http_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_matching_poll_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_sse_session_first_dispatch_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_workflow_row_lock_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_history_write_duration_seconds", latencyBuckets);

@@ -45,15 +45,21 @@ public static class HubSseTaskStreamingEndpoints
             {
                 var current = await ownership.ResolvePartitionAsync(hub, shard, ct);
                 if (current is null && !forwarded &&
-                    ownership.PreferredUrl(shard) != ownership.AdvertiseUrl)
+                    ownership.PreferredUrl(shard) != ownership.AdvertiseUrl &&
+                    ownership.TryPreferredPeer(shard))
                 {
                     try
                     {
-                        await ownership.ForwardSseToAsync(ownership.PreferredUrl(shard),
-                            request, context.Request.Headers.Authorization.ToString(), context, ct);
-                        return;
+                        if (await ownership.ForwardSseToAsync(ownership.PreferredUrl(shard),
+                            request, context.Request.Headers.Authorization.ToString(), context, ct))
+                            return;
                     }
-                    catch (HttpRequestException) { /* elect locally if preferred peer failed */ }
+                    catch (HttpRequestException) when (!context.Response.HasStarted)
+                    { /* elect locally only after a pre-stream connection failure */ }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested && !context.Response.HasStarted)
+                    { /* connect/header timeout is not worker cancellation */ }
+                    ownership.PreferredPeerFailed(shard);
+                    HubTelemetry.MatchingRouteFallbacks.Add(1);
                 }
                 current ??= await ownership.AcquirePartitionAsync(hub, shard, ct);
                 if (!ownership.IsLocal(current))
@@ -63,8 +69,9 @@ public static class HubSseTaskStreamingEndpoints
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                         return;
                     }
-                    await ownership.ForwardSseToAsync(current.OwnerUrl, request,
-                        context.Request.Headers.Authorization.ToString(), context, ct);
+                    if (!await ownership.ForwardSseToAsync(current.OwnerUrl, request,
+                        context.Request.Headers.Authorization.ToString(), context, ct))
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                     return;
                 }
                 if (!await ownership.StillOwnsPartitionAsync(hub, shard, ct))
@@ -94,6 +101,8 @@ public static class HubSseTaskStreamingEndpoints
             }
             catch (Exception ex)
             {
+                HubTelemetry.MatchingResolutionFailures.Add(1,
+                    new KeyValuePair<string, object?>("reason", "route"));
                 if (Environment.GetEnvironmentVariable("WFC_HUB_OWNER_DIAGNOSTICS") == "true")
                     logger.LogWarning(ex,
                         "SSE owner route failed on {Node} for {Hub}/{Shard}; forwarded={Forwarded}",
