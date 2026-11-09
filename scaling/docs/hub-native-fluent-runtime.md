@@ -121,7 +121,7 @@ Cancellation cannot undo an external effect that already happened.
 
 ## Deploy without changing existing runs
 
-Apply migrations in order through `023_hub_claim_hub_sequence.sql`, matching
+Apply migrations in order through `025_hub_claim_capability_sequence.sql`, matching
 the current Compose and development scripts. Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.

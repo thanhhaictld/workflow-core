@@ -356,7 +356,14 @@ public sealed class HubTaskStore : IAsyncDisposable
                 new KeyValuePair<string, object?>("outcome", batchOutcome));
         }
         var fallbackStarted = Stopwatch.GetTimestamp();
-        for (var batch = results.Count; batch < maxTasks; batch++)
+        // Native SSE batches must never combine an atomic batch with the
+        // individually committed fallback: cancellation after a fallback
+        // commit could otherwise strand earlier leases. If no atomic task was
+        // found, probe at most one fallback task for unusual constrained work.
+        var nativeOnlyBatch = _unconstrainedBatchClaimsEnabled && maxTasks > 1 &&
+            capabilities.All(c => c.TaskType == "__native_workflow__");
+        var fallbackLimit = nativeOnlyBatch ? (results.Count == 0 ? 1 : results.Count) : maxTasks;
+        for (var batch = results.Count; batch < fallbackLimit; batch++)
         {
             var candidates = new List<Guid>();
             var queryStarted = Stopwatch.GetTimestamp();

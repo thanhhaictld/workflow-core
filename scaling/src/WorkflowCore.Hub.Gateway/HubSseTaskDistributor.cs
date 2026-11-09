@@ -45,7 +45,7 @@ public sealed class HubSseTaskDistributor
         private readonly HashSet<Guid> _accepted = [];
         private readonly Queue<Guid> _acceptedOrder = new();
         private int _pending;
-        private bool _claiming;
+        private int _claiming;
 
         public Guid Id { get; } = Guid.NewGuid();
         public long OwnerEpoch { get; } = ownerEpoch;
@@ -58,7 +58,7 @@ public sealed class HubSseTaskDistributor
             {
                 // An HTTP retry of the SAME credit ID must not mint another slot.
                 if (_accepted.Contains(creditId)) return true;
-                if (_pending + (_claiming ? 1 : 0) >= Request.Capacity)
+                if (_pending + _claiming >= Request.Capacity)
                     return false;
                 if (!_credits.Writer.TryWrite(creditId))
                     return false;
@@ -71,21 +71,27 @@ public sealed class HubSseTaskDistributor
             }
         }
 
-        public async Task<Guid> NextAsync(CancellationToken ct)
+        public async Task<List<Guid>> NextAsync(int maxGrants, CancellationToken ct)
         {
             var id = await _credits.Reader.ReadAsync(ct);
             lock (_sync)
             {
+                var grants = new List<Guid> { id };
                 _pending--;
-                _claiming = true;
+                while (grants.Count < maxGrants && _credits.Reader.TryRead(out var next))
+                {
+                    grants.Add(next);
+                    _pending--;
+                }
+                _claiming = grants.Count;
+                return grants;
             }
-            return id;
         }
 
         public void CompleteClaim()
         {
             lock (_sync)
-                _claiming = false;
+                _claiming = 0;
         }
 
         public void Cancel()
@@ -130,6 +136,11 @@ public sealed class HubSseTaskDistributor
             throw new ArgumentException("Invalid SSE owner/session/credit registration");
 
         var session = new Session(subscribe, ownerEpoch);
+        // The unconstrained workflow batch commits atomically. The legacy
+        // constrained path commits each task separately, so cancellation of
+        // a multi-task claim could leave earlier leases undispatched.
+        var maxGrants = subscribe.Claim.Capabilities.All(c =>
+            c.TaskType == "__native_workflow__") ? 32 : 1;
         var connectedAt = Stopwatch.GetTimestamp();
         var dispatched = false;
         var key = (subscribe.Claim.WorkerId, subscribe.Claim.Hubs[0],
@@ -156,11 +167,11 @@ public sealed class HubSseTaskDistributor
             {
                 // Never block indefinitely waiting for worker credits: the
                 // matching owner epoch may be revoked while capacity is zero.
-                Guid grant;
+                List<Guid> grants;
                 using (var check = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     check.CancelAfter(OwnerCheckInterval);
-                    try { grant = await session.NextAsync(check.Token); }
+                    try { grants = await session.NextAsync(maxGrants, check.Token); }
                     catch (OperationCanceledException) when (!token.IsCancellationRequested)
                     {
                         if (!await stillOwns(token))
@@ -178,7 +189,7 @@ public sealed class HubSseTaskDistributor
                     using (var claim = CancellationTokenSource.CreateLinkedTokenSource(token))
                     {
                         claim.CancelAfter(CreditClaimTimeout);
-                        try { leases = await _poll(subscribe.Claim, claim.Token); }
+                        try { leases = await _poll(subscribe.Claim with { MaxTasks = grants.Count }, claim.Token); }
                         catch (OperationCanceledException) when (!token.IsCancellationRequested)
                         {
                             // A timed-out claim did not deliver a lease.
@@ -186,29 +197,31 @@ public sealed class HubSseTaskDistributor
                             leases = [];
                         }
                     }
-                    if (leases.Count > 1)
-                        throw new InvalidOperationException("One SSE grant must not lease multiple tasks");
-                    if (leases.Count == 0)
+                    if (leases.Count > grants.Count)
+                        throw new InvalidOperationException("SSE claim exceeded reserved credits");
+                    for (var i = 0; i < grants.Count; i++)
                     {
-                        await send("event: credit.unused\ndata: " +
-                            JsonSerializer.Serialize(new { creditId = grant }) + "\n\n", token);
-                        continue;
-                    }
-                    // Ownership may change between SQL claim and SSE delivery.
-                    // Do not dispatch a lease through a revoked owner. The
-                    // database lease remains fenced until normal recovery.
-                    if (!await stillOwns(token))
-                        throw new InvalidOperationException("SSE owner changed after claim");
-                    HubTelemetry.SseTasksDispatched.Add(1);
-                    await send("event: task.leased\ndata: " +
-                        JsonSerializer.Serialize(new { creditId = grant, task = leases[0] },
-                            new JsonSerializerOptions(JsonSerializerDefaults.Web)) +
-                        "\n\n", token);
-                    if (!dispatched)
-                    {
-                        dispatched = true;
-                        HubTelemetry.SseSessionFirstDispatch.Record(
-                            Stopwatch.GetElapsedTime(connectedAt).TotalSeconds);
+                        var grant = grants[i];
+                        if (i >= leases.Count)
+                        {
+                            await send("event: credit.unused\ndata: " +
+                                JsonSerializer.Serialize(new { creditId = grant }) + "\n\n", token);
+                            continue;
+                        }
+                        // A revoked owner's undelivered leases expire normally.
+                        if (!await stillOwns(token))
+                            throw new InvalidOperationException("SSE owner changed after claim");
+                        HubTelemetry.SseTasksDispatched.Add(1);
+                        await send("event: task.leased\ndata: " +
+                            JsonSerializer.Serialize(new { creditId = grant, task = leases[i] },
+                                new JsonSerializerOptions(JsonSerializerDefaults.Web)) +
+                            "\n\n", token);
+                        if (!dispatched)
+                        {
+                            dispatched = true;
+                            HubTelemetry.SseSessionFirstDispatch.Record(
+                                Stopwatch.GetElapsedTime(connectedAt).TotalSeconds);
+                        }
                     }
                 }
                 finally

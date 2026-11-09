@@ -58,6 +58,14 @@ Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
 keys; partition mode uses the sample's partition-ordering policy. These are
 synthetic 75 ms activities, not production capacity measurements.
 
+SSE workers offer one credit per free execution slot. The Hub can combine
+workflow credits already queued on the same session into one claim of up to 32 tasks;
+each delivery or unused-credit response still corresponds to one credit.
+Activity credits are claimed individually, and keyed activities remain subject
+to their durable FIFO permits. Large submission
+bursts can queue workflow continuations behind earlier workflow tasks, and a
+previous cohort on the same stack also competes for processing capacity.
+
 Smoke/stress runs use `k6/partition-ordering.js`, its completion thresholds and
 persisted business-snapshot check, and its Prometheus remote-write output.
 After k6 completes, the launcher exports the exact cohort's workflow, task,

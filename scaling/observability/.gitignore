@@ -2,4 +2,3 @@
 results/*
 !results/.gitkeep
 README.md
-compose.yaml

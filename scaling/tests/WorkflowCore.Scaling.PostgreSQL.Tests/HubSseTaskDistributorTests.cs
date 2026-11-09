@@ -8,9 +8,9 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 public sealed class HubSseTaskDistributorTests
 {
     private static HubSseTaskDistributor.Subscribe Subscribe(int capacity = 2,
-        string worker = "worker-a") =>
+        string worker = "worker-a", string type = "test-activity") =>
         new(new HubClaimRequest(worker, ["test-hub"],
-            [new HubCapability("test-hub", "test-activity", 1)],
+            [new HubCapability("test-hub", type, 1)],
             MaxTasks: 1, MatchingPartition: 0, MatchingPartitionCount: 4),
             capacity, InitialCredits: 0);
 
@@ -18,6 +18,124 @@ public sealed class HubSseTaskDistributorTests
         new(Guid.NewGuid(), "test-hub", 0, "test-activity", 1, null,
             JsonDocument.Parse("{}").RootElement.Clone(), 1, 1,
             DateTime.UtcNow.AddSeconds(45));
+
+    [Fact]
+    public async Task QueuedCreditsAreClaimedTogetherAndEachGetsOneResult()
+    {
+        var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frames = new List<(Guid Credit, bool Leased)>();
+        var lease = Lease();
+        var batchSize = 0;
+        var distributor = new HubSseTaskDistributor((request, _) =>
+        {
+            batchSize = request.MaxTasks;
+            return Task.FromResult<IReadOnlyList<HubLeasedTask>>([lease]);
+        });
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var stream = Task.Run(async () =>
+        {
+            try
+            {
+                await distributor.StreamAsync(Subscribe(capacity: 3, type: "__native_workflow__"), 5, _ => Task.FromResult(true),
+                    async (frame, _) =>
+                    {
+                        using var data = ParseData(frame);
+                        if (frame.StartsWith("event: session", StringComparison.Ordinal))
+                        {
+                            ready.TrySetResult(data.RootElement.GetProperty("sessionId").GetGuid());
+                            await resume.Task;
+                            return;
+                        }
+                        frames.Add((data.RootElement.GetProperty("creditId").GetGuid(),
+                            frame.StartsWith("event: task.leased", StringComparison.Ordinal)));
+                        if (frames.Count == 3) done.TrySetResult();
+                    }, stop.Token);
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        });
+        var session = await ready.Task.WaitAsync(stop.Token);
+        var credits = Enumerable.Range(0, 3).Select(_ => Guid.NewGuid()).ToArray();
+        foreach (var credit in credits)
+            Assert.True(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, credit)));
+        Assert.False(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, Guid.NewGuid())));
+        resume.TrySetResult();
+        await done.Task.WaitAsync(stop.Token);
+        Assert.Equal(3, batchSize);
+        Assert.Equal(credits, frames.Select(f => f.Credit));
+        Assert.Equal(new[] { true, false, false }, frames.Select(f => f.Leased));
+        await stop.CancelAsync();
+        await stream;
+    }
+
+    [Fact]
+    public async Task ActivityCreditsRemainSingleClaimEvenWhenQueued()
+    {
+        var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sizes = new List<int>();
+        var returned = 0;
+        var distributor = new HubSseTaskDistributor((request, _) =>
+        {
+            sizes.Add(request.MaxTasks);
+            return Task.FromResult<IReadOnlyList<HubLeasedTask>>([]);
+        });
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var stream = distributor.StreamAsync(Subscribe(capacity: 2), 5, _ => Task.FromResult(true),
+            async (frame, _) =>
+            {
+                if (frame.StartsWith("event: session", StringComparison.Ordinal))
+                {
+                    using var data = ParseData(frame);
+                    ready.TrySetResult(data.RootElement.GetProperty("sessionId").GetGuid());
+                    await resume.Task;
+                }
+                else if (frame.StartsWith("event: credit.unused", StringComparison.Ordinal) &&
+                    Interlocked.Increment(ref returned) == 2)
+                    done.TrySetResult();
+            }, stop.Token);
+        var session = await ready.Task.WaitAsync(stop.Token);
+        Assert.True(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, Guid.NewGuid())));
+        Assert.True(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, Guid.NewGuid())));
+        resume.TrySetResult();
+        await done.Task.WaitAsync(stop.Token);
+        Assert.Equal(new[] { 1, 1 }, sizes);
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stream);
+    }
+
+    [Fact]
+    public async Task OwnerLossDuringBatchDoesNotDeliverRemainingLeases()
+    {
+        var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delivered = 0;
+        var distributor = new HubSseTaskDistributor((request, _) =>
+            Task.FromResult<IReadOnlyList<HubLeasedTask>>(Enumerable.Range(0, request.MaxTasks)
+                .Select(_ => Lease()).ToArray()));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var stream = distributor.StreamAsync(Subscribe(capacity: 2, type: "__native_workflow__"), 5,
+            _ => Task.FromResult(Volatile.Read(ref delivered) == 0),
+            async (frame, _) =>
+            {
+                if (frame.StartsWith("event: session", StringComparison.Ordinal))
+                {
+                    using var data = ParseData(frame);
+                    ready.TrySetResult(data.RootElement.GetProperty("sessionId").GetGuid());
+                    await resume.Task;
+                }
+                else if (frame.StartsWith("event: task.leased", StringComparison.Ordinal))
+                    Interlocked.Increment(ref delivered);
+            }, timeout.Token);
+        var session = await ready.Task.WaitAsync(timeout.Token);
+        Assert.True(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, Guid.NewGuid())));
+        Assert.True(distributor.Offer(new(session, 5, "worker-a", "test-hub", 0, Guid.NewGuid())));
+        resume.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => stream.WaitAsync(timeout.Token));
+        Assert.Equal(1, delivered);
+    }
 
     [Fact]
     public async Task OneShotGrantPushesExactlyOneLeaseOrReturnsUnusedGrant()
