@@ -1,0 +1,16 @@
+.git
+**/bin
+**/obj
+**/node_modules
+**/.next
+**/.env*
+.vs
+.vscode
+artifacts
+scaling/docs
+scaling/observability/results
+**/TestResults
+IMPLEMENTATION-BRIEF.md
+scripts
+Makefile
+**/*.md

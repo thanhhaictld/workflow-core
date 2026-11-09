@@ -179,6 +179,7 @@ def recovery(directory):
     result['lastSummary'] = summaries[-1]['summary'] if summaries else None
     result['windowSeconds'] = rows[-1]['elapsed']
     if directory.name.startswith('modified') and result['valid']:
+        assert result['shards'], directory.name + ': no affected owner generation observed'
         assert all(s['newEpoch'] is not None for s in result['shards']), directory.name + ': failed acquisition'
         assert result['completed'] == result['submitted'], directory.name + ': incomplete business outcomes'
         assert result['failed'] == 0

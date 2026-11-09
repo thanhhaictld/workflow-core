@@ -183,3 +183,18 @@ obs-clean:
 
 obs-ps:
 	$(OBS_COMPOSE) --profile * ps -a
+
+# Standalone two-Hub/four-shard ownership recovery suite. Its worktree-derived
+# project, ports and retained PostgreSQL volumes are independent of OBS_COMPOSE.
+OWNER_PROJECT ?=
+OWNER_PORT_BASE ?= 26200
+OWNER_RESULTS ?= artifacts/owner-recovery
+OWNER_PYTHON ?= python
+OWNER_TEST_FILTER ?=
+OWNER_FAULT_VICTIM ?= both
+OWNER_FAULT_MODE ?= both
+OWNER_FAULT_REPEAT ?= 1
+OWNER_TARGETS := help config build up ps logs down db-test smoke-test test fault-test
+.PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))
+$(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
+	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT)

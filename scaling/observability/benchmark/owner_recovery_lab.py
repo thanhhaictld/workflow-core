@@ -22,7 +22,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[3]
 EVIDENCE = ROOT / 'scaling/docs/cadence-inspired-evidence'
 PREFIX = 'cadence-owner-20261109'
-TOKEN = 'owner-lab-development-only'
+TOKEN = os.getenv('OWNER_RECOVERY_TOKEN') or 'owner-lab-development-only'
+COMPOSE_PROJECT = None
+COMPOSE_CONTAINERS = {}
 PORTS = {'hub': 25200, 'hub-2': 25201, 'lb': 25210, 'pg': 25440, 'collector': 25289}
 
 
@@ -38,6 +40,21 @@ def docker(*args, **kw):
 
 
 def name(service):
+    if COMPOSE_PROJECT:
+        if service not in COMPOSE_CONTAINERS:
+            compose_service = 'processor' if service.startswith('worker-') else service
+            filters = ['--filter', 'label=com.docker.compose.project=' + COMPOSE_PROJECT,
+                       '--filter', 'label=com.docker.compose.service=' + compose_service]
+            if service.startswith('worker-'):
+                filters += ['--filter', 'label=com.docker.compose.container-number=' + service[7:]]
+            ids = docker('ps', '-aq', *filters).splitlines()
+            if len(ids) != 1:
+                raise RuntimeError('Expected exactly one suite container for ' + service)
+            label = docker('inspect', '--format', '{{index .Config.Labels "cadence.owner-suite"}}', ids[0])
+            if label != COMPOSE_PROJECT:
+                raise RuntimeError('Container is outside the ownership suite: ' + service)
+            COMPOSE_CONTAINERS[service] = ids[0]
+        return COMPOSE_CONTAINERS[service]
     return PREFIX + '-' + service
 
 
@@ -387,6 +404,7 @@ if __name__ == '__main__':
     parser.add_argument('action', choices=['setup', 'experiment', 'snapshot', 'identity', 'upgrade', 'warmup', 'telemetry', 'benchmark'])
     parser.add_argument('--tag', default='baseline')
     parser.add_argument('--project', default=PREFIX)
+    parser.add_argument('--compose-project', help='Use labeled Compose containers for measurement/fault actions only')
     parser.add_argument('--evidence-dir', type=Path, default=EVIDENCE)
     parser.add_argument('--port-base', type=int, default=25200)
     parser.add_argument('--label', default='baseline-idle-a-1')
@@ -403,11 +421,20 @@ if __name__ == '__main__':
         raise ValueError('Label must be a safe, unique run ID of at most 99 characters')
     PREFIX = args.project
     EVIDENCE = args.evidence_dir.resolve()
+    if args.compose_project:
+        if args.compose_project != PREFIX or args.action not in ['experiment', 'benchmark', 'warmup']:
+            raise ValueError('Compose project must match --project and only supports experiment/benchmark/warmup')
+        COMPOSE_PROJECT = args.compose_project
     if not 1024 <= args.port_base <= 65200:
         raise ValueError('Port base must leave room for all loopback ports')
     PORTS = {key: args.port_base + offset for key, offset in
         {'hub': 0, 'hub-2': 1, 'lb': 10, 'pg': 240, 'collector': 89}.items()}
     EVIDENCE.mkdir(parents=True, exist_ok=True)
+    if COMPOSE_PROJECT:
+        containers = [name(s) for s in ['pg', 'hub', 'hub-2', 'lb', 'collector'] +
+                      ['worker-' + str(n) for n in range(1, 5)]]
+        (EVIDENCE / (args.label + '-containers-' + str(time.time_ns()) + '.json')).write_text(
+            docker('inspect', *containers), encoding='utf-8')
     if args.action == 'setup': setup(args.tag)
     elif args.action == 'snapshot': snapshot()
     elif args.action == 'telemetry': telemetry()
