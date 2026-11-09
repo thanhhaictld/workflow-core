@@ -1,0 +1,13 @@
+# Commit compressed raw records, manifests and review entry points. Keep expanded
+# originals locally for inspection; do not replace or rewrite historical records.
+*
+!.gitignore
+!.gitattributes
+!README.md
+!analysis.json
+!historical-evidence.zip
+!historical-manifest.json
+!runtime-evidence.zip
+!runtime-manifest.json
+!archive-integrity.json
+!delivery-provenance.json

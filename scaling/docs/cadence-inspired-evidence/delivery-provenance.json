@@ -1,0 +1,235 @@
+{
+  "capturedUtc": "2026-11-09T15:08:47.4619931Z",
+  "deliveryBaseCommit": "0f3e87d5c147a3a8c3ac502136ac42f3c5616a24",
+  "prerequisiteCommit": "dcdab7bdf0c4c6b9566463d652c06da687316a64",
+  "measuredModifiedRuntime": "e194c25edd76328b7edb93409e194141e3ab553e",
+  "finalTestsCommit": "0f3e87d5c147a3a8c3ac502136ac42f3c5616a24",
+  "branch": "thanhhaictld/cadence-inspired-scaling",
+  "sourceStatus": [
+    " M scaling/docs/README.md",
+    " M scaling/docs/hub-remote-scheduler-implementation.md",
+    "?? IMPLEMENTATION-BRIEF.md",
+    "?? scaling/docs/cadence-inspired-evidence/",
+    "?? scaling/docs/cadence-inspired-scaling-design.md",
+    "?? scaling/docs/cadence-inspired-scaling-validation.md",
+    "?? scaling/observability/benchmark/.gitignore",
+    "?? scaling/observability/benchmark/OwnerTests.Dockerfile",
+    "?? scaling/observability/benchmark/analyze_owner_recovery.py",
+    "?? scaling/observability/benchmark/owner-lab-collector.yaml",
+    "?? scaling/observability/benchmark/owner_recovery_build.py",
+    "?? scaling/observability/benchmark/owner_recovery_lab.py",
+    "?? scaling/observability/benchmark/package_owner_evidence.py"
+  ],
+  "sourceFileHashes": [
+    {
+      "path": "IMPLEMENTATION-BRIEF.md",
+      "bytes": 12372,
+      "sha256": "70c641436b2ea5b7c250055b7fa01a633022962cbf4dc9950e07a9a4d3432a86"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.Hub.Gateway/HubMatchingOwnership.cs",
+      "bytes": 19374,
+      "sha256": "47f9bbb776b23d0e8e66bbffab363184601875aba0b455f5aff837b3652a67f9"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.Hub.Gateway/HubSseTaskStreamingEndpoints.cs",
+      "bytes": 8122,
+      "sha256": "a81d954fc424ce0c52181a4a36caf101a6e4386e7cb224354ffc9b966670a196"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.Hub.Gateway/HubSseTaskDistributor.cs",
+      "bytes": 10491,
+      "sha256": "7dc0ea33007db1d2a61bdf9c10708977ad0eedffae89fc36e336ba2b4cec8d09"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.Hub/HubTelemetry.cs",
+      "bytes": 15173,
+      "sha256": "7107e0a597c5c3d3c5d29c6c8f47e005952c25e908a9e40c472a27800626bd29"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs",
+      "bytes": 40485,
+      "sha256": "0c3705bce611f5e9b35d0435e368448c0e850d14d7bb595745fcbe2a61e11595"
+    },
+    {
+      "path": "scaling/src/WorkflowCore.Hub.Telemetry/HubOpenTelemetryExtensions.cs",
+      "bytes": 7033,
+      "sha256": "650e8a94c3782e946ad9cf6ab7f0c8cd39712fda5acab43925ce295cf2dfc3ad"
+    },
+    {
+      "path": "scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseOwnerRoutingTests.cs",
+      "bytes": 16071,
+      "sha256": "6221fe89b8798fa763aacf02b0bc1c2852b3052675cddbe83626ff74a2d312ac"
+    },
+    {
+      "path": "scaling/docs/cadence-inspired-scaling-design.md",
+      "bytes": 14123,
+      "sha256": "c4932de183bdbd0c504f79181897c705516e06d0ea000fff64e5322d1d188325"
+    },
+    {
+      "path": "scaling/docs/cadence-inspired-scaling-validation.md",
+      "bytes": 19801,
+      "sha256": "47034d97020fbfed90df5382b0e4a75b0968b2047524c841b20bee5666b0ca87"
+    },
+    {
+      "path": "scaling/observability/benchmark/analyze_owner_recovery.py",
+      "bytes": 14012,
+      "sha256": "4a7302b1ca4ae2bc64c33dc861bff3173e91a64e3ff10126040220dbd705776f"
+    },
+    {
+      "path": "scaling/observability/benchmark/owner_recovery_build.py",
+      "bytes": 1894,
+      "sha256": "8102005c0d9b861552db0392b5674eca448f971519e4023af9bc09fb8e2958f8"
+    },
+    {
+      "path": "scaling/observability/benchmark/owner_recovery_lab.py",
+      "bytes": 21146,
+      "sha256": "88b578f475393304793fb8403a322ea2c3a22154bfa483fa67398a0b10de3529"
+    },
+    {
+      "path": "scaling/observability/benchmark/owner-lab-collector.yaml",
+      "bytes": 287,
+      "sha256": "b02fb167e31c21bf3b82e4b5d9391a2f800cbf6e14aacd4e4be469de371f322d"
+    },
+    {
+      "path": "scaling/observability/benchmark/OwnerTests.Dockerfile",
+      "bytes": 366,
+      "sha256": "276da65d6de06ef916a5757a5f0094ce975ae865606b21bf1bbe1e9c20a4d74a"
+    },
+    {
+      "path": "scaling/observability/benchmark/package_owner_evidence.py",
+      "bytes": 3216,
+      "sha256": "5eb11f663da93a24217965ccbfa208913e568aab20638b175b1c108c8d06dfac"
+    }
+  ],
+  "briefPreservedUntracked": true,
+  "terraReadOnly": {
+    "head": "cfd4fa779bb5d3c97b40587a568f0724f7f2084e",
+    "status": [
+      " M Makefile",
+      " M scaling/docs/README.md",
+      " M scaling/observability/README.md",
+      " M scaling/observability/compose.matching-ha.yaml",
+      " M scaling/observability/compose.yaml",
+      " M scaling/observability/k6/partition-ordering.js",
+      " M scaling/src/WorkflowCore.Hub.Gateway/HubEventGatedClaimDispatcher.cs",
+      " M scaling/src/WorkflowCore.Hub.Gateway/HubSseTaskDistributor.cs",
+      " M scaling/src/WorkflowCore.Hub.Gateway/HubTaskMatcher.cs",
+      " M scaling/src/WorkflowCore.Hub.Gateway/PostgresHubNotificationListener.cs",
+      " M scaling/src/WorkflowCore.Hub.Telemetry/HubOpenTelemetryExtensions.cs",
+      " M scaling/src/WorkflowCore.Hub/HubNativeWorkflowStore.cs",
+      " M scaling/src/WorkflowCore.Hub/HubTaskStore.cs",
+      " M scaling/src/WorkflowCore.Hub/HubTelemetry.cs",
+      " M scaling/src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs",
+      " M scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubEventGatedClaimDispatcherTests.cs",
+      " M scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubGatewayTests.cs",
+      " M scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubPostgresNotificationTests.cs",
+      "?? IMPLEMENTATION-BRIEF.md",
+      "?? scaling/docs/resource-handoff-design.md",
+      "?? scaling/docs/resource-handoff-evidence/",
+      "?? scaling/docs/resource-handoff-validation.md",
+      "?? scaling/docs/resource-key-policy-guide.md",
+      "?? scripts/test-resource-handoff.ps1"
+    ],
+    "documents": [
+      {
+        "path": "resource-handoff-design.md",
+        "bytes": 5779,
+        "sha256": "ef5499e2caddec665b75199ca9b816470d303c8b3b05ca2f7a9b9a9f0bbb71ea"
+      },
+      {
+        "path": "resource-handoff-validation.md",
+        "bytes": 10544,
+        "sha256": "a6f4fe5920743d72c0fe109179ba7b75b840b4c7b27091a923be0a0b40a56d5a"
+      },
+      {
+        "path": "resource-key-policy-guide.md",
+        "bytes": 4315,
+        "sha256": "db79fcbce371197db55a5f9d3fd0a4af3aa38ae4f6e501406dedda17decb867b"
+      }
+    ],
+    "codeImported": false
+  },
+  "hostSdk": "10.0.100",
+  "python": "Python 3.14.5",
+  "docker": {
+    "Client": {
+      "Version": "29.5.2",
+      "ApiVersion": "1.54",
+      "DefaultAPIVersion": "1.54",
+      "GitCommit": "79eb04c",
+      "GoVersion": "go1.26.3",
+      "Os": "windows",
+      "Arch": "amd64",
+      "BuildTime": "Wed May 20 14:40:41 2026",
+      "Context": "desktop-linux"
+    },
+    "Server": {
+      "Platform": {
+        "Name": "Docker Desktop 4.76.0 (228118)"
+      },
+      "Version": "29.5.2",
+      "ApiVersion": "1.54",
+      "MinAPIVersion": "1.40",
+      "Os": "linux",
+      "Arch": "amd64",
+      "Components": [
+        {
+          "Name": "Engine",
+          "Version": "29.5.2",
+          "Details": {
+            "ApiVersion": "1.54",
+            "Arch": "amd64",
+            "BuildTime": "Wed May 20 14:38:09 2026",
+            "Experimental": "false",
+            "GitCommit": "568f755",
+            "GoVersion": "go1.26.3",
+            "KernelVersion": "6.18.54.1-microsoft-standard-WSL2",
+            "MinAPIVersion": "1.40",
+            "Module": "github.com/moby/moby/v2",
+            "ModuleVersion": "v2.0.0+unknown",
+            "Os": "linux"
+          }
+        },
+        {
+          "Name": "containerd",
+          "Version": "v2.2.4",
+          "Details": {
+            "GitCommit": "193637f7ee8ae5f5aa5248f49e7baa3e6164966e"
+          }
+        },
+        {
+          "Name": "runc",
+          "Version": "1.3.5",
+          "Details": {
+            "GitCommit": "v1.3.5-0-g488fc13e"
+          }
+        },
+        {
+          "Name": "docker-init",
+          "Version": "0.19.0",
+          "Details": {
+            "GitCommit": "de40ad0"
+          }
+        }
+      ],
+      "GitCommit": "568f755",
+      "GoVersion": "go1.26.3",
+      "KernelVersion": "6.18.54.1-microsoft-standard-WSL2",
+      "BuildTime": "2026-05-20T14:38:09.000000000+00:00"
+    }
+  },
+  "lab": {
+    "prefix": "cadence-owner-20261109",
+    "stopped": true,
+    "retained": [
+      "containers",
+      "images",
+      "network",
+      "volume",
+      "all four databases"
+    ],
+    "resetsPerformed": false
+  },
+  "interpretation": "Runtime and final tests are committed separately. Documentation/tools have provenance hashes; current delivery commit will follow packaging. Fixed lab-only credentials are intentionally included in resolved lab config. No deployment/publication/source-branch merge."
+}

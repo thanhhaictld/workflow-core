@@ -1,0 +1,3184 @@
+{
+  "faults": [
+    {
+      "label": "baseline-busy-a-1",
+      "valid": true,
+      "victim": "hub",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 65,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 65,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 65,
+      "durableResults": 65,
+      "taskStates": {
+        "0": 55,
+        "2": 305
+      },
+      "faultElapsed": 4.915992099995492,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 4,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:18:08.097945+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 4.328033400001004,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 4.1097869000223,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 4,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:18:08.112204+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 4.328033400001004,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 2.2594425000133924,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        }
+      ],
+      "lastSummary": {
+        "runId": "baseline-busy-a-1",
+        "total": 120,
+        "ready": 10,
+        "running": 45,
+        "completed": 65,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:18:00.419437Z",
+        "lastCompletedAt": "2026-11-09T14:18:47.457634Z",
+        "p50CompletionMs": 6318.568,
+        "p95CompletionMs": 9233.3066,
+        "p99CompletionMs": 47018.1044,
+        "maxCompletionMs": 47037.426
+      },
+      "windowSeconds": 91.41278169999714
+    },
+    {
+      "label": "baseline-busy-b-1",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 62,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 62,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 62,
+      "durableResults": 62,
+      "taskStates": {
+        "0": 58,
+        "2": 268
+      },
+      "faultElapsed": 4.85288209997816,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 4,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:20:23.212899+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.269031900010305,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 4.167852400016272,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 4,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:20:23.207528+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.269031900010305,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 2.3560422000009567,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        }
+      ],
+      "lastSummary": {
+        "runId": "baseline-busy-b-1",
+        "total": 120,
+        "ready": 38,
+        "running": 20,
+        "completed": 62,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:20:14.82181Z",
+        "lastCompletedAt": "2026-11-09T14:21:02.208903Z",
+        "p50CompletionMs": 3626.1225,
+        "p95CompletionMs": 4361.40265,
+        "p99CompletionMs": 47054.36059,
+        "maxCompletionMs": 47112.543
+      },
+      "windowSeconds": 90.01499839997268
+    },
+    {
+      "label": "baseline-idle-a-1",
+      "valid": true,
+      "victim": "hub",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": true,
+      "submitted": 40,
+      "completed": 23,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 23,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 23,
+      "durableResults": 23,
+      "taskStates": {
+        "0": 17,
+        "2": 92
+      },
+      "faultElapsed": 3.5639278999879025,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 1,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:11:32.263095+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.722796199988807,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": null,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 1,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:11:32.265628+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.722796199988807,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": null,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        }
+      ],
+      "lastSummary": {
+        "runId": "baseline-idle-a-1",
+        "total": 40,
+        "ready": 17,
+        "running": 0,
+        "completed": 23,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:11:39.52334Z",
+        "lastCompletedAt": "2026-11-09T14:11:40.313824Z",
+        "p50CompletionMs": 617.275,
+        "p95CompletionMs": 730.472,
+        "p99CompletionMs": 736.6661,
+        "maxCompletionMs": 738.26
+      },
+      "windowSeconds": 88.77258339998662
+    },
+    {
+      "label": "diagnostic-idle-b-1",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 22,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 22,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 22,
+      "durableResults": 22,
+      "taskStates": {
+        "0": 18,
+        "2": 88
+      },
+      "faultElapsed": 3.7893707000184804,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 1,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:13:49.796166+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 5.449391999980435,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 4.199406100000488,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        },
+        {
+          "shard": 1,
+          "oldEpoch": 2,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:13:49.776375+00:00",
+          "firstExpiredSampleAfterFaultSeconds": null,
+          "newOwnerSampleAfterFaultSeconds": 5.449391999980435,
+          "newOwner": "hub-a",
+          "newEpoch": 3,
+          "newSessionAfterFaultSeconds": 5.509667899983469,
+          "firstObserverDisconnectAfterFaultSeconds": 2.337830699980259,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:13:56.735699+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:13:57.202676+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:13:57.301547+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 1,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:13:49.794052+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 5.449391999980435,
+          "newOwnerSampleAfterFaultSeconds": null,
+          "newOwner": null,
+          "newEpoch": null,
+          "newSessionAfterFaultSeconds": null,
+          "firstObserverDisconnectAfterFaultSeconds": 2.3384334999718703,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": null,
+          "firstActivityResultAfterAcquisitionDbUtc": null,
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": null
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 2,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:13:49.798133+00:00",
+          "firstExpiredSampleAfterFaultSeconds": null,
+          "newOwnerSampleAfterFaultSeconds": 5.449391999980435,
+          "newOwner": "hub-a",
+          "newEpoch": 3,
+          "newSessionAfterFaultSeconds": 5.509809199982556,
+          "firstObserverDisconnectAfterFaultSeconds": 2.3383546999830287,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:13:56.735785+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:13:57.175412+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:13:57.313448+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "diagnostic-idle-b-1",
+        "total": 40,
+        "ready": 18,
+        "running": 0,
+        "completed": 22,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:13:56.648817Z",
+        "lastCompletedAt": "2026-11-09T14:13:57.523755Z",
+        "p50CompletionMs": 710.8875,
+        "p95CompletionMs": 802.0886,
+        "p99CompletionMs": 807.9333700000001,
+        "maxCompletionMs": 809.383
+      },
+      "windowSeconds": 90.44930770000792
+    },
+    {
+      "label": "modified-busy-a-1",
+      "valid": true,
+      "victim": "hub",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 5.26301369999419,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 12,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:29:45.752942+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.265984600002412,
+          "newOwnerSampleAfterFaultSeconds": 11.435555600008229,
+          "newOwner": "hub-b",
+          "newEpoch": 13,
+          "newSessionAfterFaultSeconds": 10.744089699990582,
+          "firstObserverDisconnectAfterFaultSeconds": 3.270361500006402,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:29:49.57145+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:29:50.564091+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:29:52.169149+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 12,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:29:45.794283+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.265984600002412,
+          "newOwnerSampleAfterFaultSeconds": 11.435555600008229,
+          "newOwner": "hub-b",
+          "newEpoch": 13,
+          "newSessionAfterFaultSeconds": 13.470546500000637,
+          "firstObserverDisconnectAfterFaultSeconds": 2.221077599999262,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:29:49.55898+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:29:57.113006+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:29:57.195371+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-busy-a-1",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:29:37.753041Z",
+        "lastCompletedAt": "2026-11-09T14:30:30.902813Z",
+        "p50CompletionMs": 14595.391,
+        "p95CompletionMs": 20282.1255,
+        "p99CompletionMs": 52849.659,
+        "maxCompletionMs": 52864.143
+      },
+      "windowSeconds": 71.37581299999147
+    },
+    {
+      "label": "modified-busy-a-2",
+      "valid": true,
+      "victim": "hub",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 5.380604100006167,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 18,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:36:31.157025+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.16111029998865,
+          "newOwnerSampleAfterFaultSeconds": 11.042760499985889,
+          "newOwner": "hub-b",
+          "newEpoch": 19,
+          "newSessionAfterFaultSeconds": 10.311424399988027,
+          "firstObserverDisconnectAfterFaultSeconds": 2.1359893000044394,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:36:37.356969+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:36:38.049884+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:36:39.373332+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 18,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:36:31.154802+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.16111029998865,
+          "newOwnerSampleAfterFaultSeconds": 12.091005099995527,
+          "newOwner": "hub-b",
+          "newEpoch": 19,
+          "newSessionAfterFaultSeconds": 14.275951999996323,
+          "firstObserverDisconnectAfterFaultSeconds": 3.200210099981632,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:36:37.341796+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:36:43.527391+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:36:43.809597+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-busy-a-2",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:36:24.291406Z",
+        "lastCompletedAt": "2026-11-09T14:37:15.391168Z",
+        "p50CompletionMs": 4731.5225,
+        "p95CompletionMs": 20068.407649999997,
+        "p99CompletionMs": 20211.571190000002,
+        "maxCompletionMs": 50897.539
+      },
+      "windowSeconds": 76.00088649999816
+    },
+    {
+      "label": "modified-busy-b-1",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 5.142627699999139,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 11,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:31:09.44806+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.141491000016686,
+          "newOwnerSampleAfterFaultSeconds": 12.468415800016373,
+          "newOwner": "hub-a",
+          "newEpoch": 12,
+          "newSessionAfterFaultSeconds": 13.084421400009887,
+          "firstObserverDisconnectAfterFaultSeconds": 3.308577799994964,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:31:14.696726+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:31:16.351713+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:31:19.290554+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 11,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:31:09.425956+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.141491000016686,
+          "newOwnerSampleAfterFaultSeconds": 12.468415800016373,
+          "newOwner": "hub-a",
+          "newEpoch": 12,
+          "newSessionAfterFaultSeconds": 13.288046700006817,
+          "firstObserverDisconnectAfterFaultSeconds": 2.3006186000129674,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:31:14.249922+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:31:15.892386+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:31:16.9174+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-busy-b-1",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:31:00.792455Z",
+        "lastCompletedAt": "2026-11-09T14:31:51.028552Z",
+        "p50CompletionMs": 3605.985,
+        "p95CompletionMs": 19233.221849999998,
+        "p99CompletionMs": 44216.80318000007,
+        "maxCompletionMs": 50044.273
+      },
+      "windowSeconds": 70.03833179999492
+    },
+    {
+      "label": "modified-busy-b-2",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": true,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 5.932025200017961,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 17,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:38:09.722261+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.698687600000994,
+          "newOwnerSampleAfterFaultSeconds": 10.454532000003383,
+          "newOwner": "hub-a",
+          "newEpoch": 18,
+          "newSessionAfterFaultSeconds": 10.125374399998691,
+          "firstObserverDisconnectAfterFaultSeconds": 2.0959528999810573,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:38:13.342638+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:38:14.580865+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:38:16.542998+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 17,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:38:09.737546+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.698687600000994,
+          "newOwnerSampleAfterFaultSeconds": 10.454532000003383,
+          "newOwner": "hub-a",
+          "newEpoch": 18,
+          "newSessionAfterFaultSeconds": 9.657725500001106,
+          "firstObserverDisconnectAfterFaultSeconds": 3.1556946999917272,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:38:13.029577+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:38:14.188721+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:38:14.340441+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-busy-b-2",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:38:01.586704Z",
+        "lastCompletedAt": "2026-11-09T14:38:17.564915Z",
+        "p50CompletionMs": 5044.6314999999995,
+        "p95CompletionMs": 15395.110149999999,
+        "p99CompletionMs": 15441.16665,
+        "maxCompletionMs": 15453.83
+      },
+      "windowSeconds": 74.81677380000474
+    },
+    {
+      "label": "modified-database-1",
+      "valid": true,
+      "victim": "hub",
+      "busy": true,
+      "fault": "database",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 4.4387969999806955,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 20,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:40:58.899015+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 16.136688099999446,
+          "newOwnerSampleAfterFaultSeconds": 16.372935300023528,
+          "newOwner": "hub-b",
+          "newEpoch": 21,
+          "newSessionAfterFaultSeconds": 16.13440320000518,
+          "firstObserverDisconnectAfterFaultSeconds": 1.9349224000179674,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:41:08.499893+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:41:09.802846+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:41:10.864859+00:00"
+        },
+        {
+          "shard": 1,
+          "oldEpoch": 23,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:40:58.475533+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 16.136688099999446,
+          "newOwnerSampleAfterFaultSeconds": 16.372935300023528,
+          "newOwner": "hub-a",
+          "newEpoch": 24,
+          "newSessionAfterFaultSeconds": 16.12718940002378,
+          "firstObserverDisconnectAfterFaultSeconds": 1.9500277000188362,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:41:08.430611+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:41:10.211043+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:41:15.465005+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 20,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:40:58.900937+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 16.136688099999446,
+          "newOwnerSampleAfterFaultSeconds": 16.372935300023528,
+          "newOwner": "hub-b",
+          "newEpoch": 21,
+          "newSessionAfterFaultSeconds": 16.135859200003324,
+          "firstObserverDisconnectAfterFaultSeconds": 1.9347208000253886,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:41:08.403541+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:41:17.664028+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:41:19.028226+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 23,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:40:58.477768+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 16.136688099999446,
+          "newOwnerSampleAfterFaultSeconds": 16.372935300023528,
+          "newOwner": "hub-a",
+          "newEpoch": 24,
+          "newSessionAfterFaultSeconds": 16.110425899998518,
+          "firstObserverDisconnectAfterFaultSeconds": 1.9349766000232194,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:41:08.412124+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:41:09.978532+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:41:12.062268+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-database-1",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:40:52.041772Z",
+        "lastCompletedAt": "2026-11-09T14:41:40.772597Z",
+        "p50CompletionMs": 24190.509,
+        "p95CompletionMs": 27659.583349999997,
+        "p99CompletionMs": 44456.19239000004,
+        "maxCompletionMs": 48730.825
+      },
+      "windowSeconds": 74.60324199998286
+    },
+    {
+      "label": "modified-idle-a-1",
+      "valid": false,
+      "victim": "hub",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 0,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 0,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 0,
+      "durableResults": 0,
+      "taskStates": {
+        "0": 40
+      },
+      "exclusion": "missing workers"
+    },
+    {
+      "label": "modified-idle-a-2",
+      "valid": false,
+      "victim": "hub",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 40,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 40,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 40,
+      "durableResults": 40,
+      "taskStates": {
+        "2": 160
+      },
+      "exclusion": "victim had no owned shards"
+    },
+    {
+      "label": "modified-idle-a-3",
+      "valid": true,
+      "victim": "hub",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 40,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 40,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 40,
+      "durableResults": 40,
+      "taskStates": {
+        "2": 160
+      },
+      "faultElapsed": 4.081100999988848,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 9,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:26:30.320198+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.172676199988928,
+          "newOwnerSampleAfterFaultSeconds": 10.191757299995515,
+          "newOwner": "hub-b",
+          "newEpoch": 10,
+          "newSessionAfterFaultSeconds": 10.420257099991431,
+          "firstObserverDisconnectAfterFaultSeconds": 3.441227000002982,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:26:36.571128+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:26:38.061041+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:26:38.516422+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 9,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:26:30.33453+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.172676199988928,
+          "newOwnerSampleAfterFaultSeconds": 11.253631500003394,
+          "newOwner": "hub-b",
+          "newEpoch": 10,
+          "newSessionAfterFaultSeconds": 12.09472839999944,
+          "firstObserverDisconnectAfterFaultSeconds": 2.3533874999848194,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:26:36.571144+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:26:37.934517+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:26:38.036152+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-idle-a-3",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:26:36.500995Z",
+        "lastCompletedAt": "2026-11-09T14:26:39.875418Z",
+        "p50CompletionMs": 1198.7995,
+        "p95CompletionMs": 2382.0076499999996,
+        "p99CompletionMs": 2986.7134099999994,
+        "maxCompletionMs": 3334.157
+      },
+      "windowSeconds": 70.56944669998484
+    },
+    {
+      "label": "modified-idle-a-4",
+      "valid": true,
+      "victim": "hub",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 40,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 40,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 40,
+      "durableResults": 40,
+      "taskStates": {
+        "2": 160
+      },
+      "faultElapsed": 4.11509050001041,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 15,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:32:28.966274+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.160978799976874,
+          "newOwnerSampleAfterFaultSeconds": 10.2281013999891,
+          "newOwner": "hub-b",
+          "newEpoch": 16,
+          "newSessionAfterFaultSeconds": 9.834728999994695,
+          "firstObserverDisconnectAfterFaultSeconds": 3.3704455999832135,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:32:37.722715+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:32:38.760335+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:32:43.326041+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 15,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:32:28.968941+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 8.160978799976874,
+          "newOwnerSampleAfterFaultSeconds": 10.2281013999891,
+          "newOwner": "hub-b",
+          "newEpoch": 16,
+          "newSessionAfterFaultSeconds": 9.96388759999536,
+          "firstObserverDisconnectAfterFaultSeconds": 2.320303499989677,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:32:37.722715+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:32:40.996113+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:32:41.326255+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-idle-a-4",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:32:37.638816Z",
+        "lastCompletedAt": "2026-11-09T14:32:43.651473Z",
+        "p50CompletionMs": 5068.049,
+        "p95CompletionMs": 5916.283649999999,
+        "p99CompletionMs": 5938.55327,
+        "maxCompletionMs": 5949.71
+      },
+      "windowSeconds": 72.45956859999569
+    },
+    {
+      "label": "modified-idle-b-1",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 40,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 40,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 40,
+      "durableResults": 40,
+      "taskStates": {
+        "2": 160
+      },
+      "faultElapsed": 3.939728400000604,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 8,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:28:20.504387+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.29773550000391,
+          "newOwnerSampleAfterFaultSeconds": 9.338597499998286,
+          "newOwner": "hub-a",
+          "newEpoch": 9,
+          "newSessionAfterFaultSeconds": 8.711683600005927,
+          "firstObserverDisconnectAfterFaultSeconds": 2.313875200023176,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:28:28.699923+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:28:34.060204+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:28:34.149882+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 8,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:28:20.514649+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.29773550000391,
+          "newOwnerSampleAfterFaultSeconds": 10.320261800021399,
+          "newOwner": "hub-a",
+          "newEpoch": 9,
+          "newSessionAfterFaultSeconds": 10.612390399997821,
+          "firstObserverDisconnectAfterFaultSeconds": 3.3767796000174712,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:28:28.708045+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:28:33.885585+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:28:36.716164+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-idle-b-1",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:28:28.635743Z",
+        "lastCompletedAt": "2026-11-09T14:28:39.040091Z",
+        "p50CompletionMs": 5562.7045,
+        "p95CompletionMs": 8223.5874,
+        "p99CompletionMs": 9530.853799999999,
+        "maxCompletionMs": 10354.604
+      },
+      "windowSeconds": 70.90307830000529
+    },
+    {
+      "label": "modified-idle-b-2",
+      "valid": true,
+      "victim": "hub-2",
+      "busy": false,
+      "fault": "kill",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 40,
+      "completed": 40,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 40,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 40,
+      "durableResults": 40,
+      "taskStates": {
+        "2": 160
+      },
+      "faultElapsed": 5.315574600012042,
+      "shards": [
+        {
+          "shard": 0,
+          "oldEpoch": 14,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:35:01.197853+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.357468400005018,
+          "newOwnerSampleAfterFaultSeconds": 10.495254000008572,
+          "newOwner": "hub-a",
+          "newEpoch": 15,
+          "newSessionAfterFaultSeconds": 12.895884300000034,
+          "firstObserverDisconnectAfterFaultSeconds": 1.5484630999853835,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:35:06.792403+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:35:11.983824+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:35:12.92038+00:00"
+        },
+        {
+          "shard": 2,
+          "oldEpoch": 14,
+          "oldOwner": "hub-b",
+          "lastObservedExpiry": "2026-11-09T14:35:01.212561+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 6.357468400005018,
+          "newOwnerSampleAfterFaultSeconds": 10.495254000008572,
+          "newOwner": "hub-a",
+          "newEpoch": 15,
+          "newSessionAfterFaultSeconds": 10.218846600007964,
+          "firstObserverDisconnectAfterFaultSeconds": 2.645727099996293,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:35:06.796179+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:35:09.543687+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:35:09.700726+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-idle-b-2",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:35:06.641292Z",
+        "lastCompletedAt": "2026-11-09T14:35:13.240277Z",
+        "p50CompletionMs": 3133.8535,
+        "p95CompletionMs": 6393.7468499999995,
+        "p99CompletionMs": 6406.9028499999995,
+        "maxCompletionMs": 6408.574
+      },
+      "windowSeconds": 76.39875670001493
+    },
+    {
+      "label": "modified-resume-a-1",
+      "valid": true,
+      "victim": "hub",
+      "busy": true,
+      "fault": "pause",
+      "preconditionOwnedShards": [
+        2
+      ],
+      "contaminatedByConcurrentTests": false,
+      "submitted": 120,
+      "completed": 120,
+      "keyedFifo": {},
+      "failed": 0,
+      "activityAttempts": 120,
+      "extraActivityAttempts": 0,
+      "durableCompletions": 120,
+      "durableResults": 120,
+      "taskStates": {
+        "2": 480
+      },
+      "faultElapsed": 4.772651799983578,
+      "shards": [
+        {
+          "shard": 1,
+          "oldEpoch": 21,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:39:34.022102+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.607876500027487,
+          "newOwnerSampleAfterFaultSeconds": 16.988214900018647,
+          "newOwner": "hub-a",
+          "newEpoch": 22,
+          "newSessionAfterFaultSeconds": 16.17023970000446,
+          "firstObserverDisconnectAfterFaultSeconds": 3.8159463000192773,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:39:45.56355+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:39:48.784641+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:39:49.491398+00:00"
+        },
+        {
+          "shard": 3,
+          "oldEpoch": 21,
+          "oldOwner": "hub-a",
+          "lastObservedExpiry": "2026-11-09T14:39:34.020214+00:00",
+          "firstExpiredSampleAfterFaultSeconds": 7.607876500027487,
+          "newOwnerSampleAfterFaultSeconds": 11.631223000003956,
+          "newOwner": "hub-b",
+          "newEpoch": 22,
+          "newSessionAfterFaultSeconds": 11.280982600001153,
+          "firstObserverDisconnectAfterFaultSeconds": 3.815769500011811,
+          "firstDurableWorkflowClaimAfterAcquisitionDbUtc": "2026-11-09T14:39:45.696213+00:00",
+          "firstActivityResultAfterAcquisitionDbUtc": "2026-11-09T14:39:50.3108+00:00",
+          "firstWorkflowCompletionAfterAcquisitionDbUtc": "2026-11-09T14:39:52.010104+00:00"
+        }
+      ],
+      "lastSummary": {
+        "runId": "modified-resume-a-1",
+        "total": 120,
+        "ready": 0,
+        "running": 0,
+        "completed": 120,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:39:26.671298Z",
+        "lastCompletedAt": "2026-11-09T14:40:16.075381Z",
+        "p50CompletionMs": 22693.8035,
+        "p95CompletionMs": 26003.7434,
+        "p99CompletionMs": 26123.41331,
+        "maxCompletionMs": 49270.906
+      },
+      "windowSeconds": 75.67623009998351
+    }
+  ],
+  "benchmarks": [
+    {
+      "mode": "keyed",
+      "count": 200,
+      "wallSeconds": 14.933649599988712,
+      "summary": {
+        "runId": "bench-baseline-a-keyed",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:48:18.143468Z",
+        "lastCompletedAt": "2026-11-09T14:48:31.481608Z",
+        "p50CompletionMs": 8634.73,
+        "p95CompletionMs": 12502.77925,
+        "p99CompletionMs": 12714.718040000002,
+        "maxCompletionMs": 12768.558
+      },
+      "label": "bench-baseline-a-keyed",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 13.33814001083374,
+      "workflowsPerSecond": 14.994594436522068,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 33.509235,
+        "hub": 14.16318,
+        "hub-2": 11.312056,
+        "lb": 1.470033,
+        "worker-1": 7.944089,
+        "worker-2": 9.873801,
+        "worker-3": 9.56652,
+        "worker-4": 6.701
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 275.81,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0016.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1775.0,
+            "meanMs": 15.220311943661965,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 1191.0,
+            "meanMs": 2.809481024349287,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1781.0,
+            "meanMs": 0.155938966872543,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1781.0,
+            "meanMs": 0.005610948905109484,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1775.0,
+            "meanMs": 15.268493746478882,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 798.0,
+            "meanMs": 24.196915413533834,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          20.0
+        ],
+        "emptyDispatchObservations": 975.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 3.045477032661438,
+        "p95": 3.888855218887329
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 387,
+        "Lock/object": 18,
+        "None/None": 51,
+        "IO/WalSync": 1,
+        "LWLock/WALWrite": 1,
+        "Lock/transactionid": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 15.120659899985185,
+      "summary": {
+        "runId": "bench-baseline-a-unordered",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:47:45.795006Z",
+        "lastCompletedAt": "2026-11-09T14:47:59.391802Z",
+        "p50CompletionMs": 7565.402,
+        "p95CompletionMs": 12899.692949999999,
+        "p99CompletionMs": 12931.059640000001,
+        "maxCompletionMs": 12931.86
+      },
+      "label": "bench-baseline-a-unordered",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 13.596796035766602,
+      "workflowsPerSecond": 14.70934766351548,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 25.721614,
+        "hub": 12.898574,
+        "hub-2": 12.995336,
+        "lb": 1.401991,
+        "worker-1": 13.614352,
+        "worker-2": 16.753901,
+        "worker-3": 16.9606,
+        "worker-4": 12.928535
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 199.28,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0017.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1787.0,
+            "meanMs": 10.85203587017347,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 1005.0,
+            "meanMs": 3.3987296517412906,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1789.0,
+            "meanMs": 0.23638893236444944,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1789.0,
+            "meanMs": 0.006398323085522642,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1787.0,
+            "meanMs": 10.907371012870735,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 33.673488625,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          19.0
+        ],
+        "emptyDispatchObservations": 987.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.1268625259399414,
+        "p95": 5.824278962612151
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 439,
+        "None/None": 44,
+        "IO/WalSync": 3
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 200,
+      "wallSeconds": 17.789772399992216,
+      "summary": {
+        "runId": "bench-baseline-b-keyed",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:51:24.255717Z",
+        "lastCompletedAt": "2026-11-09T14:51:42.616109Z",
+        "p50CompletionMs": 12942.371,
+        "p95CompletionMs": 17493.5664,
+        "p99CompletionMs": 17617.34595,
+        "maxCompletionMs": 17641.973
+      },
+      "label": "bench-baseline-b-keyed",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 18.360391855239868,
+      "workflowsPerSecond": 10.893013699101529,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 43.510899,
+        "hub": 18.456446,
+        "hub-2": 18.143102,
+        "lb": 1.552049,
+        "worker-1": 15.811945,
+        "worker-2": 19.459814,
+        "worker-3": 15.732022,
+        "worker-4": 20.040103
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 304.315,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0019.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1533.0,
+            "meanMs": 30.683367645140248,
+            "p95BucketCeilingMs": 250.0
+          },
+          "claim_candidate_query": {
+            "observations": 947.0,
+            "meanMs": 4.033587856388599,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1543.0,
+            "meanMs": 0.28746798444588395,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1543.0,
+            "meanMs": 0.007305962410887913,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1533.0,
+            "meanMs": 30.757636203522498,
+            "p95BucketCeilingMs": 250.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 45.99940075,
+            "p95BucketCeilingMs": 250.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          20.0,
+          21.0
+        ],
+        "emptyDispatchObservations": 733.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 3.4382474422454834,
+        "p95": 9.192868936061858
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 467,
+        "None/None": 67,
+        "IO/WalWrite": 1,
+        "IO/WalSync": 3,
+        "Lock/transactionid": 2
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 10.951686899992637,
+      "summary": {
+        "runId": "bench-baseline-b-unordered",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:51:55.570168Z",
+        "lastCompletedAt": "2026-11-09T14:52:07.654394Z",
+        "p50CompletionMs": 6665.3195,
+        "p95CompletionMs": 11250.954849999998,
+        "p99CompletionMs": 11478.26501,
+        "maxCompletionMs": 11551.901
+      },
+      "label": "bench-baseline-b-unordered",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 12.08422589302063,
+      "workflowsPerSecond": 16.55050160188681,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 22.745241,
+        "hub": 7.206048,
+        "hub-2": 7.507592,
+        "lb": 1.308166,
+        "worker-1": 10.187398,
+        "worker-2": 7.357121,
+        "worker-3": 7.21655,
+        "worker-4": 7.915976
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 182.455,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0012.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1363.0,
+            "meanMs": 12.264285253118166,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 583.0,
+            "meanMs": 3.3753994854202336,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1364.0,
+            "meanMs": 0.25846928152492676,
+            "p95BucketCeilingMs": 2.5
+          },
+          "claim_admission_wait": {
+            "observations": 1364.0,
+            "meanMs": 0.006611143695014692,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1363.0,
+            "meanMs": 12.311240058694034,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 42.124922250000004,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          20.0,
+          23.0
+        ],
+        "emptyDispatchObservations": 563.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.11146891117095947,
+        "p95": 5.457001090049744
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 310,
+        "None/None": 36,
+        "IO/WalSync": 3,
+        "LWLock/WALWrite": 1,
+        "Lock/object": 2
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 200,
+      "wallSeconds": 14.03856139999698,
+      "summary": {
+        "runId": "bench-modified-a-keyed",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:49:01.469077Z",
+        "lastCompletedAt": "2026-11-09T14:49:13.928917Z",
+        "p50CompletionMs": 7503.377,
+        "p95CompletionMs": 11830.188450000001,
+        "p99CompletionMs": 11848.565579999999,
+        "maxCompletionMs": 11857.977
+      },
+      "label": "bench-modified-a-keyed",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 12.459839820861816,
+      "workflowsPerSecond": 16.051570716433694,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 29.017795,
+        "hub": 13.810564,
+        "hub-2": 13.917273,
+        "lb": 1.503878,
+        "worker-1": 13.598672,
+        "worker-2": 13.515081,
+        "worker-3": 12.72629,
+        "worker-4": 14.819747
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 221.795,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0015.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1495.0,
+            "meanMs": 15.919149565217383,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 896.0,
+            "meanMs": 3.595306808035715,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1498.0,
+            "meanMs": 0.24236802403204308,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1499.0,
+            "meanMs": 0.011361374249499658,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1495.0,
+            "meanMs": 16.005960401337788,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 36.94589424999998,
+            "p95BucketCeilingMs": 250.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          21.0
+        ],
+        "emptyDispatchObservations": 695.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.9734760522842407,
+        "p95": 2.289030838012695
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 380,
+        "None/None": 45,
+        "IO/WalSync": 5,
+        "Lock/transactionid": 2,
+        "LWLock/WALWrite": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 10.547958299983293,
+      "summary": {
+        "runId": "bench-modified-a-unordered",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:49:33.135525Z",
+        "lastCompletedAt": "2026-11-09T14:49:42.38171Z",
+        "p50CompletionMs": 3919.2785,
+        "p95CompletionMs": 8561.0549,
+        "p99CompletionMs": 8600.691200000001,
+        "maxCompletionMs": 8668.601
+      },
+      "label": "bench-modified-a-unordered",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 9.246185064315796,
+      "workflowsPerSecond": 21.63054260852605,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 23.70752,
+        "hub": 7.827952,
+        "hub-2": 8.415573,
+        "lb": 1.417409,
+        "worker-1": 5.590702,
+        "worker-2": 10.145814,
+        "worker-3": 9.080213,
+        "worker-4": 10.780186
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 184.275,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0012.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1434.0,
+            "meanMs": 11.60539156206414,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_candidate_query": {
+            "observations": 645.0,
+            "meanMs": 3.8993054263565883,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1436.0,
+            "meanMs": 0.276631754874652,
+            "p95BucketCeilingMs": 1.0
+          },
+          "claim_admission_wait": {
+            "observations": 1436.0,
+            "meanMs": 0.010897423398328686,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1434.0,
+            "meanMs": 11.65549309623431,
+            "p95BucketCeilingMs": 25.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 797.0,
+            "meanMs": 35.13496762860728,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          19.0
+        ],
+        "emptyDispatchObservations": 634.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.09055507183074951,
+        "p95": 0.8692720293998714
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 297,
+        "IO/WalSync": 5,
+        "Lock/object": 15,
+        "LWLock/WALWrite": 1,
+        "None/None": 33
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 200,
+      "wallSeconds": 11.526582699996652,
+      "summary": {
+        "runId": "bench-modified-b-keyed",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:50:45.612641Z",
+        "lastCompletedAt": "2026-11-09T14:50:58.482135Z",
+        "p50CompletionMs": 5991.536,
+        "p95CompletionMs": 12247.249,
+        "p99CompletionMs": 12290.745850000001,
+        "maxCompletionMs": 12303.648
+      },
+      "label": "bench-modified-b-keyed",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 12.869493961334229,
+      "workflowsPerSecond": 15.540626585698732,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 30.301897,
+        "hub": 10.719857,
+        "hub-2": 11.370395,
+        "lb": 1.427581,
+        "worker-1": 6.79956,
+        "worker-2": 9.11974,
+        "worker-3": 6.024209,
+        "worker-4": 12.703201
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 236.82,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0013.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1656.0,
+            "meanMs": 14.006465640096598,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 1060.0,
+            "meanMs": 3.301812924528296,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1657.0,
+            "meanMs": 0.20791937235968658,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1657.0,
+            "meanMs": 0.00813488231744114,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1656.0,
+            "meanMs": 14.051669746376817,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 26.523407124999977,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          12.0,
+          13.0
+        ],
+        "emptyDispatchObservations": 856.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.6138330698013306,
+        "p95": 2.2025183081626887
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 318,
+        "IO/WalSync": 3,
+        "Lock/object": 15,
+        "None/None": 41,
+        "LWLock/WALWrite": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 13.05819059998612,
+      "summary": {
+        "runId": "bench-modified-b-unordered",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:50:14.610278Z",
+        "lastCompletedAt": "2026-11-09T14:50:28.601408Z",
+        "p50CompletionMs": 12438.684000000001,
+        "p95CompletionMs": 13475.93935,
+        "p99CompletionMs": 13486.16809,
+        "maxCompletionMs": 13491.245
+      },
+      "label": "bench-modified-b-unordered",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 13.991130113601685,
+      "workflowsPerSecond": 14.294770928158766,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 26.019767,
+        "hub": 12.654448,
+        "hub-2": 12.268637,
+        "lb": 1.474502,
+        "worker-1": 16.569387,
+        "worker-2": 12.288354,
+        "worker-3": 11.004699,
+        "worker-4": 14.527479
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 197.55,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0014.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 1745.0,
+            "meanMs": 10.283708022922639,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_candidate_query": {
+            "observations": 976.0,
+            "meanMs": 3.7651435450819637,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 1747.0,
+            "meanMs": 0.0810856897538637,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 1747.0,
+            "meanMs": 0.009501030337721808,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 1745.0,
+            "meanMs": 10.338095186246422,
+            "p95BucketCeilingMs": 25.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 800.0,
+            "meanMs": 26.90895425000001,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          12.0,
+          14.0
+        ],
+        "emptyDispatchObservations": 945.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.05441105365753174,
+        "p95": 1.167588400840759
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 358,
+        "None/None": 40,
+        "IO/WalSync": 5,
+        "Lock/object": 1,
+        "LWLock/WALWrite": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 80,
+      "wallSeconds": 32.17749440000625,
+      "summary": {
+        "runId": "missed-notifications",
+        "total": 80,
+        "ready": 0,
+        "running": 0,
+        "completed": 80,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:54:21.248095Z",
+        "lastCompletedAt": "2026-11-09T14:54:52.872203Z",
+        "p50CompletionMs": 15414.625,
+        "p95CompletionMs": 26439.675499999987,
+        "p99CompletionMs": 31519.13337,
+        "maxCompletionMs": 31529.401
+      },
+      "label": "missed-notifications",
+      "audit": {
+        "submitted": 80,
+        "completed": 80,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 80,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 80,
+        "durableResults": 80,
+        "taskStates": {
+          "2": 320
+        }
+      },
+      "serverSeconds": 31.62410807609558,
+      "workflowsPerSecond": 2.529715614666501,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 13.979481,
+        "hub": 13.307571,
+        "hub-2": 13.066448,
+        "lb": 0.736675,
+        "worker-1": 12.144176,
+        "worker-2": 9.554504,
+        "worker-3": 9.896206,
+        "worker-4": 11.337247
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 250.525,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0033.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 93.0,
+            "meanMs": 16.648161290322577,
+            "p95BucketCeilingMs": 100.0
+          },
+          "claim_candidate_query": {
+            "observations": 173.0,
+            "meanMs": 2.0342618497109823,
+            "p95BucketCeilingMs": 5.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 414.0,
+            "meanMs": 0.009364251207729463,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 414.0,
+            "meanMs": 0.008232608695652177,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 93.0,
+            "meanMs": 16.695290322580643,
+            "p95BucketCeilingMs": 100.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          16.0,
+          17.0
+        ],
+        "emptyDispatchObservations": 93.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 11.349030017852783,
+        "p95": 23.23093402385711
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 801,
+        "None/None": 41,
+        "IO/WalSync": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 11.696956200001296,
+      "summary": {
+        "runId": "overhead-off-a",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:53:32.028429Z",
+        "lastCompletedAt": "2026-11-09T14:53:44.835456Z",
+        "p50CompletionMs": 6877.511,
+        "p95CompletionMs": 12284.1427,
+        "p99CompletionMs": 12333.46616,
+        "maxCompletionMs": 12352.38
+      },
+      "label": "overhead-off-a",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 12.807026863098145,
+      "workflowsPerSecond": 15.616426992612558,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 24.119894,
+        "hub": 9.3555,
+        "hub-2": 9.109156,
+        "lb": 1.332308,
+        "worker-1": 10.720425,
+        "worker-2": 14.532528,
+        "worker-3": 10.402567,
+        "worker-4": 8.865711
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 184.735,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0013.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_candidate_query": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_db_connection_acquire": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_admission_wait": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "matching_dispatch_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          0.0,
+          0.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          0.0,
+          0.0
+        ],
+        "emptyDispatchObservations": 0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.09551453590393066,
+        "p95": 4.090881752967834
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 331,
+        "None/None": 38,
+        "IO/WalSync": 3,
+        "Lock/object": 3,
+        "IO/WalInitWrite": 1,
+        "LWLock/WALWrite": 3
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 200,
+      "wallSeconds": 12.253486400004476,
+      "summary": {
+        "runId": "overhead-off-b",
+        "total": 200,
+        "ready": 0,
+        "running": 0,
+        "completed": 200,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:53:50.783189Z",
+        "lastCompletedAt": "2026-11-09T14:54:01.580932Z",
+        "p50CompletionMs": 4005.657,
+        "p95CompletionMs": 8560.226850000001,
+        "p99CompletionMs": 10228.56458,
+        "maxCompletionMs": 10306.373
+      },
+      "label": "overhead-off-b",
+      "audit": {
+        "submitted": 200,
+        "completed": 200,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 200,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 200,
+        "durableResults": 200,
+        "taskStates": {
+          "2": 800
+        }
+      },
+      "serverSeconds": 10.79774284362793,
+      "workflowsPerSecond": 18.52238962312628,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 22.402898,
+        "hub": 7.637751,
+        "hub-2": 6.981339,
+        "lb": 1.297454,
+        "worker-1": 7.711732,
+        "worker-2": 9.961413,
+        "worker-3": 7.24993,
+        "worker-4": 7.02919
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 189.945,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0014.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_candidate_query": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_db_connection_acquire": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_admission_wait": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "matching_dispatch_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          0.0,
+          0.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          0.0,
+          0.0
+        ],
+        "emptyDispatchObservations": 0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.07645201683044434,
+        "p95": 1.690638613700866
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 371,
+        "None/None": 34
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 40,
+      "wallSeconds": 6.807585800008383,
+      "summary": {
+        "runId": "overhead-off-warmup",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:53:19.807809Z",
+        "lastCompletedAt": "2026-11-09T14:53:25.770164Z",
+        "p50CompletionMs": 1639.6965,
+        "p95CompletionMs": 5883.0443000000005,
+        "p99CompletionMs": 5891.08691,
+        "maxCompletionMs": 5893.322
+      },
+      "label": "overhead-off-warmup",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 5.962354898452759,
+      "workflowsPerSecond": 6.708758650106533,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 6.010912,
+        "hub": 6.963445,
+        "hub-2": 8.443661,
+        "lb": 0.360727,
+        "worker-1": 6.678167,
+        "worker-2": 7.233776,
+        "worker-3": 7.302998,
+        "worker-4": 6.938708
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 206.175,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0008.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_candidate_query": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_db_connection_acquire": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "claim_admission_wait": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "matching_dispatch_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          0.0,
+          0.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          0.0,
+          0.0
+        ],
+        "emptyDispatchObservations": 0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.1045680046081543,
+        "p95": 0.34964993000030514
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 215,
+        "None/None": 11,
+        "IO/WalSync": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 40,
+      "wallSeconds": 4.884982899995521,
+      "summary": {
+        "runId": "warmup2-baseline-a-keyed",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:48:05.669401Z",
+        "lastCompletedAt": "2026-11-09T14:48:09.684592Z",
+        "p50CompletionMs": 3251.853,
+        "p95CompletionMs": 3937.3043999999995,
+        "p99CompletionMs": 3976.30008,
+        "maxCompletionMs": 3976.701
+      },
+      "label": "warmup2-baseline-a-keyed",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 4.015191078186035,
+      "workflowsPerSecond": 9.962165989388236,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 6.126071,
+        "hub": 2.382143,
+        "hub-2": 1.956479,
+        "lb": 0.28245,
+        "worker-1": 2.29956,
+        "worker-2": 1.393814,
+        "worker-3": 1.469204,
+        "worker-4": 1.966211
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 247.8,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0006.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 372.0,
+            "meanMs": 10.102861290322554,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 257.0,
+            "meanMs": 2.5952610894941577,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 372.0,
+            "meanMs": 0.005164247311827831,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 372.0,
+            "meanMs": 0.005628494623655892,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 372.0,
+            "meanMs": 10.146913709677419,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 160.0,
+            "meanMs": 27.633315625000023,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          18.0
+        ],
+        "emptyDispatchObservations": 212.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.31775450706481934,
+        "p95": 3.026979351043701
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 182,
+        "None/None": 7,
+        "Timeout/VacuumDelay": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 40,
+      "wallSeconds": 2.6522676999738906,
+      "summary": {
+        "runId": "warmup2-baseline-a-unordered",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:47:34.994183Z",
+        "lastCompletedAt": "2026-11-09T14:47:36.991885Z",
+        "p50CompletionMs": 1635.054,
+        "p95CompletionMs": 1901.41425,
+        "p99CompletionMs": 1911.32651,
+        "maxCompletionMs": 1914.794
+      },
+      "label": "warmup2-baseline-a-unordered",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 1.99770188331604,
+      "workflowsPerSecond": 20.02300760391881,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 5.080868,
+        "hub": 5.201245,
+        "hub-2": 5.212513,
+        "lb": 0.288202,
+        "worker-1": 5.691741,
+        "worker-2": 5.653946,
+        "worker-3": 5.263633,
+        "worker-4": 4.568587
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 185.475,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0004.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 96.0,
+            "meanMs": 12.009573958333332,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 97.0,
+            "meanMs": 4.837039175257731,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 254.0,
+            "meanMs": 0.04258425196850394,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 254.0,
+            "meanMs": 0.011305511811023626,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 96.0,
+            "meanMs": 12.104302083333328,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          19.0
+        ],
+        "emptyDispatchObservations": 96.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.14167451858520508,
+        "p95": 0.415371036529541
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 124,
+        "None/None": 7
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 40,
+      "wallSeconds": 3.2328856000094675,
+      "summary": {
+        "runId": "warmup2-baseline-b-keyed",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:51:15.079556Z",
+        "lastCompletedAt": "2026-11-09T14:51:17.637522Z",
+        "p50CompletionMs": 1949.2905,
+        "p95CompletionMs": 2391.74365,
+        "p99CompletionMs": 2492.91131,
+        "maxCompletionMs": 2543.639
+      },
+      "label": "warmup2-baseline-b-keyed",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 2.5579659938812256,
+      "workflowsPerSecond": 15.63742445977854,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 6.5304,
+        "hub": 6.540055,
+        "hub-2": 6.340434,
+        "lb": 0.31491,
+        "worker-1": 5.113881,
+        "worker-2": 5.294923,
+        "worker-3": 6.527115,
+        "worker-4": 5.564598
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 229.625,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0005.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 160.0,
+            "meanMs": 13.34818875,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 203.0,
+            "meanMs": 3.6688827586206902,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 321.0,
+            "meanMs": 0.018518380062305297,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 321.0,
+            "meanMs": 0.09694735202492216,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 160.0,
+            "meanMs": 13.437579375,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          20.0,
+          22.0
+        ],
+        "emptyDispatchObservations": 160.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.417449951171875,
+        "p95": 0.7694031238555908
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 135,
+        "None/None": 11
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 40,
+      "wallSeconds": 1.6815154000069015,
+      "summary": {
+        "runId": "warmup2-baseline-b-unordered",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:51:48.723643Z",
+        "lastCompletedAt": "2026-11-09T14:51:49.756107Z",
+        "p50CompletionMs": 783.543,
+        "p95CompletionMs": 994.0178,
+        "p99CompletionMs": 1000.10208,
+        "maxCompletionMs": 1002.804
+      },
+      "label": "warmup2-baseline-b-unordered",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 1.0324640274047852,
+      "workflowsPerSecond": 38.7422698886125,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 3.86791,
+        "hub": 1.313334,
+        "hub-2": 1.390759,
+        "lb": 0.239769,
+        "worker-1": 1.916649,
+        "worker-2": 1.979264,
+        "worker-3": 1.336944,
+        "worker-4": 1.535999
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 183.8,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0003.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 261.0,
+            "meanMs": 10.058571264367828,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_candidate_query": {
+            "observations": 102.0,
+            "meanMs": 3.1466647058823773,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 261.0,
+            "meanMs": 0.004975862068966633,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 261.0,
+            "meanMs": 0.005409195402298835,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 261.0,
+            "meanMs": 10.09567011494257,
+            "p95BucketCeilingMs": 25.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 120.0,
+            "meanMs": 31.80215333333337,
+            "p95BucketCeilingMs": 100.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          20.0,
+          21.0
+        ],
+        "emptyDispatchObservations": 101.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.11474847793579102,
+        "p95": 0.16115229129791256
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 104,
+        "None/None": 4
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 40,
+      "wallSeconds": 6.002396299998509,
+      "summary": {
+        "runId": "warmup2-modified-a-keyed",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:48:49.865233Z",
+        "lastCompletedAt": "2026-11-09T14:48:55.177622Z",
+        "p50CompletionMs": 4351.4835,
+        "p95CompletionMs": 5201.5144,
+        "p99CompletionMs": 5236.729130000001,
+        "maxCompletionMs": 5240.993
+      },
+      "label": "warmup2-modified-a-keyed",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 5.312389135360718,
+      "workflowsPerSecond": 7.529568896553349,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 6.534963,
+        "hub": 8.677104,
+        "hub-2": 8.224311,
+        "lb": 0.352266,
+        "worker-1": 7.274551,
+        "worker-2": 7.37554,
+        "worker-3": 7.141331,
+        "worker-4": 8.097655
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 242.575,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0007.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 261.0,
+            "meanMs": 7.854370114942529,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_candidate_query": {
+            "observations": 301.0,
+            "meanMs": 2.792078737541528,
+            "p95BucketCeilingMs": 5.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 421.0,
+            "meanMs": 0.01183182897862233,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 421.0,
+            "meanMs": 0.01006912114014252,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 261.0,
+            "meanMs": 7.9331030651341,
+            "p95BucketCeilingMs": 25.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          19.0
+        ],
+        "emptyDispatchObservations": 261.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.07913994789123535,
+        "p95": 0.3499277710914611
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 197,
+        "None/None": 15,
+        "IO/WalSync": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 40,
+      "wallSeconds": 4.046869599987986,
+      "summary": {
+        "runId": "warmup2-modified-a-unordered",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:49:23.828487Z",
+        "lastCompletedAt": "2026-11-09T14:49:27.27489Z",
+        "p50CompletionMs": 1147.3705,
+        "p95CompletionMs": 3354.1225,
+        "p99CompletionMs": 3400.3190299999997,
+        "maxCompletionMs": 3404.618
+      },
+      "label": "warmup2-modified-a-unordered",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 3.4464030265808105,
+      "workflowsPerSecond": 11.606303642230767,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 5.635585,
+        "hub": 2.068854,
+        "hub-2": 1.933328,
+        "lb": 0.343574,
+        "worker-1": 2.621219,
+        "worker-2": 1.115853,
+        "worker-3": 3.038304,
+        "worker-4": 1.730463
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 202.7,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0005.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 300.0,
+            "meanMs": 12.325489666666686,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 159.0,
+            "meanMs": 3.93246792452831,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 299.0,
+            "meanMs": 0.0309956521739132,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 299.0,
+            "meanMs": 0.012816722408026783,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 300.0,
+            "meanMs": 12.390130333333335,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 120.0,
+            "meanMs": 46.38289083333328,
+            "p95BucketCeilingMs": 250.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          18.0,
+          19.0
+        ],
+        "emptyDispatchObservations": 155.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.19375109672546387,
+        "p95": 0.3814067721366854
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 144,
+        "IO/WalWrite": 1,
+        "Lock/object": 3,
+        "None/None": 13,
+        "IO/WalSync": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "keyed",
+      "count": 40,
+      "wallSeconds": 4.904298699984793,
+      "summary": {
+        "runId": "warmup2-modified-b-keyed",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:50:35.457783Z",
+        "lastCompletedAt": "2026-11-09T14:50:39.35535Z",
+        "p50CompletionMs": 1263.6975,
+        "p95CompletionMs": 3785.0924999999997,
+        "p99CompletionMs": 3851.3382,
+        "maxCompletionMs": 3853.842
+      },
+      "label": "warmup2-modified-b-keyed",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {
+          "keys": 8,
+          "keysSpanningPartitions": 8,
+          "sequenceInversions": 0,
+          "overlappingAttemptIntervals": 0
+        },
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 3.8975670337677,
+      "workflowsPerSecond": 10.262812583708868,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 6.552655,
+        "hub": 2.288409,
+        "hub-2": 2.487897,
+        "lb": 0.400251,
+        "worker-1": 1.453528,
+        "worker-2": 1.523113,
+        "worker-3": 2.080162,
+        "worker-4": 2.821947
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 237.8,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0006.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 335.0,
+            "meanMs": 13.639737014925378,
+            "p95BucketCeilingMs": 50.0
+          },
+          "claim_candidate_query": {
+            "observations": 216.0,
+            "meanMs": 3.150969444444454,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 336.0,
+            "meanMs": 0.04460982142857134,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 336.0,
+            "meanMs": 0.011631249999999963,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 335.0,
+            "meanMs": 13.709225671641805,
+            "p95BucketCeilingMs": 50.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 120.0,
+            "meanMs": 46.1264725,
+            "p95BucketCeilingMs": 250.0
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          12.0,
+          13.0
+        ],
+        "emptyDispatchObservations": 175.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.310791015625,
+        "p95": 0.634017252922058
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 177,
+        "None/None": 9,
+        "Lock/transactionid": 1,
+        "Lock/tuple": 1,
+        "IO/WalSync": 1
+      },
+      "samplingErrors": 0
+    },
+    {
+      "mode": "unordered",
+      "count": 40,
+      "wallSeconds": 5.942590200022096,
+      "summary": {
+        "runId": "warmup2-modified-b-unordered",
+        "total": 40,
+        "ready": 0,
+        "running": 0,
+        "completed": 40,
+        "failed": 0,
+        "firstCreatedAt": "2026-11-09T14:50:03.388457Z",
+        "lastCompletedAt": "2026-11-09T14:50:08.257088Z",
+        "p50CompletionMs": 3030.9065,
+        "p95CompletionMs": 4639.53885,
+        "p99CompletionMs": 4760.99374,
+        "maxCompletionMs": 4795.171
+      },
+      "label": "warmup2-modified-b-unordered",
+      "audit": {
+        "submitted": 40,
+        "completed": 40,
+        "keyedFifo": {},
+        "failed": 0,
+        "activityAttempts": 40,
+        "extraActivityAttempts": 0,
+        "durableCompletions": 40,
+        "durableResults": 40,
+        "taskStates": {
+          "2": 160
+        }
+      },
+      "serverSeconds": 4.868630886077881,
+      "workflowsPerSecond": 8.21586210496717,
+      "cpuSecondsIncludingSamplingTail": {
+        "pg": 7.828568,
+        "hub": 8.532864,
+        "hub-2": 8.791133,
+        "lb": 0.388278,
+        "worker-1": 7.599026,
+        "worker-2": 7.279408,
+        "worker-3": 7.206139,
+        "worker-4": 7.054966
+      },
+      "dbStatementCounterDecreases": 0,
+      "dbCallsPerWorkflowIncludingBackground": 223.675,
+      "metricWindow": {
+        "firstFile": "metrics-0000.prom",
+        "lastFile": "metrics-0007.prom",
+        "stages": {
+          "claim_duration": {
+            "observations": 239.0,
+            "meanMs": 8.66043849372385,
+            "p95BucketCeilingMs": 25.0
+          },
+          "claim_candidate_query": {
+            "observations": 242.0,
+            "meanMs": 3.4042388429752064,
+            "p95BucketCeilingMs": 10.0
+          },
+          "claim_db_connection_acquire": {
+            "observations": 400.0,
+            "meanMs": 0.0132575,
+            "p95BucketCeilingMs": 0.5
+          },
+          "claim_admission_wait": {
+            "observations": 400.0,
+            "meanMs": 0.011442750000000007,
+            "p95BucketCeilingMs": 0.5
+          },
+          "matching_dispatch_duration": {
+            "observations": 239.0,
+            "meanMs": 8.728741841004178,
+            "p95BucketCeilingMs": 25.0
+          },
+          "worker_completion_http_duration": {
+            "observations": 0,
+            "meanMs": null,
+            "p95BucketCeilingMs": null
+          }
+        },
+        "sseSessionsSampleRange": [
+          32.0,
+          32.0
+        ],
+        "activeInterHubHttpConnectionSampleRangeIncludingControl": [
+          12.0,
+          14.0
+        ],
+        "emptyDispatchObservations": 239.0
+      },
+      "activityCreatedToFirstLeaseSeconds": {
+        "p50": 0.0857384204864502,
+        "p95": 0.530567467212677
+      },
+      "dbWaitPointSampleCountsNotDurations": {
+        "Client/ClientRead": 188,
+        "None/None": 12
+      },
+      "samplingErrors": 0
+    }
+  ]
+}

@@ -8,6 +8,16 @@ Status: **experimental native fluent runtime and sequential compatibility path**
 Branch: `feat/hub-remote-processor-scheduler`; based on `refactor/scaling-project-layout`.
 See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 
+For sharded SSE owner loss, see the [recovery validation](cadence-inspired-scaling-validation.md)
+and [design](cadence-inspired-scaling-design.md). A preferred peer's connection
+or header timeout now permits a conditional PostgreSQL takeover after expiry;
+failure of a live owner's transport never authorizes stealing its lease.
+Accepted SSE bodies have no three-second header deadline. Task execution leases
+remain independent, so uncertain deliveries can still wait for normal expiry.
+`WFC_HUB_OWNER_DIAGNOSTICS=true` enables route exception logs for investigation;
+unset it afterward. Check owner epochs/DB time and trusted peer reachability when
+diagnosing 503, and do not infer recovery from health checks alone.
+
 ## Implemented boundaries
 
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
