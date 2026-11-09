@@ -1,0 +1,842 @@
+[
+  {
+    "path": "scaling/docs/sse-task-distributor-walkthrough.md",
+    "bytes": 45221,
+    "sha256": "782406aa0ab51643cfbf6189a844138a17bee074957ad515db07fe747c8aa77a"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-measurement-report.md",
+    "bytes": 30341,
+    "sha256": "905384fd56c1f7627c290e8ad202e695f0379ddd8181f54fb655eaacea33a58e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/cleanup.txt",
+    "bytes": 641,
+    "sha256": "020b7a41b9f7e6f73b4a6a0396091a8e585f44f635212f81058be6fa510505bd"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/compose.measurement.yaml",
+    "bytes": 347,
+    "sha256": "aeaa309c64c9a0bbe91b85b44ace74fa0b2b3aa6b6f388d17e9c97ae010cad00"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/compose.prometheus-measurement.yaml",
+    "bytes": 117,
+    "sha256": "50116a36c172d99062eec72935b0560e815594694c9a57e6b0e8cd1734ff78a8"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/analyze.py",
+    "bytes": 3012,
+    "sha256": "b066d8dd7839d67affa87f508bdadf388613e1e1f2c37dfa7251c47c408e7388"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/build-identity.txt",
+    "bytes": 2821,
+    "sha256": "c7276d26290f1ba688ba49c25748c266bde4564c6703f13555a8d8577037afec"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/cleanup.txt",
+    "bytes": 813,
+    "sha256": "7eba823ab80b55e77896b500f9efedd9765b6e12372be7b1ac7d48c5874f68bb"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/compare.ps1",
+    "bytes": 3211,
+    "sha256": "7bf484233ca7b22f903734e411404e59b820413f7d75ec49613da66efd7cb74c"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/comparison-summary.json",
+    "bytes": 3011,
+    "sha256": "f43fda1293e1f5727eb3b4812b42c09639aa38f7d31f3c80cd75d8b4ce890c8d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/compose.keys.yaml",
+    "bytes": 340,
+    "sha256": "738b554a474e29341d17fca7e8569221b97271b2c35fd6e7c307819aadac8339"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/cpu-threadpool.txt",
+    "bytes": 1360,
+    "sha256": "ba0c4ce9bd3670d607c25a368cc6fd6a3de51ee28d39d989f38619b1f17dbaa5"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-decomposition.json",
+    "bytes": 3790920,
+    "sha256": "75ff95defb61b4d9abe4687b6240ec04f06a3e730bf6a4ec85dacad7169cf00b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "19c3f54fb259062404ea612663adb387ce68d01c558b040123b41b0a080c59e0"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "89e7fed106b7cb7a4aeb3d5b4784de0d7c5f4e9af78eb77fa77bbf4a6b4fb89c"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-summary.json",
+    "bytes": 5610,
+    "sha256": "14e5efd17baf13aa41fc6442640eec69566c9e451410aa4de0bbdd83c13977aa"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "87873912ae55bbf34645e66d044b9e054210ef8185eb4801028a5b7b47358a80"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109-verifier.log",
+    "bytes": 607,
+    "sha256": "88cf41fddadb079c162762e51ccb4da6dd052e91c73513bf1192d5b749569c86"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-a-20261109.log",
+    "bytes": 13077,
+    "sha256": "dde87e77e21d8fc0adbe51b12ac151b6ec59528bdc2d0f1d4a59a177686c5d8f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-decomposition.json",
+    "bytes": 4176648,
+    "sha256": "0ffe180f403682e2bd1e53ae418008aab69c7e05b1155d4b158b50646687c563"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "5a616c251388f47ea50a0ea4d14be2379deba761015af5e24a544e9fa21bc860"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "38c4d52385c87d662bbf35e57ceba8f540760e68a832eb2792e500f8244e54ca"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-summary.json",
+    "bytes": 5638,
+    "sha256": "66eb2d06bbc386170e88281cb573a709eae1f2a1ce69493ac5984cc98aa22408"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-verification.json",
+    "bytes": 549,
+    "sha256": "929783cbe0d2312cb7364e3e0764738e7c1fcffe15acdfb5ee85beee6dcdea1b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109-verifier.log",
+    "bytes": 610,
+    "sha256": "057919533954c984f027e5a8f361b9e899049bff4f1c4fb363ee7a318588c586"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key1-b-20261109.log",
+    "bytes": 15361,
+    "sha256": "77a1d47b3f799e0ad727815b18ae7895356b2914a6503759f6f94971e26fde30"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-decomposition.json",
+    "bytes": 2280498,
+    "sha256": "1dbf48f71f886c61673696af0867876ae0560c5a2f13d8878336b6ff00120868"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "0755492900b250cdeb755c86b9f6ef9440b22817e95a952481ec5fa62dda8085"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "c2641f6f0599efb92e2b839301f329cbc44aa55a992e2913eac5e07983fc1a7e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-summary.json",
+    "bytes": 5648,
+    "sha256": "4373e0e263fe4ff94ae4ac8457466fc280b077a2b7b4dc2cfb1dacbcfbb1f49c"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "62aa5ba0b0670a72ecf61e69255d0499961663212255f765ff7ef0717f3ecc66"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109-verifier.log",
+    "bytes": 607,
+    "sha256": "f9015ea5086e21d8527b3566957ef97d3509f3788d20dc71c55a7647b7719374"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-a-20261109.log",
+    "bytes": 2432,
+    "sha256": "9d5a3b2803d5e41fba03cbdff5bdb8bfd1cdc3dde780b457b3d7bb49e36b899f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-decomposition.json",
+    "bytes": 2381835,
+    "sha256": "b07e4344b4c929a055dad989838847e5af3c93a3e977df928711a89f62f40edc"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "26dfd19e78a88d6838f9ae5bf0ffd523bfb1f87d7f573a490a01e77edf7b6ed8"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "296044cfd693d59df93fcb7b5eca8535060890c24b9b0a3e5ad18c4e31cca8f6"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-summary.json",
+    "bytes": 5651,
+    "sha256": "614aecd76e0ae8c8c1c7188ecdad8ef22eef73a5c0062d83e71ffcc6bed70a8e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "e5e926fd89e5786536223495882d4dba5986946798c9f163400b8c8099898010"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109-verifier.log",
+    "bytes": 607,
+    "sha256": "7c1f128dc4ddf25b8e8b2ea6bb82462960ddc86606fda70c773c5383705ded60"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key32-b-20261109.log",
+    "bytes": 2709,
+    "sha256": "d1234b3f4928018873e9c79f262ecb74796158edc3d3d5fdf4d1b29e82d515aa"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-decomposition.json",
+    "bytes": 2281544,
+    "sha256": "fed85f51a48322e8681d5d7d0e71fb338353ad88e88d525d2c5ac6a34ce7785e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "b27f6c38302faf6d98e9d95c002dc0569dd4f7446452221a69dd21cdfcaea5a1"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "350ee6a3eae2d1ccb8ed2372a99205b4f7e1bf5e8a052062a8e31ad77c2d3719"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-summary.json",
+    "bytes": 5632,
+    "sha256": "4810aff533552ae10143186fde7ad11980149e0bcc51a79a1721ef9cdedf7f87"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "77a5f2c6b1340204786a06d87cb69c59a8ae5e47ae27a09639493a4ae23f826d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109-verifier.log",
+    "bytes": 607,
+    "sha256": "e0a002b4ecef8f6b89c91d578328f04cd7b56cfedd2385be8859617b845dc0d3"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-a-20261109.log",
+    "bytes": 2425,
+    "sha256": "1ea64767a60f0b080c41fb8cebd125c40c90b04b821b883c2b6c4df313025a58"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-decomposition.json",
+    "bytes": 2381576,
+    "sha256": "9db2a11584ea43cc44d9cb93da9bf532ede2a201e8b864fea92b1475fd705ce3"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "dfc45664c72b0f4183778c0d5cabda5338f95376bc77cb145711ef7183271ace"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "121b2ae69b1cd89f2208bc709a501b1ef8441b80765fc8a4786ae45f45a72141"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-summary.json",
+    "bytes": 5621,
+    "sha256": "c1d2aecf6fe997f8caf887372ffb6e095d3ea929645a8fb2ef361020a954bf69"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "6a39999a0c35d6bedf83d74c50e7f645f9ce47ba8f574fe882dfa10624a3110d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109-verifier.log",
+    "bytes": 607,
+    "sha256": "ae56681ef8dc0e75891a7109362fffcd20b8ec82b7d803805bf19fc4bdfda72f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key64-b-20261109.log",
+    "bytes": 2567,
+    "sha256": "4c1d1edf77b6eecdac040f7d3dd575f067e4f1764e14b2575915534a4073c4d3"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-decomposition.json",
+    "bytes": 2378337,
+    "sha256": "edb97771778979f805f68e366aa733c622a39acbcc3557cc0326b96608ac1f57"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "4f83b61f2945fc0ff3cb7e88f5e01403c0bcd5cfb13c3a91aa648d9d7c90732d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "0c52b6bcf1f23591b527729502495cbd9cc9094d7fc3caec11c5bda09bc5ec14"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-summary.json",
+    "bytes": 5586,
+    "sha256": "39440a2ea902619f46fec506322124f068319f53fdfd4485dba6f6a71b67a6f3"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-verification.json",
+    "bytes": 545,
+    "sha256": "963fac022ca2eaaf401ef87458362d614008bb953575f8245a8eb535bc7ba78f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109-verifier.log",
+    "bytes": 606,
+    "sha256": "9287055cafd684dafeb4d9d1b7cf9e88958cea625c69fea9b435dcc02a419dee"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-a-20261109.log",
+    "bytes": 3001,
+    "sha256": "6256208754d4ea4a6486a447df860b8f41d442c46ce79c99898294a67bfc1ddc"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-decomposition.json",
+    "bytes": 2382173,
+    "sha256": "c5adb7a1d0be88eb702cf5ddacf3461552d3ec14ba87a7438a89bef5a8514129"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "4fbe86a8eb6756c9928665c223a01fb6a2db53a18eef9738ed1f9f035a5505c4"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "d31c4dbc7d808b8095e139db200d5b6c5b1784f1e870cb0ffecfb1263e59437f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-summary.json",
+    "bytes": 5565,
+    "sha256": "a042bbc162b7f6e1da8b8646c4ee2551c295bb82ab1a5b5f8cc73452fc93b6ac"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-verification.json",
+    "bytes": 545,
+    "sha256": "6b6614edac91371a8205a98dfb10aa5f050c77c4aab5408bcb707ee50a7f3b66"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109-verifier.log",
+    "bytes": 606,
+    "sha256": "0bb3201a581409f5f72b6e95a878800c69c1ad6bff64337e9f38131c12e01c9f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-key8-b-20261109.log",
+    "bytes": 3004,
+    "sha256": "4628f1f83662caebc256001baef6caaf00b464a4203096a7b950c8ff0e0e074b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-decomposition.json",
+    "bytes": 1906217,
+    "sha256": "5a10a05ebc2cc6dd811f6786e393c5936d9bce6861165bb9401b567068a1cdc7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "cfcd671306c6ce8bb3d318ee7374118b32251febaac6ddabd48186789dc442cc"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "21b73a4aaafb40031af8aad52b7ae2aff2624fa08e0556cd33a6907019245b8d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-summary.json",
+    "bytes": 5658,
+    "sha256": "c99c3c3e1e9719e602d3dbc5a9fcaa8de379d559bddc3472dc1d6d62144c9d4d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-verification.json",
+    "bytes": 559,
+    "sha256": "fb353c4774759ce14ce2d1b3d1d701488d56bb6862b3af7e42a422e4e473882f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109-verifier.log",
+    "bytes": 624,
+    "sha256": "fc23e233cb7a511371e6f0ee9f02c77c75bc7c525d0cd5c8cb0d44dd5f123beb"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-a-20261109.log",
+    "bytes": 2729,
+    "sha256": "4b1a5593b23cecc864a340c84a9a1812502fe70dc3b34f134396e7220f47dd70"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-decomposition.json",
+    "bytes": 2383256,
+    "sha256": "5871220d6ab0c2426d21f9f99870f314ae0b1447dbd4b6ed226c1173f1d46da2"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "e1227319e967601a27fa91209dd99c3253d0d509211c5596683e4e63dcbd4ab8"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "1e277e6c0bbe3333f4e9ddfd8a7c484334ce25a99cb50d6fe1f056dc456ffce4"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-summary.json",
+    "bytes": 5660,
+    "sha256": "b8e9f28d511e64564ad4792cbacdfd955a9deaf431e019f6e092b1d9d8f4b745"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-verification.json",
+    "bytes": 559,
+    "sha256": "145f20b87e159d39d3e3a51373c99c7c470d5c60427a9d5fbe91074b972435bd"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109-verifier.log",
+    "bytes": 624,
+    "sha256": "879159c07415cb02e898321bab044af3540417a417ef0bb1f1b3d0635ff2bcfd"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-unordered-b-20261109.log",
+    "bytes": 3013,
+    "sha256": "b019e2ddf3ecc0bdbcf244a4258e162fec0519a2df5478d2e559dc7b0bb3269b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-decomposition.json",
+    "bytes": 1151502,
+    "sha256": "0290805f9c8a7e9160b62544c18fd8402631a9b809f4fb0a3123ea92f54042d6"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "33020a7bb94a7b8675953e29622847dcfda191ce72deae742d147e665d7fc5d9"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "005f0bce986b330f36b2b266e0512d4fc19446046109972b15435f32c8facac3"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-summary.json",
+    "bytes": 5579,
+    "sha256": "5a6ecc31ef10cd8a907e8c2afc4b4ef2f847115ba72f4f4494a3d3198d40673d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-verification.json",
+    "bytes": 542,
+    "sha256": "b0bcfbbe7fa07d321360921e33763b70e23795f1831c15150be9f1ba8eb8fea6"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109-verifier.log",
+    "bytes": 603,
+    "sha256": "bf493b01a91e165b30db77d3e9be39e933fbfd89c31970e69eb0bd2fc37bbdf8"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/decomp-warm-20261109.log",
+    "bytes": 2281,
+    "sha256": "106e64c13b67667b432f203cc2c7445620dc550e50dfb1ad38af222e1ef53349"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/lease-concurrency.sql",
+    "bytes": 1321,
+    "sha256": "169996d516bb055dc90d3f4780d4f3884e4c4c89e035ff5b9a0c5d51928318b1"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/lease-concurrency.txt",
+    "bytes": 1635,
+    "sha256": "437ca01302c09d1758c2c688dba5efd6c3d2d62ed695ce78f3f0fc7bdf5e3d33"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/means.py",
+    "bytes": 1382,
+    "sha256": "1a2ab5f2db5a8bd98298977d5c60e539267a0013159a41ed57ec8093c9412a86"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/means.txt",
+    "bytes": 2221,
+    "sha256": "3a0978d10bf81b08965582572cbb5f3a5a1026a2bcbe23010420e0206e37ec3a"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/partition-ordering-keys.js",
+    "bytes": 6121,
+    "sha256": "46b9a3f27a2a9930f7fbd6df15985aafced425256a7c947ccdbe3bc17ffa42e7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/prometheus-keyed-1-20261109-decomposition-analysis.txt",
+    "bytes": 3749,
+    "sha256": "69d7c776b1354735c68d207a47f5d52f49f2c5eea3578b0816ff12603708c678"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/prometheus-keyed-1-20261109-decomposition.json",
+    "bytes": 1573756,
+    "sha256": "d73db03801cc29e60041e2b73ed1da850c0b8a74688afb7822e9f7a19599691b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/prometheus-keyed-2-20261109-decomposition-analysis.txt",
+    "bytes": 4194,
+    "sha256": "5d73f3d0ddbd9c02d13095645ffc97769d512852d546c566307a1b4f1ddd1519"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/prometheus-keyed-2-20261109-decomposition.json",
+    "bytes": 2135212,
+    "sha256": "34a58b8db79736885c492d84405181bee70e89cd003488c23700f6f9ab6bd51c"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/query.py",
+    "bytes": 2053,
+    "sha256": "78c4703a1cc36a3e738d0c4122317eed101e1b53ae5564df7f2370247541c553"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/runtime-config.txt",
+    "bytes": 1317,
+    "sha256": "dc52756d6518131fe7d624883d9ca0fc6af8c0f4ce0a19750457497e5ca49c35"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/session.log",
+    "bytes": 54987,
+    "sha256": "886b7447ce078d75e99b5122cc9eadf21b6b6396ebbfad58e84277c39c49b5d7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/single-key-gaps.sql",
+    "bytes": 1645,
+    "sha256": "559743db97e9c71b4b75c380666317571c1897c702c75f52e8c35fed349de325"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/single-key-gaps.txt",
+    "bytes": 756,
+    "sha256": "90da2d0b22698b4e67227edf615db5219e1ca93f0be2327935ffc6225edbde93"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/task-latency.sql",
+    "bytes": 1287,
+    "sha256": "72adf589e2368101ca2c35d4fbadd9ff2fe5e678382b111315eac0446adde875"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/decomposition-20261109/task-latency.txt",
+    "bytes": 2565,
+    "sha256": "50dc4e1669e25651f97b179946b525a4f39a38b4c1aed6529f9224bd0ab7c4e7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/environment.txt",
+    "bytes": 298,
+    "sha256": "e2033620544915d75661707b9e0c8e2e1db4734272d29cba4db599ec73840877"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/failover-hub2-excerpt.txt",
+    "bytes": 584,
+    "sha256": "9ea8aa1fb861597ea6e03f02aea30f9d6623df405ba733893bf874d15d211a5d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/failover-times.txt",
+    "bytes": 70,
+    "sha256": "e5f9986c4d6f2a2c63a3ded241d20e247157d71ffbc00d6060784d62486645f1"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/failover-worker-excerpt.txt",
+    "bytes": 2674,
+    "sha256": "61d5d31b905c3e40c9083b891fc79cd7146df69a96555d67dffeba367da141e4"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/failover.log",
+    "bytes": 18057,
+    "sha256": "4b63bf17d384a84dc50433f0789df10acb6b5f5b7050724e29728014faba7b51"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/failover.ps1",
+    "bytes": 2120,
+    "sha256": "40bfa195f1e19544c0b737d4c162218284c314cd7e671a247c9b37cbed03dc54"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/lane-configuration.txt",
+    "bytes": 182,
+    "sha256": "e018711b4bfb1501f4effcda579d49c3e22c03e1ba548d51c8b31287cb7ad354"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-1-20261109-summary.json",
+    "bytes": 5642,
+    "sha256": "cb00adee97557496e5e26f8314f07196e0827e8cd7fcdfe9099555832cd24011"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-1-20261109-verification.json",
+    "bytes": 550,
+    "sha256": "8ea5334f8eb8ad654670e55b6c6cae52329a8256afba867833fbd384cc2a1f73"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-1-20261109.log",
+    "bytes": 14436,
+    "sha256": "25f27cad2abee087787bcb1832ff245c3c156872de03496d5c8a2e32b75dfc43"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-2-20261109-summary.json",
+    "bytes": 5634,
+    "sha256": "c01c8c051019919e6e6419872035850f176230ebe009993c89a0d4436e07dd19"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-2-20261109-verification.json",
+    "bytes": 549,
+    "sha256": "ee5cd853d4ac2430e249a31772c452e730e3efbe9fb34a537dc7f67b05fb08da"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-failover-2-20261109.log",
+    "bytes": 2364,
+    "sha256": "a54c70ab30d6d04532bd2f4647455e0ebaa6fd9af453e9e16e8da7bcf1aea75d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-1-20261109-summary.json",
+    "bytes": 5624,
+    "sha256": "26041d95a6aa935d333a65ca300560ed7cb9fd0ddb9bcbb95d985faeb22b87d6"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-1-20261109-verification.json",
+    "bytes": 544,
+    "sha256": "50a9043554cd1613cac315baba86192245533b05936d0514ac00fac82963e018"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-1-20261109.log",
+    "bytes": 1949,
+    "sha256": "933cb835e734f6cfe0936cef74d0a26da0d9f07e5157accd98dd6842589fbc43"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-2-20261109-summary.json",
+    "bytes": 5603,
+    "sha256": "752f80f815b7e1734583ecd99a112b3a9431700e70de30f6a4f35f6448d82422"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-2-20261109-verification.json",
+    "bytes": 546,
+    "sha256": "28f8634982c1ae6a70aca7e57e371c058b495d97b9eb44172337b10e3079b6b6"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-keyed-2-20261109.log",
+    "bytes": 2225,
+    "sha256": "427feb236050e40d31f1301302d3cadac0b68c3d4f4bd6f3010d428fd4805935"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-1-20261109-summary.json",
+    "bytes": 5585,
+    "sha256": "c2daf3b67419b0dd3bb91b35b981e6a7905b5b8ff30501fecf99c61f091ec4b7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-1-20261109-verification.json",
+    "bytes": 559,
+    "sha256": "87fc6f9b1cb9522dff1ba9bbd854c087edc53b393b70248bc65374f05382b796"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-1-20261109.log",
+    "bytes": 7929,
+    "sha256": "6e309edee206b983e71063159032c27c89cb1c6e6dd49ab821ad8be73b278b16"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-2-20261109-summary.json",
+    "bytes": 5551,
+    "sha256": "bdf83b485d019a4be1321d9ec933bb178e4d6e2519ae504be9c35ab23f99d6f1"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-2-20261109-verification.json",
+    "bytes": 559,
+    "sha256": "adfdb831ceb87762912086d125cc1ce7a3786e9402147c1e988a3d4021cc454a"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-one-worker-keyed-2-20261109.log",
+    "bytes": 3675,
+    "sha256": "52d987ae099dec37a01c214265256868fdf3e2576e7465fe90191f44bfaa2424"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-1-20261109-summary.json",
+    "bytes": 5675,
+    "sha256": "dfe0d613c25655008b05edcabb90a9625ec4a5d9d4d9346ad178bc3aae57345e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-1-20261109-verification.json",
+    "bytes": 557,
+    "sha256": "d3e7fff4c1959f7cb9e448b6c8e944730827581f0a9aa32806b22007a35074e5"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-1-20261109.log",
+    "bytes": 1817,
+    "sha256": "29ea10feee5bf99108e5ddfc2791984e6a2239903922c2aea52fabde17e7683d"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-2-20261109-summary.json",
+    "bytes": 5605,
+    "sha256": "0917db0165bb74971fc01ad39f1cc68f323819160f2b2aaa84bea6b1ca1d69d2"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-2-20261109-verification.json",
+    "bytes": 556,
+    "sha256": "5c06d8889385735e35f18e0a408728664963174ad4652a9fd3f8ee4b10328a57"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-partition-2-20261109.log",
+    "bytes": 2242,
+    "sha256": "ccea01480e69e7a2ab3b9652253239bdf9f83f8856710129c49a69c7985aabc0"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-1-20261109-summary.json",
+    "bytes": 5564,
+    "sha256": "981a5e23ff9b6901a8bb42e9b7f73399948f3daa4fb19bd98bd4388860bf0e5e"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-1-20261109-verification.json",
+    "bytes": 556,
+    "sha256": "859d380a66f1c93042e875678980c11f664a2e05c2d914b532c36c9e80f226d7"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-1-20261109.log",
+    "bytes": 2368,
+    "sha256": "e69a6822f0d51355352fcb80186acd19587438c7d8235ee795f68ab71991b6ce"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-2-20261109-summary.json",
+    "bytes": 5627,
+    "sha256": "ba0848f3cdfaf44b6ea1485cbf99c53a8d6b7f205a32737a9174d138b31394c2"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-2-20261109-verification.json",
+    "bytes": 555,
+    "sha256": "d35ffef6af0a2d8096b7e5a52f431e181eab16afee1c40fec21a8f91eec9fa74"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/measure-unordered-2-20261109.log",
+    "bytes": 2093,
+    "sha256": "f78f6b67a6012b37d598befb1a86641e85f8131ec4338a5ac9676ed0c4cf3bec"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/one-worker.log",
+    "bytes": 12400,
+    "sha256": "296c2476c6052664b3924e448e9807a6c0a045eac5e42750a4a0cdf12578fdce"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/one-worker.ps1",
+    "bytes": 1739,
+    "sha256": "14e4b8221128534d17c8f6bc4a7a07ee01f97bca1d3b677e623a63af76d90c39"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/owners-after.txt",
+    "bytes": 871,
+    "sha256": "7eced47d9fe95450226f85bb7ed403ec4144e69abccfa946873996716ddea5ed"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/owners-before.txt",
+    "bytes": 871,
+    "sha256": "1666d74a064b1363bd379e8fc35591093618e9939b7bedd8b39bb86fee4e4b62"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-cleanup.txt",
+    "bytes": 812,
+    "sha256": "bdf3704bcfc64e2adac2d4d782abf3c9a2846abb6acdd12001c9618045e77aaa"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "69a92518b1fa934b25528d38ddec0b545a7eac7447cb57d819e7b1ddd426ae04"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109-prometheus.json",
+    "bytes": 67506,
+    "sha256": "77ff4cd724abdb65eed3bde8d5c03630b2af8f40c0506bf0c3b50f784a9cd44f"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "6028f6a466ed9d9ea4ec3ec2df697c040439fb7a73c8f90f4fa78f40ef9a7fee"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109-summary.json",
+    "bytes": 5684,
+    "sha256": "529021484e48738f4852c6802f716a708b880eed264263125fcac70650efcc03"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109-verification.json",
+    "bytes": 552,
+    "sha256": "cb11a3814140465ac93f260c470ece6075a7162373720219b28f64343668aaa4"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-1-20261109.log",
+    "bytes": 5850,
+    "sha256": "f9924b160b29bfc316a6838b254e724744bc1f5f70bf75c22cc897855bd4c63c"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109-end.txt",
+    "bytes": 30,
+    "sha256": "84dfb21517e90922df2808bc62bdc6684c16b9e3c10bf97810deaff72c949935"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109-prometheus.json",
+    "bytes": 70809,
+    "sha256": "0c33e723d63804ddf32f080570a436b7cc980c1ce1ce48ad0cbcad9f94f13771"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109-start.txt",
+    "bytes": 30,
+    "sha256": "47cd89b196b4f4f01be7282b40880547f9a490d20e334533573a88e6dc29469b"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109-summary.json",
+    "bytes": 5636,
+    "sha256": "099660312cecf2678176c2c6b70ac98712f396416d45092eaa35a8facbec9097"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109-verification.json",
+    "bytes": 552,
+    "sha256": "0420ffedbc83f24476e96d06a4f12d9cc40a828b339fb9d50cf40c22073dcb18"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-keyed-2-20261109.log",
+    "bytes": 5414,
+    "sha256": "57335484d6818bb64d34e9cb7fb3c2ae6d7f8cabe03e04cf282c3f1ceeb13f32"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-metric-names.txt",
+    "bytes": 5960,
+    "sha256": "ccab9ba3de674d63f5d1c08157b69f43563eaac33aabafe8185c4429a48d6b61"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-run.ps1",
+    "bytes": 2072,
+    "sha256": "1db80a2ae3676204b839eab93b3ee086f78b6350cd7afe44a3e4573737e5c9a2"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/prometheus-session.log",
+    "bytes": 14359,
+    "sha256": "ea8c7b1b660ae3ea6d1b1d5f049513b3f6c805b5b6e1d1825059c60a9a0858d5"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/query-prometheus.py",
+    "bytes": 2371,
+    "sha256": "f692654c5acd7350ef158a97a8e116e39cf9d6825f22e84c8f3f31eb18f3a780"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/run.log",
+    "bytes": 18167,
+    "sha256": "8cffc46f1d89765b362203220721b4eb5f23ac76e5f9363a77a74b9df434230a"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/run.ps1",
+    "bytes": 1745,
+    "sha256": "eff70cf1555d61bd91c06f4558fa078745fa39da329208d7879e197fbc0df08a"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/stall-snapshot.txt",
+    "bytes": 1020,
+    "sha256": "788726ddd40f10e3b55eb7feb052a5ee125c05b18df173ffd2df72bdf03ff680"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/start.log",
+    "bytes": 7382,
+    "sha256": "f47a1b1305df60d5caa71deab495d18472aa5c2e1d1d68b1b3364ccd17d06cb2"
+  },
+  {
+    "path": "scaling/docs/sse-scaling-evidence/verify-isolated.py",
+    "bytes": 6211,
+    "sha256": "d0af1523eb5ced2325669e5bd5678683b2c00887e3fdd25d62d2efce24c35717"
+  }
+]

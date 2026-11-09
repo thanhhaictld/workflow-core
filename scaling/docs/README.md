@@ -24,8 +24,9 @@ is enabled in a live deployment.
 ## Matching and performance
 
 The [batch matching and SSE task delivery review/plan](hub-batch-sse-dispatch-plan.md)
-proposes capacity-aware assignments across workers. It is not implemented;
-current SSE continues to carry readiness hints only.
+is historical design context. Default SSE carries readiness hints; experimental
+opt-in [task distribution](sse-task-distributor.md) also pushes committed leases
+under fenced sessions and explicit worker credits.
 
 These documents describe implemented options and specific experiments. Their
 branch names, measurements and comparisons refer to the recorded investigation,
@@ -34,6 +35,8 @@ claiming plus SSE hints; matching long polling is opt-in in code and enabled by
 the HA Compose overlay.
 
 - [Single-owner matching and HA](hub-distributed-matching-ha.md)
+- [Ownership recovery and scaling design](cadence-inspired-scaling-design.md)
+- [Ownership recovery validation and evidence](cadence-inspired-scaling-validation.md)
 - [Multiple matching partitions](hub-matching-multi-partition.md)
 - [Event-gated matching drain](hub-matching-event-gated-drain.md)
 - [PostgreSQL notification design and rollout](hub-postgres-notify-sse.md)
