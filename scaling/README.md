@@ -77,9 +77,9 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
    Current Hub deployments apply migrations 006 through
-   `scaling/sql/023_hub_claim_hub_sequence.sql` in numeric order, as
+   `scaling/sql/025_hub_claim_capability_sequence.sql` in numeric order, as
    configured in Compose and `scripts/dev.ps1`. Migrations 015–019 add activity
-   ordering and matching ownership/hints; 020–023 add reconciliation and claim indexes.
+   ordering and matching ownership/hints; 020–025 add reconciliation and claim indexes.
    Migration 014 enables transaction-committed cross-pod work-ready hints;
    2-second PostgreSQL reconciliation continues to recover missed hints.
 2. Add project reference to `scaling/src/WorkflowCore.Scaling.PostgreSQL`.

@@ -95,6 +95,32 @@ public sealed class HubUnconstrainedBatchClaimTests
     }
 
     [Fact]
+    public async Task NativeBatchDoesNotMixAtomicAndIndividuallyCommittedClaims()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        var registry = new HubPolicyRegistry().Register(hub, "__native_workflow__", 1, 8, _ => { });
+        await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true);
+        var free = await Enqueue(store, registry, hub, "__native_workflow__", "free");
+        var constrained = await Enqueue(store, registry, hub, "__native_workflow__", "constrained");
+        await using (var db = new NpgsqlConnection(Database))
+        {
+            await db.OpenAsync();
+            await using var cmd = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
+                    VALUES (@key,1,true);
+                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
+                    VALUES (@task,@key)
+                """, db);
+            cmd.Parameters.AddWithValue("key", hub + "-resource");
+            cmd.Parameters.AddWithValue("task", constrained);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(free, Assert.Single(await Claim(store, hub, "native-a", 8, "__native_workflow__")).Id);
+        Assert.Equal(constrained, Assert.Single(await Claim(store, hub, "native-b", 8, "__native_workflow__")).Id);
+    }
+
+    [Fact]
     public async Task MixedClaims_BatchOnlyUnconstrained_AndPreserveStrictFifo()
     {
         if (Database is null) return;
