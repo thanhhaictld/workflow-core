@@ -1,0 +1,18 @@
+# The monitor Dockerfile only copies this directory from the build context.
+*
+!scaling/
+!scaling/monitor/
+!scaling/monitor/**
+
+**/bin/
+**/obj/
+**/node_modules/
+**/.next/
+**/test/
+**/tests/
+**/*.test.mjs
+**/*.tsbuildinfo
+**/*.md
+**/.env
+**/.env.*
+scaling/monitor/api/

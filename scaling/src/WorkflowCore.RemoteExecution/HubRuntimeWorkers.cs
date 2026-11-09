@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Http.Json;
@@ -116,6 +117,27 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var matchingPoll=options.LongPollingEnabled &&
             capabilities.Select(c => c.HubId).Distinct().Count() == 1;
         var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        // True Hub-to-worker SSE distribution: server acquires a fenced
+        // lease on readiness and pushes it over a persistent stream. A separate
+        // REST credit frame replenishes capacity after execution completes.
+        if (matchingPoll && options.MatchingPartitions > 1 &&
+            effectiveConcurrency > 0 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_TASK_SSE_PUSH") is
+                ("true" or "1" or "True"))
+        {
+            await RunSseTaskPushAsync(effectiveConcurrency, ct);
+            return;
+        }
+        // Experimental: reserve one actual execution slot for each outstanding
+        // shard poll. The current single rotating poll stays the default.
+        // Do not enable for multi-Hub lanes, which still use SSE/REST fallback.
+        if (matchingPoll && options.MatchingPartitions > 1 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_CAPACITY_FANOUT") is
+                ("true" or "1" or "True"))
+        {
+            await RunCapacityAwarePollsAsync(effectiveConcurrency, ct);
+            return;
+        }
         // Rotating one outstanding long poll per worker lane avoids racing
         // multiple matching partitions into leasing more tasks than slots.
         // A 4-second server hold bounds discovery when a shard has no pollers.
@@ -142,18 +164,17 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         HubLeasedTask[] leases;
                         try
                         {
-                            leases=await client.PostAsync<HubLeasedTask[]>(endpoint,
+                            leases = await ClaimRequestAsync(endpoint,
                                 new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
                                     Math.Min(16,effectiveConcurrency-running.Count),workflows,
                                     matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
-                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null),ct);
+                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null), ct);
                             claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
                         }
                         finally
                         {
-                            HubTelemetry.WorkerClaimHttpDuration.Record(
-                                Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds, _lane,
-                                new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
+                            HubTelemetry.WorkerClaimHttpDuration.Record(Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds,
+                                _lane, new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
                         }
                         if (matchingPoll && options.MatchingPartitions > 1)
                             matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
@@ -230,6 +251,341 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         {
             await Task.WhenAll(running);
             try{await listener;}catch(OperationCanceledException)when(ct.IsCancellationRequested) { }
+        }
+    }
+
+    /// <summary>
+    /// The worker reserves a free execution slot per concurrent long-poll.
+    /// Watching multiple shards eliminates serial four-second shard rotation,
+    /// but cannot increase leased tasks beyond the worker's execution limit.
+    /// Each request asks for MaxTasks=1. This is deliberately NOT Hub push,
+    /// a durable credit registry, or a replacement for PostgreSQL eligibility.
+    /// </summary>
+    private async Task RunCapacityAwarePollsAsync(int capacity, CancellationToken ct)
+    {
+        if (capacity < 1) return;
+        var upperBound = Math.Min(4, Math.Min(capacity, options.MatchingPartitions));
+        var maxPolls = int.TryParse(
+            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_SHARD_POLLS"),
+            out var requested) ? Math.Clamp(requested, 1, upperBound) : upperBound;
+        var planner = new HubShardCapacityPlanner(capacity, options.MatchingPartitions,
+            maxPolls, Random.Shared.Next(options.MatchingPartitions));
+        logger.LogInformation("Capacity-aware shard polling enabled: {Credits} slots, {ShardPolls} concurrent polls, {Shards} matching shards",
+            capacity, maxPolls, options.MatchingPartitions);
+        var active = new List<Task>();
+        var pending = new Dictionary<int, Task<HubLeasedTask[]>>();
+        using var pollStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                active.RemoveAll(task => task.IsCompleted);
+                while (planner.TryReserve(active.Count, out var shard))
+                {
+                    HubTelemetry.WorkerShardPollCredits.Add(1, _lane);
+                    pending.Add(shard, PollReservedShardAsync(shard, pollStop.Token));
+                }
+                var all = active.Concat(pending.Values.Cast<Task>()).ToArray();
+                if (all.Length == 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
+                    continue;
+                }
+                await Task.WhenAny(all);
+                // Release only after each reply has arrived; a pending HTTP
+                // request still consumes one reserved execution credit.
+                foreach (var (shard, poll) in pending.Where(x => x.Value.IsCompleted).ToArray())
+                {
+                    pending.Remove(shard);
+                    planner.Release(shard);
+                    HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
+                    try
+                    {
+                        foreach (var lease in await poll)
+                            active.Add(Run(lease, ct));
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Capacity-aware shard poll failed; retrying");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            await pollStop.CancelAsync();
+            try { await Task.WhenAll(pending.Values); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex) { logger.LogDebug(ex, "Shard polls ended during shutdown"); }
+            foreach (var shard in pending.Keys)
+            {
+                planner.Release(shard);
+                HubTelemetry.WorkerShardPollCredits.Add(-1, _lane);
+            }
+            await Task.WhenAll(active);
+        }
+    }
+
+    private async Task<HubLeasedTask[]> PollReservedShardAsync(int shard, CancellationToken ct)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "error";
+        try
+        {
+            var leases = await ClaimRequestAsync("api/hub/workers/tasks:poll",
+                new HubClaimRequest(_owner,
+                    capabilities.Select(c => c.HubId).Distinct().ToArray(), capabilities,
+                    MaxTasks: 1, Workflows: workflows,
+                    MatchingPartition: shard, MatchingPartitionCount: options.MatchingPartitions), ct);
+            outcome = leases.Length > 0 ? "claimed" : "empty";
+            HubTelemetry.WorkerClaimRequests.Add(1, _lane,
+                new KeyValuePair<string, object?>("outcome", outcome));
+            return leases;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            HubTelemetry.WorkerClaimRequests.Add(1, _lane,
+                new KeyValuePair<string, object?>("outcome", "error"));
+            logger.LogWarning(ex, "Capacity-aware poll of matching shard {Shard} failed", shard);
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            return [];
+        }
+        finally
+        {
+            HubTelemetry.WorkerClaimHttpDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds,
+                _lane, new KeyValuePair<string, object?>("outcome", outcome));
+        }
+    }
+
+    private Task<HubLeasedTask[]> ClaimRequestAsync(string endpoint, HubClaimRequest request, CancellationToken ct) =>
+        InstrumentClaimAsync(endpoint, _lane, () => client.PostAsync<HubLeasedTask[]>(endpoint, request, ct));
+
+    internal static async Task<HubLeasedTask[]> InstrumentClaimAsync(string endpoint,
+        KeyValuePair<string, object?> lane, Func<Task<HubLeasedTask[]>> send)
+    {
+        var transport = new KeyValuePair<string, object?>("transport", endpoint.EndsWith(":poll", StringComparison.Ordinal) ? "poll" : "claim");
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "error";
+        HubTelemetry.ClaimAttempts.Add(1, lane, transport);
+        try
+        {
+            var leases = await send();
+            outcome = leases.Length == 0 ? "empty" : "claimed";
+            if (leases.Length == 0) HubTelemetry.ClaimEmpty.Add(1, lane, transport);
+            HubTelemetry.ClaimBatchSize.Record(leases.Length, lane, transport);
+            foreach (var group in leases.GroupBy(t => t.TaskType is "__workflow__" or "__native_workflow__" ? "workflow" : "activity"))
+                HubTelemetry.ClaimSuccess.Add(group.Count(), new KeyValuePair<string, object?>("lane", group.Key), transport);
+            return leases;
+        }
+        catch (OperationCanceledException)
+        {
+            outcome = "cancelled";
+            throw;
+        }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            HubTelemetry.ClaimHttpDuration.Record(elapsed, lane, transport, new KeyValuePair<string, object?>("outcome", outcome));
+        }
+    }
+
+    /// <summary>
+    /// Hub-side server-push SSE. A lane-wide coordinator owns ALL execution
+    /// slots. It offers one-shot credits to whichever matching shard needs
+    /// work; zero-credit streams still receive ownership-fencing heartbeats.
+    /// No shard can independently overbook the same execution slot.
+    /// </summary>
+    private async Task RunSseTaskPushAsync(int capacity, CancellationToken ct)
+    {
+        capacity = Math.Min(capacity, 64); // the SSE registration protocol bound
+        var credits = new HubSseWorkerCreditCoordinator(capacity, options.MatchingPartitions);
+        var running = new ConcurrentDictionary<Guid, Task>();
+        logger.LogInformation(
+            "SSE task push enabled: {Capacity} globally shared execution slots across {Shards} matching shards",
+            capacity, options.MatchingPartitions);
+        try
+        {
+            var streams = Enumerable.Range(0, options.MatchingPartitions)
+                .Select(shard => RunSseShardAsync(shard, credits, running, ct));
+            await Task.WhenAll(streams.Append(RunSseGrantSchedulerAsync(credits, ct)));
+        }
+        finally
+        {
+            await Task.WhenAll(running.Values);
+        }
+    }
+
+    private async Task RunSseGrantSchedulerAsync(
+        HubSseWorkerCreditCoordinator credits, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            if (!credits.TryOffer(out var offer))
+            {
+                await credits.WaitForChangeAsync(ct);
+                continue;
+            }
+
+            try
+            {
+                // A task is NOT claimed by this call. The server may lease
+                // exactly one task and push it on the matching SSE stream.
+                using var response = await client.Http.PostAsJsonAsync(
+                    "api/hub/workers/tasks:credit",
+                    new {
+                        sessionId = offer.SessionId,
+                        ownerEpoch = offer.OwnerEpoch,
+                        workerId = _owner,
+                        hubId = capabilities[0].HubId,
+                        matchingPartition = offer.Shard,
+                        creditId = offer.CreditId
+                    }, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    credits.OfferFailed(offer);
+                    // 409 / 503 / 404 means the session/owner may have
+                    // transitioned. Reconnect rather than retrying a credit
+                    // blindly into the wrong owner's in-memory registry.
+                    credits.Invalidate(offer.Shard, offer.SessionId);
+                    logger.LogWarning(
+                        "SSE credit grant rejected for shard {Shard}: HTTP {Status}",
+                        offer.Shard, (int)response.StatusCode);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                credits.OfferFailed(offer);
+                credits.Invalidate(offer.Shard, offer.SessionId);
+                logger.LogWarning(ex,
+                    "SSE credit grant transport failure on shard {Shard}", offer.Shard);
+                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+            }
+        }
+    }
+
+    private async Task RunSseShardAsync(int shard,
+        HubSseWorkerCreditCoordinator credits,
+        ConcurrentDictionary<Guid, Task> running, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            Guid sessionId = Guid.Empty;
+            using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post,
+                    "api/hub/workers/tasks:stream");
+                request.Content = JsonContent.Create(new {
+                    claim = new HubClaimRequest(_owner,
+                        capabilities.Select(c => c.HubId).Distinct().ToArray(),
+                        capabilities, MaxTasks: 1, Workflows: workflows,
+                        MatchingPartition: shard,
+                        MatchingPartitionCount: options.MatchingPartitions),
+                    capacity = credits.Capacity,
+                    initialCredits = 0
+                });
+                using var response = await client.Http.SendAsync(request,
+                    HttpCompletionOption.ResponseHeadersRead, sessionStop.Token);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(sessionStop.Token);
+                using var reader = new StreamReader(stream);
+                string? eventName = null;
+                string? payload = null;
+                while (await reader.ReadLineAsync(sessionStop.Token) is string line)
+                {
+                    if (line.StartsWith("event: ", StringComparison.Ordinal))
+                        eventName = line["event: ".Length..];
+                    else if (line.StartsWith("data: ", StringComparison.Ordinal))
+                        payload = line["data: ".Length..];
+                    else if (line.Length == 0)
+                    {
+                        if (eventName == "session" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            var nextId = json.RootElement.GetProperty("sessionId").GetGuid();
+                            var epoch = json.RootElement.GetProperty("ownerEpoch").GetInt64();
+                            credits.Connected(shard, nextId, epoch, () => sessionStop.Cancel());
+                            sessionId = nextId;
+                        }
+                        else if (eventName == "credit.unused" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            credits.Unused(shard, sessionId,
+                                json.RootElement.GetProperty("creditId").GetGuid());
+                        }
+                        else if (eventName == "task.leased" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            var creditId = json.RootElement.GetProperty("creditId").GetGuid();
+                            var task = json.RootElement.GetProperty("task").Deserialize<HubLeasedTask>(
+                                new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                                ?? throw new InvalidOperationException("Empty SSE task lease");
+                            if (!credits.Dispatched(shard, sessionId, creditId, task.Id))
+                            {
+                                // The session or credit was revoked while a
+                                // response was in flight. Never execute an
+                                // unreserved lease; PostgreSQL will recover it.
+                                logger.LogWarning(
+                                    "Ignoring stale/unreserved SSE task {Task} from shard {Shard}",
+                                    task.Id, shard);
+                            }
+                            else
+                            {
+                                var done = new TaskCompletionSource(
+                                    TaskCreationOptions.RunContinuationsAsynchronously);
+                                if (!running.TryAdd(task.Id, done.Task))
+                                {
+                                    credits.Finished(task.Id);
+                                    logger.LogWarning("Duplicate SSE task {Task} rejected", task.Id);
+                                }
+                                else
+                                {
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try { await Run(task, ct); }
+                                        catch (Exception ex)
+                                        {
+                                            logger.LogError(ex,
+                                                "SSE task execution error for {Task}", task.Id);
+                                        }
+                                        finally
+                                        {
+                                            running.TryRemove(task.Id, out _);
+                                            credits.Finished(task.Id);
+                                            done.TrySetResult();
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        eventName = null;
+                        payload = null;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException)
+            {
+                // Session was explicitly invalidated because owner changed,
+                // or a grant was rejected during matching failover.
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "SSE task stream for shard {Shard} disconnected; retrying", shard);
+            }
+            finally
+            {
+                credits.Disconnected(shard, sessionId);
+            }
+            // Existing tasks are allowed to finish independently of session
+            // re-establishment; their PostgreSQL epochs remain authoritative.
+            try { await Task.Delay(TimeSpan.FromMilliseconds(350), ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
     }
 

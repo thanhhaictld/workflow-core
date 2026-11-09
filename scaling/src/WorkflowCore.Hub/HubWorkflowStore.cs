@@ -296,6 +296,7 @@ public sealed class HubWorkflowStore(
             await next.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+        HubTelemetry.ActivitiesCompleted.Add(1);
         HubTelemetry.TasksCompleted.Add(1, HubTelemetry.HubTag(task.HubId),
             HubTelemetry.ActivityTag(task.ActivityType));
         if (task.Step + 1 == task.StepCount)

@@ -31,6 +31,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubMatchingOwnership>();
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
         services.AddSingleton<HubTaskMatcher>();
+        services.AddSingleton<HubSseTaskDistributor>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -188,11 +189,10 @@ public static class HubGatewayEndpoints
         {
             try
             {
-                var result = await native.CommitAsync(id,request,ct);
-                if(result is null)return Results.Conflict(new{error="Stale native lease or revision"});
-                var runtime = await native.GetRuntimeAsync(id,ct);
-                if(runtime is not null)readiness.Publish(runtime.HubId);
-                return Results.Ok(result);
+                var outcome = await native.CommitWithRoutingAsync(id,request,ct);
+                if(outcome is null)return Results.Conflict(new{error="Stale native lease or revision"});
+                readiness.Publish(outcome.HubId);
+                return Results.Ok(outcome.Result);
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(KeyNotFoundException ex){return Results.NotFound(new{error=ex.Message});}
@@ -605,6 +605,9 @@ public static class HubGatewayEndpoints
             }
         });
 
+        // Opt-in worker SSE task distribution; existing events and long-poll
+        // endpoints are preserved for backward compatibility and rollback.
+        routes.MapSseTaskStreaming();
         return app;
     }
 

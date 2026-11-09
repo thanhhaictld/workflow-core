@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using WorkflowCore.Hub;
@@ -22,6 +23,10 @@ public sealed class HubMatchingOwnership : BackgroundService
         AllowAutoRedirect = false,
         ConnectTimeout = TimeSpan.FromSeconds(2)
     }) { Timeout = TimeSpan.FromSeconds(27) };
+    private readonly HttpClient _streamForwarder = new(new SocketsHttpHandler {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(2)
+    }) { Timeout = Timeout.InfiniteTimeSpan };
     private readonly HashSet<string> _trustedPeers;
     private readonly string[] _orderedPeers;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromSeconds(8);
@@ -136,6 +141,17 @@ public sealed class HubMatchingOwnership : BackgroundService
             ? _partitions.OwnsAsync(hub, partition, NodeId, lease.Epoch, ct)
             : Task.FromResult(false);
 
+    /// <summary>
+    /// Unlike checking just the current local owner, this validates the
+    /// exact epoch captured when an SSE stream was registered. Reacquiring
+    /// the shard under a newer generation must invalidate the old stream.
+    /// </summary>
+    public Task<bool> StillOwnsPartitionEpochAsync(
+        string hub, int partition, long epoch, CancellationToken ct) =>
+        _partitionOwned.TryGetValue((hub, partition), out var lease) && lease.Epoch == epoch
+            ? _partitions.OwnsAsync(hub, partition, NodeId, epoch, ct)
+            : Task.FromResult(false);
+
     public Task<HubLeasedTask[]?> ForwardAsync(
         HubMatchingLease owner, HubClaimRequest claim, string authorization, CancellationToken ct) =>
         ForwardToAsync(owner.OwnerUrl, claim, authorization, ct);
@@ -157,6 +173,59 @@ public sealed class HubMatchingOwnership : BackgroundService
         _logger.LogWarning("Matching peer {Url} rejected poll with HTTP {Status}",
             url, (int)response.StatusCode);
         return null;
+    }
+
+    /// <summary>
+    /// Forward SSE without buffering it as an ordinary claim response.
+    /// Clients use the same load-balanced gateway URL; routing to a per-shard
+    /// owner remains a trusted internal forwarding operation.
+    /// </summary>
+    public async Task ForwardSseToAsync(string url,
+        HubSseTaskDistributor.Subscribe request, string authorization,
+        HttpContext context, CancellationToken ct)
+    {
+        url = url.TrimEnd('/');
+        if (!_trustedPeers.Contains(url))
+            throw new InvalidOperationException("SSE owner URL is not a trusted peer");
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            url + "/api/hub/workers/tasks:stream");
+        message.Headers.TryAddWithoutValidation("Authorization", authorization);
+        message.Headers.Add("X-Wfc-Matching-Forwarded", "1");
+        message.Content = JsonContent.Create(request);
+        using var response = await _streamForwarder.SendAsync(message,
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        context.Response.StatusCode = (int)response.StatusCode;
+        if (!response.IsSuccessStatusCode) return;
+        context.Response.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache, no-transform";
+        context.Response.Headers["X-Accel-Buffering"] = "no";
+        await context.Response.StartAsync(ct);
+        // CopyToAsync only flushes when the stream ends, which is wrong for
+        // long-lived SSE frames. Relay and flush every received chunk so
+        // owner-forwarded tasks are actually pushed to the worker promptly.
+        await using var upstream = await response.Content.ReadAsStreamAsync(ct);
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = await upstream.ReadAsync(buffer, ct)) > 0)
+        {
+            await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+            await context.Response.Body.FlushAsync(ct);
+        }
+    }
+
+    public async Task<bool> ForwardSseCreditToAsync(string url,
+        HubSseTaskDistributor.Credit credit, string authorization, CancellationToken ct)
+    {
+        url = url.TrimEnd('/');
+        if (!_trustedPeers.Contains(url))
+            throw new InvalidOperationException("Credit owner URL is not a trusted peer");
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            url + "/api/hub/workers/tasks:credit");
+        message.Headers.TryAddWithoutValidation("Authorization", authorization);
+        message.Headers.Add("X-Wfc-Matching-Forwarded", "1");
+        message.Content = JsonContent.Create(credit);
+        using var response = await _forwarder.SendAsync(message, ct);
+        return response.IsSuccessStatusCode;
     }
 
     private void ValidatePartition(int partition)

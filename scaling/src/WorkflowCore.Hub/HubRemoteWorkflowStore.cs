@@ -400,6 +400,7 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         await WakeProcessorAsync(db,tx,workflowId,hub,partition,revision+1,ct);
         await tx.CommitAsync(ct);
+        HubTelemetry.ActivitiesCompleted.Add(1);
         HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
         return true;
     }

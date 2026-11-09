@@ -1,0 +1,137 @@
+name: Workflow Hub SSE Task Push E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-sse-push-e2e.yml'
+      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseTaskDistributorTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseWorkerCreditCoordinatorTests.cs'
+      - 'scaling/observability/nginx.matching-ha.conf'
+      - 'scaling/observability/compose.yaml'
+      - 'Makefile'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-hub-sse-push-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  push-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '8'
+      WFC_HUB_TASK_SSE_PUSH: 'true'
+      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      # The verifier must use the surviving load-balanced gateway after we
+      # deliberately stop Hub A (which normally publishes port 5100).
+      WFC_HUB_VERIFY_URL: 'http://127.0.0.1:5110'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PowerShell-first Make targets and Compose
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" config --quiet
+          make --dry-run obs-offboarding-sse-up obs-offboarding-sse-test > /tmp/sse-make.txt
+          grep -Fq 'compose.matching-ha.yaml' /tmp/sse-make.txt
+          grep -Fq 'compose.matching-shards.yaml' /tmp/sse-make.txt
+      - name: Build and test SSE distributor credit protocol
+        run: |
+          dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
+            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
+      - name: Start PostgreSQL and two fenced matching Hubs
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+      - name: Start eight SSE task-push processors and verify registration
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
+          test "$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
+          for i in {1..40}; do
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load logs --no-color processor > /tmp/sse-processor.log 2>&1
+            if grep -q 'SSE task push enabled' /tmp/sse-processor.log; then break; fi
+            sleep 2
+          done
+          grep -q 'SSE task push enabled' /tmp/sse-processor.log
+      - name: Run real 100-workflow E2E for every ordering policy
+        run: |
+          set -euo pipefail
+          mkdir -p scaling/observability/results/sse-push
+          chmod 0777 scaling/observability/results scaling/observability/results/sse-push
+          for mode in unordered partition keyed; do
+            run="sse-push-$mode-$GITHUB_RUN_ID"
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+              --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+              -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT=100 \
+              -e K6_POLICY_VUS=40 -e K6_POLICY_TIMEOUT_SECONDS=360 \
+              -e K6_POLICY_RUN_ID="$run" k6-policy
+            python3 scaling/observability/benchmark/verify_ordering.py \
+              --mode "$mode" --run-id "$run" --count 100 \
+              --output "scaling/observability/results/sse-push/$mode.json"
+          done
+      - name: Kill original Hub and verify SSE owner failover under real workload
+        run: |
+          set -euo pipefail
+          # The healthy SSE subscribers have no *executing* tasks here. Their
+          # outstanding offers are allowed to time out / be reclaimed; unit
+          # tests independently prove the zero-credit owner-epoch path.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" stop -t 0 hub
+          # Matching ownership is PostgreSQL-fenced with an 8 s lease.
+          sleep 12
+          curl -fsS http://127.0.0.1:5110/health/ready
+          run="sse-owner-failover-keyed-$GITHUB_RUN_ID"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+            -e K6_POLICY_MODE=keyed -e K6_POLICY_COUNT=100 \
+            -e K6_POLICY_VUS=40 -e K6_POLICY_TIMEOUT_SECONDS=360 \
+            -e K6_POLICY_RUN_ID="$run" k6-policy
+          python3 scaling/observability/benchmark/verify_ordering.py \
+            --mode keyed --run-id "$run" --count 100 \
+            --output "scaling/observability/results/sse-push/failover-keyed.json"
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" up -d hub
+          echo 'PASS: SSE worker reconnection and matching-shard takeover after Hub A failure'
+      - name: Upload ordering evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-sse-task-push
+          path: scaling/observability/results/sse-push/
+          if-no-files-found: warn
+      - name: Print logs on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load logs --tail=150 hub hub-2 hub-lb processor postgres || true
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load --profile policy-k6 down --remove-orphans || true

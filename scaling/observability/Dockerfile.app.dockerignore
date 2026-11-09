@@ -1,0 +1,25 @@
+# Keep the generic .NET build recipe's source and MSBuild configuration.
+*
+!global.json
+!src/
+!src/**
+!scaling/
+!scaling/src/
+!scaling/src/**
+!scaling/sample/
+!scaling/sample/**
+
+# Generated files, test projects, documentation and local configuration are
+# not inputs to the observability application images.
+**/bin/
+**/obj/
+**/node_modules/
+**/.next/
+**/test/
+**/tests/
+**/*.md
+**/.env
+**/.env.*
+src/samples/
+src/extensions/
+src/WorkflowCore.Testing/

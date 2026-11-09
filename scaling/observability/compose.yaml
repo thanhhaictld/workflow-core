@@ -1,4 +1,5 @@
-name: workflow-hub-observability
+# Set by compose.ps1 from the worktree path; required for direct Compose use.
+name: ${WFC_OBSERVABILITY_PROJECT:?Use scaling/observability/compose.ps1 or set a unique WFC_OBSERVABILITY_PROJECT}
 services:
   postgres:
     image: postgres:17
@@ -52,6 +53,7 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/021_hub_active_task_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/023_hub_claim_hub_sequence.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_native_reconcile_tasks.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
@@ -59,6 +61,8 @@ services:
     build:
       context: ../..
       dockerfile: scaling/observability/Dockerfile.monitor
+      args:
+        NODE_IMAGE: ${MONITOR_NODE_IMAGE:-node:22-alpine}
     depends_on:
       hub:
         condition: service_healthy
@@ -120,30 +124,6 @@ services:
     ports:
       - "127.0.0.1:${HUB_PORT:-5100}:5100"
 
-
-  provisioner:
-    build:
-      context: ../..
-      dockerfile: scaling/observability/Dockerfile.app
-      args:
-        PROJECT: scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj
-    command: ["WorkflowCore.Provisioner.Host.dll"]
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      WFC_HUB_URL: http://hub:5100
-      WFC_HUB_AUTH_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Configure a bearer token}
-      WFC_HUB_ALLOW_INSECURE_HTTP: "true"
-      WORKERS: "${WORKERS:-16}"
-      WORKFLOW_WORKERS: "${WORKFLOW_WORKERS:-8}"
-      WFC_HUB_ADAPTIVE_CLAIMS: "${WFC_HUB_ADAPTIVE_CLAIMS:-true}"
-      ACTIVITY_WORKERS: "${ACTIVITY_WORKERS:-16}"
-      WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE: "${WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE:-0}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      WFC_OTEL_LOGS_ENABLED: "true"
-    restart: unless-stopped
-
   # Native-only offboarding processor: 8 replicas, no DB credentials,
   # no routed activities, and no explicit per-resource/FIFO policy.
   processor:
@@ -165,6 +145,9 @@ services:
       WFC_HUB_ADAPTIVE_CLAIMS: "${WFC_HUB_ADAPTIVE_CLAIMS:-true}"
       ACTIVITY_WORKERS: "${POLICY_BENCH_ACTIVITY_WORKERS:-8}"
       WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE: "${WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE:-0}"
+      WFC_HUB_WORKER_CAPACITY_FANOUT: "${WFC_HUB_WORKER_CAPACITY_FANOUT:-false}"
+      WFC_HUB_TASK_SSE_PUSH: "${WFC_HUB_TASK_SSE_PUSH:-false}"
+      WFC_HUB_WORKER_MAX_SHARD_POLLS: "${WFC_HUB_WORKER_MAX_SHARD_POLLS:-4}"
       POLICY_BENCHMARK_ENABLED: "${POLICY_BENCHMARK_ENABLED:-false}"
       POLICY_BENCHMARK_ONLY: "${POLICY_BENCHMARK_ONLY:-false}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

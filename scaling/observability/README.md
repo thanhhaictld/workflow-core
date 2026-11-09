@@ -44,18 +44,32 @@ and the Prometheus scrape interval is 5 seconds.
 
 ## Start everything locally
 
-Requires Docker Desktop or Docker Engine + Compose v2.
+Requires Docker Desktop or Docker Engine + Compose v2, and PowerShell 7.
+The Compose launcher derives a stable project name from the worktree path, so
+each worktree has its own PostgreSQL and observability volumes. Use the launcher
+for every command, including commands with extra Compose files. Moving a
+worktree changes its project name. For direct `docker compose` use, set
+`WFC_OBSERVABILITY_PROJECT` to a unique, stable Compose project name first.
+Host ports still need distinct values in each worktree's `.env` when running
+stacks concurrently.
+
+Existing `workflow-hub-observability_*` volumes are not migrated or deleted;
+the new project starts with fresh volumes. Stop the old project explicitly with
+`docker compose -p workflow-hub-observability ... down` before starting the new
+stack if it is still running (set `WFC_OBSERVABILITY_PROJECT` to
+`workflow-hub-observability` for that command). Back up and migrate any data
+you need separately.
 
 ~~~bash
 # From the repository root:
 cp scaling/observability/.env.example scaling/observability/.env
 # Edit scaling/observability/.env to set strong local token/password.
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   up -d --build --scale provisioner=4
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env ps
 ~~~
 
@@ -77,11 +91,38 @@ environment variables override values in the env file as usual. For example,
 `K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
 that run. `make up` remains the separate PowerShell development stack.
 
+Startup targets build application images by default, reusing Docker's cache
+for unchanged inputs. To rebuild code using a cached Node base image, set
+`MONITOR_NODE_IMAGE` in `.env` to a compatible local Node 22 image (for example,
+`node:22.23.3-bookworm-slim` if `docker image inspect` confirms it exists), then
+run the usual `make obs-offboarding-up` or `make obs-offboarding-sse-up`.
+Both monitor build stages use that image. Package installation may still
+require access to the package registry when dependency layers are uncached.
+If Docker build steps fail with `EAI_AGAIN` while the host can reach package
+registries, create `scaling/observability/.build-resolv.conf` with a reachable
+resolver, for example `nameserver 1.1.1.1` after verifying it works from a
+container. Set `WFC_BUILD_DNS_FILE=.build-resolv.conf` in `.env` and run
+`make obs-offboarding-sse-up OBS_BUILD_DNS=1` (also supported by the other
+startup targets). The optional Compose overlays supply the resolver file to
+the Node and .NET build steps through a temporary BuildKit mount. Runtime and
+Docker daemon DNS settings are unchanged. Omit `OBS_BUILD_DNS=1` to use
+Docker's configured build resolver.
+
+To skip builds entirely when container registries are unavailable, reuse this checkout's cached service
+images with `make obs-offboarding-up OBS_LOCAL_IMAGES=1`. The same option works
+with `obs-up`, `obs-offboarding-fanout-up`, and `obs-offboarding-sse-up`.
+It passes `up --no-build --pull never`, so the monitor uses its existing image
+without resolving or pulling its Node base image. All service images must
+already exist locally for this worktree's Compose project; missing images fail
+instead of being downloaded. Source changes require a later rebuild without
+`OBS_LOCAL_IMAGES=1`. For direct Compose use, place `--no-build --pull never`
+after `up`; `--no-pull` is not a global Compose option.
+
 PowerShell:
 
 ~~~powershell
 Copy-Item scaling/observability/.env.example scaling/observability/.env
-docker compose -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
 The migrate container applies SQL migrations 002–023, followed by the
@@ -145,7 +186,7 @@ run the default `tenant-onboarding` definition.
 ## Run the 1,000-workflow k6 E2E stress test
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml `
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml `
   --env-file scaling/observability/.env `
   --profile load run --rm k6
 ~~~
@@ -158,7 +199,7 @@ It checks results and returns a failure when a workflow fails or times out.
 Override the load:
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml `
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml `
   --env-file scaling/observability/.env `
   --profile load run --rm `
   -e K6_WORKFLOWS=2000 -e K6_VUS=200 `
@@ -202,12 +243,12 @@ service and stop the normal onboarding `provisioner` for a clean baseline:
 
 ~~~bash
 cp scaling/observability/.env.example scaling/observability/.env
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-load up -d --build \
   --scale processor=8 --scale provisioner=0
 
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-load ps
 ~~~
@@ -216,7 +257,7 @@ Run the separate k6 workload (submits all instances without per-workflow
 status polling, then polls only the run summary until all have completed):
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env \
   --profile offboarding-k6 run --rm \
   -e K6_OFFBOARD_COUNT=1000 \
@@ -248,6 +289,15 @@ internal `EventLane` advisory transaction lock serializes some native
 workflow commits per hub even though this sample has no business constraints.
 
 See [offboarding benchmark design](../docs/offboarding-unconstrained-benchmark.md).
+
+For the matching HA and SSE variants, clients wait for `hub-lb` to pass its
+HTTP readiness check before starting. If k6 reports `lookup hub-lb` or
+`Hub not healthy: 0`, check `hub-lb` startup with the same Compose files and
+`compose.ps1` project used for the workload. A host port conflict can leave the
+load balancer without a network attachment. Set `HUB_LB_PORT` in `.env` to an
+unused port (for example, `5111` when another checkout owns `5110`), then
+rerun the matching HA or SSE `up` target before retrying the test. Internal
+clients continue to use `http://hub-lb:5100`.
 
 
 ### Finding offboarding under Workflow definitions
@@ -311,12 +361,12 @@ from a native .NET process. Without this variable, OTLP export is disabled.
 ## Health and monitoring checks
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env config --quiet
 
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_workflows_completed_total'
 curl 'http://localhost:9090/api/v1/query?query=workflow_hub_process_working_set_bytes'
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env logs --tail=100 \
   hub provisioner monitor-api monitor otel-collector prometheus grafana tempo loki
 ~~~
@@ -331,7 +381,7 @@ sampling, secret management and retention policies.
 ## Stop and clean up
 
 ~~~bash
-docker compose -f scaling/observability/compose.yaml \
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
   --env-file scaling/observability/.env down
 ~~~
 
@@ -351,3 +401,49 @@ including local workflow, PostgreSQL, Prometheus and Grafana state.
   container limits). Use an infrastructure exporter if OS-wide metrics
   are required.
 - Full remote IWorkflow<T> and subworkflow semantics are separate work.
+
+
+### Worker claims and durable activity completions
+
+The `WorkflowCore.Hub` meter exports `workflow_claim_attempts_total`,
+`workflow_claim_empty_total`, and `workflow_claim_success_total`, plus
+`workflow_claim_duration_seconds` and `workflow_claim_batch_size` histograms.
+Each attempt is one worker HTTP claim or long poll, including errors and
+cancellation; it is distinct from Hub database claim scans. Empty counts only
+successful responses with zero tasks. Success counts returned tasks, not requests.
+The duration covers the entire HTTP call, including long-poll wait but excluding
+error backoff; its `outcome` is `claimed`, `empty`, `error`, or `cancelled`.
+Batch size records every successful response including zero; its explicit bounds
+are 0, 1, 2, 4, 8, 16, 24, and 32. Duration bounds are 0.0005, 0.001,
+0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+30, and 60 seconds. Both include the implicit +Inf bucket.
+
+Claim labels are bounded: `lane=activity|workflow` and `transport=claim|poll`;
+duration also has `outcome`. Workflow-lane tasks are processor work, not
+business activities. Success uses the returned task type to classify its lane;
+the other claim measurements describe the requesting lane. Activity panels
+filter `lane="activity"`. The empty percentage divides by all attempts, so
+errors and cancellations are in the denominator; the outcome panel shows them
+separately. Percentiles aggregate histogram buckets across instances before
+`histogram_quantile`. An absent series or zero denominator is not replaced by
+invented data.
+
+`workflow_activities_completed_total` counts newly accepted durable activity
+completions in the Hub process, including standalone, managed, sequential remote,
+and native paths. Replays, rejected or expired leases, failed transactions, and
+workflow processor commits do not count. This is not a guarantee of exactly-once
+business side effects. Metrics are process-local and best effort: a crash after
+commit before recording, or before export, can lose counts. Use durable task and
+workflow history for reconciliation. No identifiers or payload fields are labels
+on these metrics. Existing `workflow_hub_*` diagnostics retain their meanings.
+
+
+### HA load balancer and restarts
+
+`make obs-down` includes the matching HA overlays, so it stops both Hub
+replicas and the load balancer without removing named volumes. The HA nginx
+configuration resolves Hub service names through Docker DNS at runtime;
+recreated containers can receive different IP addresses. DNS refresh may take
+up to five seconds. A successful single readiness request does not guarantee
+all processors are registered or eliminate transient failures during restarts.
+Do not reuse benchmark runs with failed workflow starts for throughput comparisons.

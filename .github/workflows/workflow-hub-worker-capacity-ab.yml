@@ -1,0 +1,157 @@
+name: Workflow Hub Worker Capacity Shard Fanout A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-worker-capacity-ab.yml'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
+      - 'scaling/observability/benchmark/compare_capacity_shard_fanout.py'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/compose.matching-ha.yaml'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubShardCapacityPlannerTests.cs'
+  workflow_dispatch:
+    inputs:
+      workflow_count:
+        description: Workflows per ordering policy and stage
+        required: false
+        default: '200'
+
+concurrency:
+  group: workflow-hub-worker-capacity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capacity-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '4'
+      WFC_HUB_DB_POOL: '12'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_ADAPTIVE_CLAIMS: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_MATCHING_SCOPED_CLAIMS: 'false'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: 'false'
+      WFC_HUB_WORKER_MAX_SHARD_POLLS: '4'
+      COUNT: ${{ github.event.inputs.workflow_count || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate benchmark scripts and Docker topology
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .github/scripts/sample_dispatch_pressure.py \
+            scaling/observability/benchmark/compare_capacity_shard_fanout.py
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" config --quiet
+          # Parse the PowerShell-backed Make targets and verify they include
+          # both HA overlays and the native-only processor scale.
+          make --dry-run obs-offboarding-fanout-up obs-offboarding-fanout-test \
+            > /tmp/offboarding-fanout-make.txt
+          grep -Fq 'compose.matching-ha.yaml' /tmp/offboarding-fanout-make.txt
+          grep -Fq 'compose.matching-shards.yaml' /tmp/offboarding-fanout-make.txt
+          grep -Fq -- '--scale processor=8' /tmp/offboarding-fanout-make.txt
+          echo "host cpu count=$(nproc)"
+          cat /proc/loadavg
+      - name: Verify worker credit reservations and compile the runtime
+        run: |
+          dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
+            --filter FullyQualifiedName~HubShardCapacityPlannerTests \
+            --configuration Release --verbosity minimal
+      - name: Start PostgreSQL, two matching Hubs and telemetry
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb tempo loki prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          # Fail before measuring if PR #27 PostgreSQL claim index is absent.
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" exec -T postgres \
+            psql -X -U workflow -d workflow -Atc \
+            "SELECT 1 FROM pg_indexes WHERE schemaname='wfc_scale' AND indexname='ix_hub_task_claim_sequence'" | grep -qx 1
+      - name: Bracket 8 processor capacity fanout with two controls
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/capacity-shard-fanout
+          mkdir -p "$root"
+          chmod 0777 scaling/observability/results "$root"
+          for stage in off1 on off2; do
+            case "$stage" in on) export WFC_HUB_WORKER_CAPACITY_FANOUT=true;; *) export WFC_HUB_WORKER_CAPACITY_FANOUT=false;; esac
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+              --env-file "$ENVFILE" --profile offboarding-load \
+              up -d --build --no-deps --force-recreate --scale processor=8 processor
+            actual="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+              --env-file "$ENVFILE" --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$actual" -eq 8
+            for id in $(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+              --env-file "$ENVFILE" --profile offboarding-load ps -q processor); do
+              docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id" \
+                | grep -qx "WFC_HUB_WORKER_CAPACITY_FANOUT=$WFC_HUB_WORKER_CAPACITY_FANOUT"
+            done
+            sleep 15
+            for mode in unordered partition keyed; do
+              run="credits-$stage-$mode-$GITHUB_RUN_ID"
+              echo "::group::worker_capacity_fanout=$WFC_HUB_WORKER_CAPACITY_FANOUT policy=$mode"
+              python3 .github/scripts/sample_dispatch_pressure.py \
+                --output "$root/pressure-$stage-$mode.json" --interval 2 \
+                >"/tmp/worker-capacity-pressure-$stage-$mode.log" 2>&1 &
+              probe=$!
+              set +e
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+                --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
+                -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$COUNT" \
+                -e K6_POLICY_VUS=60 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                -e K6_POLICY_RUN_ID="$run" k6-policy \
+                | tee "/tmp/worker-capacity-k6-$stage-$mode.log"
+              k6_rc=${PIPESTATUS[0]}
+              set -e
+              kill -TERM "$probe" 2>/dev/null || true
+              wait "$probe"
+              test "$k6_rc" -eq 0
+              python3 scaling/observability/benchmark/verify_ordering.py \
+                --mode "$mode" --run-id "$run" --count "$COUNT" \
+                --output "$root/$stage-$mode.json"
+              test -s "$root/pressure-$stage-$mode.json"
+              echo "::endgroup::"
+            done
+          done
+          python3 scaling/observability/benchmark/compare_capacity_shard_fanout.py \
+            --input "$root" --output "$root/report.json" | tee "$root/report.txt"
+          cat "$root/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload correctness and capacity A-B diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-hub-worker-capacity-shard-ab
+          path: |
+            scaling/observability/results/capacity-shard-fanout/
+            /tmp/worker-capacity-pressure-*.log
+            /tmp/worker-capacity-k6-*.log
+          if-no-files-found: warn
+      - name: Print service logs on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" logs --tail=120 hub hub-2 postgres processor || true
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            --env-file "$ENVFILE" --profile offboarding-load --profile policy-k6 \
+            down --remove-orphans || true
