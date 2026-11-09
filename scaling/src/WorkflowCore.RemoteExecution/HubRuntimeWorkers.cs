@@ -471,8 +471,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         HubSseWorkerCreditCoordinator credits,
         ConcurrentDictionary<Guid, Task> running, CancellationToken ct)
     {
+        var attempted = false;
         while (!ct.IsCancellationRequested)
         {
+            if (attempted) HubTelemetry.SseTaskReconnects.Add(1);
+            attempted = true;
             Guid sessionId = Guid.Empty;
             using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try

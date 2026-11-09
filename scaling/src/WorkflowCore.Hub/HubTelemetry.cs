@@ -111,6 +111,16 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_task_sessions", "{session}");
     public static readonly Counter<long> SseTasksDispatched =
         Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
+    public static readonly Counter<long> MatchingOwnershipChanges =
+        Meter.CreateCounter<long>("workflow_hub_matching_ownership_changes", "{change}");
+    public static readonly Counter<long> MatchingResolutionFailures =
+        Meter.CreateCounter<long>("workflow_hub_matching_resolution_failures", "{failure}");
+    public static readonly Counter<long> MatchingRouteFallbacks =
+        Meter.CreateCounter<long>("workflow_hub_matching_route_fallbacks", "{fallback}");
+    public static readonly Counter<long> SseTaskReconnects =
+        Meter.CreateCounter<long>("workflow_hub_sse_task_reconnects", "{reconnect}");
+    public static readonly Histogram<double> SseSessionFirstDispatch =
+        Meter.CreateHistogram<double>("workflow_hub_sse_session_first_dispatch_seconds", "s");
     public static readonly UpDownCounter<long> WorkerInflight =
         Meter.CreateUpDownCounter<long>("workflow_hub_worker_inflight", "{task}");
     public static readonly Counter<long> WorkerExecutions =

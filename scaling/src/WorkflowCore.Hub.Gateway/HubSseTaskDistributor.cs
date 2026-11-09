@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Channels;
 using WorkflowCore.Hub;
@@ -129,6 +130,8 @@ public sealed class HubSseTaskDistributor
             throw new ArgumentException("Invalid SSE owner/session/credit registration");
 
         var session = new Session(subscribe, ownerEpoch);
+        var connectedAt = Stopwatch.GetTimestamp();
+        var dispatched = false;
         var key = (subscribe.Claim.WorkerId, subscribe.Claim.Hubs[0],
             subscribe.Claim.MatchingPartition.Value);
         lock (_registryGate)
@@ -201,6 +204,12 @@ public sealed class HubSseTaskDistributor
                         JsonSerializer.Serialize(new { creditId = grant, task = leases[0] },
                             new JsonSerializerOptions(JsonSerializerDefaults.Web)) +
                         "\n\n", token);
+                    if (!dispatched)
+                    {
+                        dispatched = true;
+                        HubTelemetry.SseSessionFirstDispatch.Record(
+                            Stopwatch.GetElapsedTime(connectedAt).TotalSeconds);
+                    }
                 }
                 finally
                 {
