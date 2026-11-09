@@ -3,6 +3,10 @@
 For current runtime boundaries, transport selection and Hub replica scaling,
 start with the [current runtime guide](../docs/current-runtime.md).
 
+For the isolated two-Hub/four-shard recovery lab with full PostgreSQL tests,
+workflow smoke tests and owner-failure tests, see the
+[ownership recovery Compose suite](owner-recovery.md) (`make obs-owner-recovery-test`).
+
 This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
 The generic Hub includes an embedded durable timer scheduler. The combined Provisioner runs native `IWorkflow<T>` workflows and typed activities
 over REST/SSE. See [native runtime contracts](../docs/hub-native-fluent-runtime.md).
