@@ -16,6 +16,7 @@ public static class HubSseTaskStreamingEndpoints
         routes.MapPost("/workers/tasks:stream", async (
             HttpContext context, HubSseTaskDistributor.Subscribe request,
             HubMatchingOwnership ownership, HubSseTaskDistributor distributor,
+            ILogger<HubSseTaskDistributor> logger,
             CancellationToken ct) =>
         {
             var claim = request.Claim;
@@ -91,8 +92,12 @@ public static class HubSseTaskStreamingEndpoints
                 // abort and let the client reconnect to the current owner.
                 context.Abort();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                if (Environment.GetEnvironmentVariable("WFC_HUB_OWNER_DIAGNOSTICS") == "true")
+                    logger.LogWarning(ex,
+                        "SSE owner route failed on {Node} for {Hub}/{Shard}; forwarded={Forwarded}",
+                        ownership.NodeId, hub, shard, forwarded);
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             }
         });
