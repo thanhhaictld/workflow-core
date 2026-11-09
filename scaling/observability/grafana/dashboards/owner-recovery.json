@@ -1,0 +1,84 @@
+{
+  "uid": "workflow-owner-recovery",
+  "title": "Workflow Hub - Owner Recovery and Policy Load",
+  "tags": ["workflow-core", "k6", "sse", "ownership"],
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "5s",
+  "timezone": "browser",
+  "time": {"from": "now-30m", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "k6 policy starts and failures / second",
+      "description": "The existing partition-ordering.js workload. Missing series remain visible as missing; k6 completion is also checked against durable SQL exports.",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum(rate(k6_hub_policy_started_total[1m]))", "legendFormat": "accepted starts"},
+        {"refId": "B", "expr": "sum(rate(k6_hub_policy_failed_total[1m]))", "legendFormat": "failures"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Durable workflow completions / second",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(rate(workflow_hub_workflows_completed_total[1m]))", "legendFormat": "completed"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Local owner tracking changes / second",
+      "description": "Best-effort local observations can repeat under concurrency. PostgreSQL owner rows and epochs identify authoritative generations.",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (outcome) (rate(workflow_hub_matching_ownership_changes_total[2m]))", "legendFormat": "{{outcome}}"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Route failures and fallbacks / second",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum by (reason) (rate(workflow_hub_matching_resolution_failures_total[2m]))", "legendFormat": "failure {{reason}}"},
+        {"refId": "B", "expr": "sum(rate(workflow_hub_matching_route_fallbacks_total[2m]))", "legendFormat": "fallbacks"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Active task SSE sessions",
+      "description": "Dead-instance exporter samples may briefly outlive their process. Fault observers add zero-credit sessions.",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(workflow_hub_sse_task_sessions)", "legendFormat": "sessions"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Worker task SSE reconnect attempts / second",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(rate(workflow_hub_sse_task_reconnects_total[2m]))", "legendFormat": "reconnects"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Session to first successful task flush p95",
+      "description": "Includes idle wait; excludes sessions that never dispatch. This is not eligibility, network receipt, or failover latency.",
+      "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95,sum by (le) (rate(workflow_hub_sse_session_first_dispatch_seconds_bucket[5m])))", "legendFormat": "p95"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Database task state snapshots",
+      "description": "Maximum avoids summing duplicate snapshots of the same database from both Hubs. Samples are advisory; inspect durable rows for reconciliation.",
+      "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max(workflow_hub_queue_ready)", "legendFormat": "ready"},
+        {"refId": "B", "expr": "max(workflow_hub_queue_leased)", "legendFormat": "leased"},
+        {"refId": "C", "expr": "max(workflow_hub_queue_dead)", "legendFormat": "dead"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    }
+  ]
+}
