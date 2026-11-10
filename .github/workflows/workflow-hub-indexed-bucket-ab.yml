@@ -1,0 +1,191 @@
+name: Workflow Hub Indexed Matching Bucket SQL A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workflow-hub-indexed-bucket-ab.yml'
+      - 'scaling/src/WorkflowCore.Hub/HubTaskStore.cs'
+      - 'scaling/sql/026_hub_matching_bucket_claim_index.sql'
+      - 'scaling/observability/compose.yaml'
+      - 'scaling/observability/compose.matching-ha.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: hub-indexed-bucket-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  indexed-bucket-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
+      ENVFILE: scaling/observability/.env.example
+      WFC_HUB_TASK_SSE_PUSH: 'true'
+      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
+      WFC_HUB_LONG_POLL_ENABLED: 'true'
+      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: demand
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
+      WFC_HUB_VERIFY_URL: 'http://127.0.0.1:5110'
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      OFFBOARD_PROCESSOR_WORKERS: '8'
+      WFC_HUB_DB_POOL: '12'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and SQL migration wiring
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+          test -s scaling/sql/026_hub_matching_bucket_claim_index.sql
+          grep -q '/sql/026_hub_matching_bucket_claim_index.sql' "$COMPOSE"
+          mkdir -p scaling/observability/results/indexed-bucket-ab
+          chmod 0777 scaling/observability/results scaling/observability/results/indexed-bucket-ab
+      - name: Build Hub and PostgreSQL
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" up -d --build hub hub-2 hub-lb prometheus
+          for i in {1..100}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5110/health/ready
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            exec -T postgres psql -X -U workflow -d workflow -v ON_ERROR_STOP=1 \
+            -c "SELECT indexname FROM pg_indexes WHERE schemaname='wfc_scale' AND indexname='ix_hub_task_claim_capability_bucket_sequence'" \
+            | tee scaling/observability/results/indexed-bucket-ab/index.txt
+          grep -q ix_hub_task_claim_capability_bucket_sequence scaling/observability/results/indexed-bucket-ab/index.txt
+      - name: PostgreSQL index plans against rollback-only synthetic backlog
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            exec -T postgres psql -X -U workflow -d workflow -v ON_ERROR_STOP=1 \
+            > scaling/observability/results/indexed-bucket-ab/explain.txt <<'SQL'
+          BEGIN;
+          INSERT INTO wfc_scale.hub_task
+              (id,hub_id,partition_id,task_type,task_version,payload)
+          SELECT gen_random_uuid(),'bucket-explain-fixture',g % 64,'activity',1,'{}'::jsonb
+          FROM generate_series(1,10000) g;
+          ANALYZE wfc_scale.hub_task;
+          \echo === Baseline modulo 4 ===
+          EXPLAIN (ANALYZE, BUFFERS)
+          SELECT id FROM wfc_scale.hub_task
+          WHERE hub_id='bucket-explain-fixture'
+            AND hub_id||'|'||task_type||'|'||task_version::text='bucket-explain-fixture|activity|1'
+            AND state IN (0,1) AND attempts < max_attempts
+            AND state=0 AND due_at<=now() AND partition_id % 4=1
+          ORDER BY sequence LIMIT 96;
+          \echo === Indexed 64-bucket equivalent ===
+          EXPLAIN (ANALYZE, BUFFERS)
+          SELECT id FROM wfc_scale.hub_task
+          WHERE hub_id='bucket-explain-fixture'
+            AND hub_id||'|'||task_type||'|'||task_version::text='bucket-explain-fixture|activity|1'
+            AND state IN (0,1) AND attempts < max_attempts
+            AND state=0 AND due_at<=now()
+            AND partition_id % 64 = ANY(ARRAY[1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61])
+          ORDER BY sequence LIMIT 96;
+          ROLLBACK;
+          SQL
+      - name: Run 1000-workflow A-B at 8 and 16 processor replicas
+        run: |
+          set -euo pipefail
+          root=scaling/observability/results/indexed-bucket-ab
+          for processors in 8 16; do
+            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load up -d --build --no-deps --scale "processor=$processors" processor
+            active="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+              --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$active" -eq "$processors"
+            sleep 12
+            if test "$processors" -eq 8; then stages="off on"; else stages="on off"; fi
+            for stage in $stages; do
+              if test "$stage" = on; then export WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=true;
+              else export WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=false; fi
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                up -d --no-deps --force-recreate hub hub-2
+              for hub in hub hub-2; do
+                id="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" ps -q "$hub")"
+                test -n "$id"
+                docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id" \
+                  | grep -qx "WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=$WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS"
+              done
+              for i in {1..80}; do
+                if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null; then break; fi
+                sleep 2
+              done
+              curl -fsS http://127.0.0.1:5110/health/ready
+              sleep 6
+              for mode in unordered partition; do
+                if test "$mode" = unordered; then count=1000; else count=200; fi
+                run="bucket-$processors-$stage-$mode-$GITHUB_RUN_ID"
+                echo "::group::processors=$processors indexed=$stage policy=$mode workflows=$count"
+                python3 .github/scripts/sample_dispatch_pressure.py \
+                  --output "$root/pressure-$processors-$stage-$mode.json" --interval 2 \
+                  > "$root/pressure-$processors-$stage-$mode.log" 2>&1 &
+                profiler=$!
+                set +e
+                docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                  --profile policy-k6 run --rm --no-deps \
+                  -e K6_POLICY_MODE="$mode" -e K6_POLICY_COUNT="$count" \
+                  -e K6_POLICY_VUS=100 -e K6_POLICY_TIMEOUT_SECONDS=600 \
+                  -e K6_POLICY_RUN_ID="$run" k6-policy \
+                  2>&1 | tee "$root/k6-$processors-$stage-$mode.log"
+                rc=${PIPESTATUS[0]}
+                set -e
+                kill -TERM "$profiler" 2>/dev/null || true
+                wait "$profiler" || true
+                test "$rc" -eq 0
+                python3 scaling/observability/benchmark/verify_ordering.py \
+                  --mode "$mode" --run-id "$run" --count "$count" \
+                  --output "$root/result-$processors-$stage-$mode.json"
+                echo "::endgroup::"
+              done
+            done
+          done
+      - name: Summarize paired A-B results (not isolated capacity claims)
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          root=pathlib.Path("scaling/observability/results/indexed-bucket-ab")
+          lines=["## Indexed 64-bucket matching claims A/B",
+                 "Same source/host; two Hubs and four matching shards. All tests must pass.",
+                 "Results are subject to runner noise and order drift.",
+                 "",
+                 "| Processors | Mode | Legacy WF/s | Indexed WF/s | Change | Legacy p95 ms | Indexed p95 ms |",
+                 "|---:|---|---:|---:|---:|---:|---:|"]
+          for p in (8,16):
+            for mode in ("unordered","partition"):
+              read=lambda stage:json.loads((root/f"result-{p}-{stage}-{mode}.json").read_text())
+              a,b=read("off"),read("on")
+              old,new=a["throughputWorkflowsPerSecond"],b["throughputWorkflowsPerSecond"]
+              change=(new/old-1)*100 if old>0 else 0
+              lines.append(f"| {p} | {mode} | {old:.3f} | {new:.3f} | {change:+.1f}% | {a['workflowP95Ms']:.0f} | {b['workflowP95Ms']:.0f} |")
+          output="\n".join(lines)+"\n"
+          (root/"report.md").write_text(output)
+          print(output)
+          PY
+          cat scaling/observability/results/indexed-bucket-ab/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexed-matching-bucket-ab
+          path: scaling/observability/results/indexed-bucket-ab/
+          if-no-files-found: warn
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load logs --tail=120 hub hub-2 postgres processor || true
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load --profile policy-k6 down --remove-orphans || true
