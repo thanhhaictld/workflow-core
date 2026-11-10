@@ -7,6 +7,96 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 
 public sealed class HubNativeRuntimeTests
 {
+    [Theory]
+    [InlineData("pointer")]
+    [InlineData("complete")]
+    [InlineData("terminate")]
+    public async Task CancellationClosesOnlyTheWorkflowsOpenAttempts(string mode)
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (database is null) return;
+        await using var tasks = new HubTaskStore(database);
+        var definitions = new HubDefinitionStore(tasks);
+        var native = new HubNativeWorkflowStore(tasks, definitions);
+        var remote = new HubRemoteWorkflowStore(tasks, definitions);
+        var empty = JsonSerializer.SerializeToElement(new { });
+
+        async Task<(string Hub, Guid Id, HubNativeCommit Commit, HubLeasedTask Finished, HubLeasedTask Pending)> Start()
+        {
+            var hub = "cancel-attempt-" + Guid.NewGuid().ToString("N");
+            await definitions.RegisterAsync(new(hub, "native", 2, 4, 2,
+                JsonSerializer.SerializeToElement(new { executionMode = "native" })), default);
+            await definitions.RegisterActivityAsync(new(hub, "act", 2, 4, 10, 10), default);
+            var id = await remote.StartAsync(new(hub, "native", 2, empty), default);
+            var workflow = Assert.Single(await tasks.ClaimAsync("worker", [hub],
+                [new(hub, "__native_workflow__", 1)], 1, TimeSpan.FromMinutes(5), default));
+            var commit = new HubNativeCommit(1, "worker", workflow.Epoch, 0, workflow.Id, empty,
+                "Runnable", false, null, [], [],
+                [new("finished", "finished-pointer", 0, "act", 2, empty),
+                 new("pending", "pending-pointer", 1, "act", 2, empty)], [], ["finished", "pending"]);
+            Assert.NotNull(await native.CommitAsync(id, commit, default));
+            var activities = await tasks.ClaimAsync("worker", [hub], [new(hub, "act", 2)],
+                2, TimeSpan.FromMinutes(5), default);
+            Assert.Equal(2, activities.Count);
+            Assert.True(await native.CompleteActivityAsync(activities[0].Id, "worker", activities[0].Epoch, empty, default));
+            return (hub, id, commit, activities[0], activities[1]);
+        }
+
+        await using var db = new NpgsqlConnection(database);
+        await db.OpenAsync();
+        async Task<(string Outcome, DateTime? FinishedAt)> Attempt(HubLeasedTask task)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT outcome,finished_at FROM wfc_scale.hub_task_attempt
+                WHERE task_id=@task AND epoch=@epoch
+                """, db);
+            command.Parameters.AddWithValue("task", task.Id);
+            command.Parameters.AddWithValue("epoch", task.Epoch);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetDateTime(1));
+        }
+
+        var target = await Start();
+        var other = await Start();
+        var finishedBefore = await Attempt(target.Finished);
+        var otherFinishedBefore = await Attempt(other.Finished);
+        var otherPendingBefore = await Attempt(other.Pending);
+        Assert.Equal("Completed", finishedBefore.Outcome);
+        Assert.Equal(("Leased", (DateTime?)null), await Attempt(target.Pending));
+
+        if (mode == "terminate")
+        {
+            Assert.True(await native.ChangeStatusAsync(target.Id, new("Terminated", "terminate"), default));
+            Assert.True(await native.ChangeStatusAsync(target.Id, new("Terminated", "terminate"), default));
+        }
+        else
+        {
+            var workflow = Assert.Single(await tasks.ClaimAsync("worker", [target.Hub],
+                [new(target.Hub, "__native_workflow__", 1)], 1, TimeSpan.FromMinutes(5), default));
+            var runtime = (await native.GetRuntimeAsync(target.Id, default))!;
+            var commit = target.Commit with
+            {
+                TaskId = workflow.Id, Epoch = workflow.Epoch, ExpectedRevision = 1,
+                Status = mode == "complete" ? "Complete" : "Runnable", Activities = [],
+                ActiveDispatches = mode == "pointer" ? [] : null,
+                ConsumedInbox = runtime.Inbox.Select(i => i.Id).ToArray()
+            };
+            Assert.NotNull(await native.CommitAsync(target.Id, commit, default));
+            Assert.True((await native.CommitAsync(target.Id, commit, default))!.Replayed);
+        }
+
+        var cancelled = await Attempt(target.Pending);
+        Assert.Equal("Cancelled", cancelled.Outcome);
+        Assert.NotNull(cancelled.FinishedAt);
+        Assert.Equal(finishedBefore, await Attempt(target.Finished));
+        Assert.Equal(otherFinishedBefore, await Attempt(other.Finished));
+        Assert.Equal(otherPendingBefore, await Attempt(other.Pending));
+        Assert.False(await tasks.HeartbeatAsync(target.Pending.Id, "worker", target.Pending.Epoch, TimeSpan.FromSeconds(30), default));
+        Assert.False(await native.CompleteActivityAsync(target.Pending.Id, "worker", target.Pending.Epoch, empty, default));
+        Assert.True(await tasks.HeartbeatAsync(other.Pending.Id, "worker", other.Pending.Epoch, TimeSpan.FromSeconds(30), default));
+    }
+
     [Fact]
     public async Task WorkflowClaimsRespectRegisteredDefinitionVersionsDuringRollout()
     {

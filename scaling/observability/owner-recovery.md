@@ -25,7 +25,9 @@ test image. k6 runs in the existing Compose container.
 ```powershell
 make obs-setup                        # preserve an existing .env
 make obs-owner-recovery-up
-make obs-owner-recovery-test          # full configured PostgreSQL suite + k6 smoke
+make obs-owner-recovery-test          # k6 smoke against the running stack
+make obs-owner-recovery-test-4k       # 4,000 workflows with 400 VUs
+make obs-owner-recovery-db-test       # optional isolated PostgreSQL test suite
 make obs-owner-recovery-stress-test K6_POLICY_MODE=keyed K6_POLICY_COUNT=1000 K6_POLICY_VUS=100
 make obs-owner-recovery-ps
 make obs-owner-recovery-logs
@@ -43,7 +45,8 @@ Each DB-free processor has independent 8-slot workflow and activity lanes.
 | Target | Action |
 | --- | --- |
 | `obs-owner-recovery-up` | Build/start observability, monitor and the recovery runtime profile |
-| `obs-owner-recovery-test` | Full configured database tests, then k6 unordered/keyed cohorts of 40 each |
+| `obs-owner-recovery-test` | Run k6 unordered/keyed cohorts of 40 each on the running stack |
+| `obs-owner-recovery-test-4k` | Run 4,000 workflows with 400 VUs using `K6_POLICY_MODE`, then durable audit |
 | `obs-owner-recovery-stress-test` | Run existing `k6-policy` with selected mode/count/VUs, then durable audit |
 | `obs-owner-recovery-smoke-test` | k6 unordered/keyed cohorts only |
 | `obs-owner-recovery-db-test` | Database tests only, isolated from runtime data |
@@ -53,6 +56,10 @@ Each DB-free processor has independent 8-slot workflow and activity lanes.
 | `obs-owner-recovery-down` | Stop/remove both projects' containers/networks; keep named volumes |
 
 The workload supports `K6_POLICY_MODE=unordered`, `partition`, or `keyed`.
+Run `obs-owner-recovery-up` after changing application code to rebuild and start
+the runtime before running the test, test-4k, smoke-test or stress-test target. These
+k6 targets do not rebuild or start the runtime. Run `obs-owner-recovery-db-test`
+separately for the isolated PostgreSQL suite.
 Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
 `K6_POLICY_TIMEOUT_SECONDS=600`. Keyed mode uses eight capacity-one resource
 keys; partition mode uses the sample's partition-ordering policy. These are

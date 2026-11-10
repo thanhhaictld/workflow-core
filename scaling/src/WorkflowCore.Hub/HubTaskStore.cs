@@ -67,7 +67,8 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Optional SQL prefilter keeps blocked strict-FIFO successors out of the
     // bounded claim candidate window. Admission is still rechecked under locks.
     private readonly bool _fifoHeadPrefilterEnabled;
-    // Optional index-backed filter for power-of-two matching shard counts.
+    // Index-backed filter for matching shard counts dividing 64; explicit opt-out
+    // retains the legacy modulo expression for comparison.
     private readonly bool _indexedMatchingBucketClaimsEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
@@ -112,8 +113,10 @@ public sealed class HubTaskStore : IAsyncDisposable
             (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
         _fifoHeadPrefilterEnabled = enableFifoHeadPrefilter ??
             (Environment.GetEnvironmentVariable("WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED") is "true" or "1" or "True");
+        var indexedBucketMode = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS");
         _indexedMatchingBucketClaimsEnabled = enableIndexedMatchingBucketClaims ??
-            (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS") is "true" or "1" or "True");
+            (!string.Equals(indexedBucketMode, "false", StringComparison.OrdinalIgnoreCase) &&
+             indexedBucketMode != "0");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -462,9 +465,10 @@ public sealed class HubTaskStore : IAsyncDisposable
                       AND ((state = 0 AND due_at <= now()) OR
                            (state = 1 AND lease_until < now()))
                     FOR UPDATE SKIP LOCKED
-                    """.Replace("/*indexed_partition_filter*/", matchingBuckets is not null
-                        ? "partition_id % 64 = ANY(@matchingBuckets)"
-                        : "(@matchCount=1 OR partition_id % @matchCount=@matchPartition)"), db, tx))
+                    """.Replace("/*indexed_partition_filter*/", matchCount == 1
+                        ? "TRUE" : matchingBuckets is not null
+                            ? "partition_id % 64 = ANY(@matchingBuckets)"
+                            : "partition_id % @matchCount = @matchPartition"), db, tx))
                 {
                     row.Parameters.AddWithValue("id", taskId);
                     row.Parameters.AddWithValue("matchCount", matchCount);
@@ -682,7 +686,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             WITH candidates AS MATERIALIZED (
                 SELECT t.id
                 FROM wfc_scale.hub_task t
-                WHERE t.hub_id = ANY(@hubs)
+                WHERE /*hub_filter*/
+                  AND t.state IN (0,1)
                   AND /*indexed_partition_filter*/
                   AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
                   AND t.attempts < t.max_attempts
@@ -711,11 +716,15 @@ public sealed class HubTaskStore : IAsyncDisposable
             RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
                       t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
                       COALESCE(t.workflow_step,t.native_step_id)
-            """.Replace("/*indexed_partition_filter*/", matchingBuckets is not null
-                ? "t.partition_id % 64 = ANY(@matchingBuckets)"
-                : "(@matchCount=1 OR t.partition_id % @matchCount=@matchPartition)"), db, tx))
+            """.Replace("/*hub_filter*/", hubs.Count == 1
+                ? "t.hub_id = @hub" : "t.hub_id = ANY(@hubs)")
+               .Replace("/*indexed_partition_filter*/", matchingCount == 1
+                ? "TRUE" : matchingBuckets is not null
+                    ? "t.partition_id % 64 = ANY(@matchingBuckets)"
+                    : "t.partition_id % @matchCount = @matchPartition"), db, tx))
         {
             command.Parameters.AddWithValue("hubs", hubs.ToArray());
+            command.Parameters.AddWithValue("hub", hubs[0]);
             command.Parameters.AddWithValue("matchCount", matchingCount);
             command.Parameters.AddWithValue("matchPartition", matchingPartition);
             command.Parameters.AddWithValue("matchingBuckets", matchingBuckets ?? Array.Empty<int>());

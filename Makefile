@@ -198,7 +198,7 @@ K6_POLICY_MODE ?= unordered
 K6_POLICY_COUNT ?= 300
 K6_POLICY_VUS ?= 60
 K6_POLICY_TIMEOUT_SECONDS ?= 600
-OWNER_TARGETS := help setup config build up ps logs down db-test smoke-test stress-test test fault-test
+OWNER_TARGETS := help setup config build up ps logs down db-test smoke-test stress-test test test-4k fault-test
 .PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))
 $(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
 	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)

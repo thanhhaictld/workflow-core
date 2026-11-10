@@ -107,6 +107,13 @@ Long-poll matching has a separate ownership layer:
 Matching ownership uses PostgreSQL-fenced leases lasting 8 seconds, renewed every
 2 seconds. It routes pending worker demand; **task leases remain separate**.
 Matching shard membership is `task.partition_id % matchingPartitionCount`.
+Claim queries use the expression index from migration 026 by default when the
+matching count divides 64: `partition_id % 64 = ANY(matchingBuckets)` selects
+exactly the same shard. Apply migration 026 before deploying this query path.
+Set `WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=false` to retain the legacy modulo
+filter for comparison. Counts not dividing 64 use the direct modulo filter;
+single-shard and unsharded claims omit partition filtering. This does not change
+persisted partition IDs or resource ordering.
 Matching partitions do not redefine business resource or FIFO ordering scopes.
 The partition count is persisted per namespace and must agree across Hubs and
 processors; it is not a live resharding control.
