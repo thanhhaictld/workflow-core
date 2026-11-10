@@ -45,6 +45,7 @@ the HA Compose overlay.
 - [Offboarding benchmark](offboarding-unconstrained-benchmark.md)
 - [Processor scaling investigation](linear-processor-scaling-pr22.md)
 - [Processor scaling diagnostics](processor-scaling-root-cause-diagnostics.md)
+- [Performance tuning harness instructions](performance-tuning-harness.md)
 - [Throughput investigation](throughput-investigation-report.md)
 - [Claim/completion A/B](workflow-p95-claim-completion-ab.md)
 - [SQL CPU investigation](sql-cpu-statement-investigation.md)
