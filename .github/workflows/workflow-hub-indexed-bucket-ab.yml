@@ -1,6 +1,12 @@
 name: Workflow Hub Indexed Matching Bucket SQL A-B
 
 on:
+  push:
+    branches: [feat/indexed-matching-bucket-claims]
+    paths:
+      - '.github/workflows/workflow-hub-indexed-bucket-ab.yml'
+      - 'scaling/src/WorkflowCore.Hub/HubTaskStore.cs'
+      - 'scaling/sql/026_hub_matching_bucket_claim_index.sql'
   pull_request:
     paths:
       - '.github/workflows/workflow-hub-indexed-bucket-ab.yml'
@@ -62,6 +68,14 @@ jobs:
             -c "SELECT indexname FROM pg_indexes WHERE schemaname='wfc_scale' AND indexname='ix_hub_task_claim_capability_bucket_sequence'" \
             | tee scaling/observability/results/indexed-bucket-ab/index.txt
           grep -q ix_hub_task_claim_capability_bucket_sequence scaling/observability/results/indexed-bucket-ab/index.txt
+      - name: Verify matching-bucket PostgreSQL integration tests
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
+            -f scaling/observability/compose.owner-recovery.yaml --env-file "$ENVFILE" \
+            --profile owner-tests run --rm --build --no-deps tests \
+            --filter FullyQualifiedName~HubIndexedMatchingBucketTests \
+            --results-directory /results
       - name: PostgreSQL index plans against rollback-only synthetic backlog
         run: |
           set -euo pipefail
