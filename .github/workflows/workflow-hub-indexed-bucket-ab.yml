@@ -15,6 +15,7 @@ on:
       - 'scaling/observability/compose.yaml'
       - 'scaling/observability/compose.matching-ha.yaml'
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: hub-indexed-bucket-ab-${{ github.event.pull_request.number || github.ref }}
