@@ -208,6 +208,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                   AND NOT (dispatch_key=ANY(@active));
                 UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
                 FROM wfc_scale.hub_task t WHERE a.task_id=t.id AND t.workflow_id=@id
+                  AND a.workflow_id=@id
                   AND t.last_error='Native pointer cancelled' AND a.finished_at IS NULL
                 """,ct,("id",id),("active",active));
         }
@@ -568,6 +569,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             WHERE workflow_id=@id AND state IN (0,1);
             UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
             FROM wfc_scale.hub_task t WHERE t.id=a.task_id AND t.workflow_id=@id
+              AND a.workflow_id=@id
               AND t.last_error='Workflow ended' AND a.finished_at IS NULL
             """,ct,("id",id));
     }

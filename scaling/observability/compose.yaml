@@ -54,8 +54,8 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/023_hub_claim_hub_sequence.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_native_reconcile_tasks.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/025_hub_claim_capability_sequence.sql
-        PGPASSWORD="$PG_PASSWORD" psql -h postgres -U "$PG_USER" -d "$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/026_hub_matching_bucket_claim_index.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/025_hub_claim_capability_sequence.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/026_hub_matching_bucket_claim_index.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
@@ -101,7 +101,7 @@ services:
       WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS: "${WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS:-1}"
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: "${WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS:-false}"
       WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: "${WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED:-false}"
-      WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS: "${WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS:-false}"
+      WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS: "${WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS:-true}"
       WFC_HUB_MATCHING_SCOPED_CLAIMS: "${WFC_HUB_MATCHING_SCOPED_CLAIMS:-false}"
       WFC_HUB_MATCHING_DEFER_OWNER_CHECK: "${WFC_HUB_MATCHING_DEFER_OWNER_CHECK:-false}"
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"

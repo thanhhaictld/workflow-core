@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('help','setup','config','build','up','ps','logs','down','db-test','smoke-test','stress-test','test','fault-test')]
+    [ValidateSet('help','setup','config','build','up','ps','logs','down','db-test','smoke-test','stress-test','test','test-4k','fault-test')]
     [string]$Task = 'help',
     [string]$Project = '',
     [string]$ComposeFile = 'scaling/observability/compose.yaml',
@@ -26,7 +26,8 @@ if ($Task -eq 'help') {
 Owner recovery on the existing Grafana/Prometheus/Tempo/Loki observability stack:
   make obs-owner-recovery-setup        Create OBS_ENV_FILE if missing
   make obs-owner-recovery-up           Build/start base stack + HA/shards/recovery overlays
-  make obs-owner-recovery-test         Full PostgreSQL tests + k6 smoke (unordered/keyed)
+  make obs-owner-recovery-test         Run k6 smoke on the running stack (unordered/keyed)
+  make obs-owner-recovery-test-4k      Run 4,000 workflows with 400 VUs on the running stack
   make obs-owner-recovery-stress-test  Existing k6-policy workload + durable audit
   make obs-owner-recovery-db-test      Isolated test project, base postgres/migrate definitions
   make obs-owner-recovery-fault-test   Either owner, idle/busy, continuous tracing (85s each)
@@ -128,12 +129,7 @@ function Audit-Lab {
     & $Python scaling/observability/benchmark/analyze_owner_recovery.py --evidence-dir $runPath
     if ($LASTEXITCODE) { throw 'Durable workflow/fault audit failed' }
 }
-function Start-Lab {
-    Invoke-Compose build hub hub-2 processor monitor
-    Invoke-Compose up -d --wait postgres otel-collector prometheus tempo loki grafana postgres-process-exporter
-    Invoke-Compose run --rm --no-deps migrate
-    Invoke-Compose up -d --no-deps --wait hub hub-2 hub-lb monitor
-    Invoke-Compose up -d --no-deps --wait --scale processor=4 processor
+function Wait-LabReady {
     $ready = $false
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
@@ -143,7 +139,15 @@ function Start-Lab {
         } catch { }
         Start-Sleep -Seconds 1
     }
-    if (!$ready) { throw 'Policy benchmark definitions did not become ready; inspect processor logs' }
+    if (!$ready) { throw 'Policy benchmark definitions did not become ready; run make obs-owner-recovery-up and inspect processor logs' }
+}
+function Start-Lab {
+    Invoke-Compose build hub hub-2 processor monitor
+    Invoke-Compose up -d --wait postgres otel-collector prometheus tempo loki grafana postgres-process-exporter
+    Invoke-Compose run --rm --no-deps migrate
+    Invoke-Compose up -d --no-deps --wait hub hub-2 hub-lb monitor
+    Invoke-Compose up -d --no-deps --wait --scale processor=8 processor
+    Wait-LabReady
     Write-Host "Hub: http://127.0.0.1:$lbPort; Grafana: http://127.0.0.1:$grafanaPort; Prometheus: http://127.0.0.1:$prometheusPort"
 }
 function Test-Database {
@@ -161,17 +165,17 @@ function Test-Database {
     if ([int]$counts.executed -lt 1 -or [int]$counts.failed -gt 0) { throw 'Database run failed or executed zero tests; check filter and TRX' }
     Write-Host "Configured database tests: $($counts.passed) passed / $($counts.executed) executed. TRX: $trxPath"
 }
-function Test-K6([string]$Workload, [int]$Total) {
+function Test-K6([string]$Workload, [int]$Total, [int]$VirtualUsers = $Vus) {
     $label = "k6-$Workload-$runId"
     $cohortPath = Join-Path $runPath $label
     New-Item -ItemType Directory -Path $cohortPath | Out-Null
     Invoke-Compose run --rm --no-deps -v "$($cohortPath.Replace('\','/')):/results" `
-        -e "K6_POLICY_MODE=$Workload" -e "K6_POLICY_COUNT=$Total" -e "K6_POLICY_VUS=$([Math]::Min($Total,$Vus))" `
+        -e "K6_POLICY_MODE=$Workload" -e "K6_POLICY_COUNT=$Total" -e "K6_POLICY_VUS=$([Math]::Min($Total,$VirtualUsers))" `
         -e "K6_POLICY_RUN_ID=$label" -e "K6_POLICY_TIMEOUT_SECONDS=$TimeoutSeconds" k6-policy
     Invoke-Lab export --label $label --count $Total
     Audit-Lab
 }
-if ($Task -in @('smoke-test','stress-test','test','fault-test')) {
+if ($Task -in @('smoke-test','stress-test','test','test-4k','fault-test')) {
     & $Python --version
     if ($LASTEXITCODE) { throw 'Python is required for durable evidence audits' }
     $runId = ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)).ToLowerInvariant()
@@ -189,9 +193,10 @@ switch ($Task) {
     logs { Invoke-Compose logs --tail=100 hub hub-2 processor hub-lb postgres otel-collector grafana prometheus }
     down { Invoke-Compose down; Invoke-TestCompose down }
     db-test { Test-Database }
-    smoke-test { Start-Lab; Test-K6 unordered 40; Test-K6 keyed 40 }
-    stress-test { Start-Lab; Test-K6 $StressMode $Count }
-    test { Test-Database; Start-Lab; Test-K6 unordered 40; Test-K6 keyed 40 }
+    smoke-test { Wait-LabReady; Test-K6 unordered 40; Test-K6 keyed 40 }
+    stress-test { Wait-LabReady; Test-K6 $StressMode $Count }
+    test { Wait-LabReady; Test-K6 unordered 40; Test-K6 keyed 40 }
+    test-4k { Wait-LabReady; Test-K6 $StressMode 4000 100 }
     fault-test {
         Start-Lab
         $victims = if ($Victim -eq 'both') { @('hub','hub-2') } else { @($Victim) }
