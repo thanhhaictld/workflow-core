@@ -369,6 +369,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var started = Stopwatch.GetTimestamp();
         var outcome = "error";
         HubTelemetry.ClaimAttempts.Add(1, lane, transport);
+        HubTelemetry.ClaimInflight.Add(1, lane, transport);
         try
         {
             var leases = await send();
@@ -388,6 +389,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         {
             var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
             HubTelemetry.ClaimHttpDuration.Record(elapsed, lane, transport, new KeyValuePair<string, object?>("outcome", outcome));
+            HubTelemetry.ClaimInflight.Add(-1, lane, transport);
         }
     }
 
