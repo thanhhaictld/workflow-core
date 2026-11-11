@@ -182,35 +182,33 @@ public static class HubTelemetry
         ProcessMeter.CreateObservableGauge("workflow_hub_threadpool_pending",
             () => ThreadPool.PendingWorkItemCount, "{work_item}");
 
-    private static long _databaseConnections;
-    private static long _activeDatabaseConnections;
-    private static long _queueReady;
-    private static long _queueLeased;
-    private static long _queueDead;
+    // No measurements until the first sample succeeds. Disabling the sampler
+    // must leave these series absent rather than report fabricated zero values.
+    private static HubDatabaseDiagnostics? _databaseSnapshot;
     private static readonly ObservableGauge<long> DatabaseConnections =
         Meter.CreateObservableGauge("workflow_hub_database_connections",
-            () => Volatile.Read(ref _databaseConnections), "{connection}");
+            () => DatabaseMeasurements(s => s.DatabaseConnections), "{connection}");
     private static readonly ObservableGauge<long> ActiveDatabaseConnections =
         Meter.CreateObservableGauge("workflow_hub_database_active_connections",
-            () => Volatile.Read(ref _activeDatabaseConnections), "{connection}");
+            () => DatabaseMeasurements(s => s.ActiveDbConnections), "{connection}");
     private static readonly ObservableGauge<long> QueueReady =
         Meter.CreateObservableGauge("workflow_hub_queue_ready",
-            () => Volatile.Read(ref _queueReady), "{task}");
+            () => DatabaseMeasurements(s => s.ReadyTasks), "{task}");
     private static readonly ObservableGauge<long> QueueLeased =
         Meter.CreateObservableGauge("workflow_hub_queue_leased",
-            () => Volatile.Read(ref _queueLeased), "{task}");
+            () => DatabaseMeasurements(s => s.LeasedTasks), "{task}");
     private static readonly ObservableGauge<long> QueueDead =
         Meter.CreateObservableGauge("workflow_hub_queue_dead",
-            () => Volatile.Read(ref _queueDead), "{task}");
+            () => DatabaseMeasurements(s => s.DeadTasks), "{task}");
 
-    public static void PublishDatabaseSnapshot(HubDatabaseDiagnostics stats)
+    private static IEnumerable<Measurement<long>> DatabaseMeasurements(Func<HubDatabaseDiagnostics, long> select)
     {
-        Interlocked.Exchange(ref _databaseConnections, stats.DatabaseConnections);
-        Interlocked.Exchange(ref _activeDatabaseConnections, stats.ActiveDbConnections);
-        Interlocked.Exchange(ref _queueReady, stats.ReadyTasks);
-        Interlocked.Exchange(ref _queueLeased, stats.LeasedTasks);
-        Interlocked.Exchange(ref _queueDead, stats.DeadTasks);
+        var snapshot = Volatile.Read(ref _databaseSnapshot);
+        if (snapshot is not null) yield return new Measurement<long>(select(snapshot));
     }
+
+    public static void PublishDatabaseSnapshot(HubDatabaseDiagnostics stats) =>
+        Volatile.Write(ref _databaseSnapshot, stats);
 
     public static KeyValuePair<string, object?> HubTag(string hub) => new("hub", hub);
     public static KeyValuePair<string, object?> ActivityTag(string type) =>

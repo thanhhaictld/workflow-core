@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using WorkflowCore.Hub;
+using WorkflowCore.Hub.Gateway;
 using WorkflowCore.RemoteExecution;
 using Xunit;
 
@@ -13,6 +16,60 @@ public sealed class MetricIsolationCollection { }
 [Collection("Metric isolation")]
 public sealed class HubMetricTests
 {
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("true", true)]
+    [InlineData("1", true)]
+    [InlineData("false", false)]
+    [InlineData("False", false)]
+    [InlineData("FALSE", false)]
+    [InlineData("0", false)]
+    public async Task MetricsSamplerCanBeDisabledWithoutRemovingGatewayStores(string? flag, bool enabled)
+    {
+        const string flagName = "WFC_HUB_METRICS_SAMPLER_ENABLED";
+        var previous = Environment.GetEnvironmentVariable(flagName);
+        try
+        {
+            Environment.SetEnvironmentVariable(flagName, flag);
+            var services = new ServiceCollection();
+            services.AddHubGateway("Host=localhost;Database=sampler-registration;Username=test;Password=unused");
+            await using var store = Assert.IsType<HubTaskStore>(
+                services.Single(d => d.ServiceType == typeof(HubTaskStore)).ImplementationInstance);
+            Assert.Equal(enabled, services.Any(d => d.ServiceType == typeof(IHostedService) &&
+                d.ImplementationType == typeof(HubMetricsSampler)));
+            Assert.Contains(services, d => d.ServiceType == typeof(HubOperationsStore));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(flagName, previous);
+        }
+    }
+
+    [Fact]
+    public void DatabaseGaugesPublishActualSnapshotValuesIncludingZero()
+    {
+        var expected = new Dictionary<string, long> {
+            ["workflow_hub_database_connections"] = 11,
+            ["workflow_hub_database_active_connections"] = 3,
+            ["workflow_hub_queue_ready"] = 7,
+            ["workflow_hub_queue_leased"] = 2,
+            ["workflow_hub_queue_dead"] = 0
+        };
+        var actual = new Dictionary<string, long>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) => {
+            if (instrument.Meter.Name == HubTelemetry.MeterName && expected.ContainsKey(instrument.Name))
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, value, _, _) => actual[instrument.Name] = value);
+        listener.Start();
+        HubTelemetry.PublishDatabaseSnapshot(new(11, 3, 7, 2, 0));
+        listener.RecordObservableInstruments();
+        Assert.Equal(expected.Count, actual.Count);
+        Assert.All(expected, pair => Assert.Equal(pair.Value, actual[pair.Key]));
+    }
+
     private sealed record Measurement(string Name, double Value, Dictionary<string, object?> Tags);
     private sealed class Capture : IDisposable
     {

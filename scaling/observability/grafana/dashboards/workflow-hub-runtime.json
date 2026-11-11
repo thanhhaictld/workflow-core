@@ -96,7 +96,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(workflow_hub_database_connections) or vector(0)",
+          "expr": "sum(workflow_hub_database_connections)",
           "legendFormat": "",
           "range": true,
           "interval": ""
