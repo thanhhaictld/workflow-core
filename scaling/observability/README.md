@@ -410,6 +410,17 @@ including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ### Worker claims and durable activity completions
 
+To compare Hub SQL sampling overhead, set `WFC_HUB_METRICS_SAMPLER_ENABLED=false`
+and restart the Hub processes. The default is enabled. The owner-recovery stack
+has a shortcut: `make obs-owner-recovery-up-off-metric-sampler`; normal
+`make obs-owner-recovery-up` restores the default unless your shell or `.env`
+disables it. Both Hub replicas receive the flag. This removes the five-second
+database/queue sampler and its minute-level operations-history writes, while
+retaining claim/execution metrics and OTEL export. Sampled queue/connection
+series remain absent until a real sample is published, and operations history
+has a gap. Collector SQL, on-demand monitor queries, and runtime scheduling
+remain active. See [sampler A/B usage](owner-recovery.md#start-test-and-stress).
+
 The `WorkflowCore.Hub` meter exports `workflow_claim_attempts_total`,
 `workflow_claim_empty_total`, and `workflow_claim_success_total`, plus
 `workflow_claim_duration_seconds` and `workflow_claim_batch_size` histograms.

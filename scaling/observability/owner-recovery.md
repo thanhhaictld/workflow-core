@@ -25,6 +25,7 @@ test image. k6 runs in the existing Compose container.
 ```powershell
 make obs-setup                        # preserve an existing .env
 make obs-owner-recovery-up
+make obs-owner-recovery-up-off-metric-sampler  # A/B run without Hub SQL metric sampling
 make obs-owner-recovery-test          # k6 smoke against the running stack
 make obs-owner-recovery-test-4k       # 4,000 workflows with 400 VUs
 make obs-owner-recovery-db-test       # optional isolated PostgreSQL test suite
@@ -45,6 +46,7 @@ Each DB-free processor has independent 8-slot workflow and activity lanes.
 | Target | Action |
 | --- | --- |
 | `obs-owner-recovery-up` | Build/start observability, monitor and the recovery runtime profile |
+| `obs-owner-recovery-up-off-metric-sampler` | Same build/start, with the SQL metrics sampler disabled on both Hubs |
 | `obs-owner-recovery-test` | Run k6 unordered/keyed cohorts of 40 each on the running stack |
 | `obs-owner-recovery-test-4k` | Run 4,000 workflows with 400 VUs using `K6_POLICY_MODE`, then durable audit |
 | `obs-owner-recovery-stress-test` | Run existing `k6-policy` with selected mode/count/VUs, then durable audit |
@@ -64,6 +66,26 @@ Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
 `K6_POLICY_TIMEOUT_SECONDS=600`. Keyed mode uses eight capacity-one resource
 keys; partition mode uses the sample's partition-ordering policy. These are
 synthetic 75 ms activities, not production capacity measurements.
+
+For a sampler-cost comparison, run `make obs-owner-recovery-up-off-metric-sampler`
+and then the same `test` or `stress-test` command used for the baseline. This is
+an alias for normal `up` with `WFC_HUB_METRICS_SAMPLER_ENABLED=false` exported to
+both Hubs. The flag defaults to `true`; `0` and case-insensitive `false` disable it.
+It is read at process startup. Run `make obs-owner-recovery-up` to restore the
+sampler, provided your shell and `.env` do not explicitly disable it.
+
+The switch removes `HubMetricsSampler` entirely: no five-second database/queue
+diagnostics, minute-level operations-history samples, or sampler-triggered
+midnight pruning. Existing history is preserved. Sampled queue/connection series
+remain absent in the restarted Hubs; previously exported values may remain visible
+until stale, and operations-history charts have a sampling gap. Claim counters,
+request/execution timings, process metrics, timer/recovery loops, OTEL export,
+and the collector's PostgreSQL receivers remain active. Monitor requests and
+collector SQL can still add database load, so this compares the Hub sampler's
+cost rather than measuring a runtime with all observability disabled.
+
+Without Make, set `$env:WFC_HUB_METRICS_SAMPLER_ENABLED='false'` before running
+`pwsh -NoProfile -File scripts/owner-recovery.ps1 up`, or put the flag in `.env`.
 
 SSE workers offer one credit per free execution slot. The Hub can combine
 workflow credits already queued on the same session into one claim of up to 32 tasks;

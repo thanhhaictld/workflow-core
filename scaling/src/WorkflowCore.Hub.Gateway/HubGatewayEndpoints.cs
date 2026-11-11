@@ -53,7 +53,11 @@ public static class HubGatewayEndpoints
                 Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_CONNECTION") ?? connectionString,
                 sp.GetRequiredService<HubReadinessBroadcaster>(),
                 sp.GetRequiredService<ILogger<PostgresHubNotificationListener>>()));
-        services.AddHostedService<HubMetricsSampler>();
+        // Benchmark control: omit periodic diagnostics and operations-history SQL,
+        // while retaining request/execution metrics and OTEL export.
+        var samplerFlag = Environment.GetEnvironmentVariable("WFC_HUB_METRICS_SAMPLER_ENABLED");
+        if (samplerFlag != "0" && !string.Equals(samplerFlag, "false", StringComparison.OrdinalIgnoreCase))
+            services.AddHostedService<HubMetricsSampler>();
         return services;
     }
 
