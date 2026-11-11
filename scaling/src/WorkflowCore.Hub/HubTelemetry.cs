@@ -48,6 +48,8 @@ public static class HubTelemetry
     // Worker-observed HTTP claims and newly committed activity completions.
     // Names omit Prometheus suffixes; the collector adds _total to counters.
     public static readonly Counter<long> ClaimAttempts = Meter.CreateCounter<long>("workflow_claim_attempts");
+    // Pending worker HTTP requests, including server-held long polls; not task execution.
+    public static readonly UpDownCounter<long> ClaimInflight = Meter.CreateUpDownCounter<long>("workflow_claim_inflight");
     public static readonly Counter<long> ClaimEmpty = Meter.CreateCounter<long>("workflow_claim_empty");
     public static readonly Counter<long> ClaimSuccess = Meter.CreateCounter<long>("workflow_claim_success");
     public static readonly Histogram<double> ClaimHttpDuration = Meter.CreateHistogram<double>("workflow_claim_duration_seconds", "s");

@@ -423,6 +423,25 @@ are 0, 1, 2, 4, 8, 16, 24, and 32. Duration bounds are 0.0005, 0.001,
 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 30, and 60 seconds. Both include the implicit +Inf bucket.
 
+`workflow_claim_inflight` tracks pending worker HTTP requests, including held
+long polls. It increases before sending and decreases when the request finishes,
+including errors and cancellation. It uses `lane` and `transport` labels and
+excludes task execution, retry backoff, and persistent SSE task delivery.
+`workflow_claim_attempts_total` counts request starts; the duration histogram's
+`workflow_claim_duration_seconds_count` counts request finishes with an outcome.
+Finishing a request does not mean its returned tasks have completed execution.
+
+Dashboard panels 37–40 show starts versus finishes per second, requests in flight,
+finished outcomes, and p95/p99 HTTP latency for both workflow and activity lanes,
+split by transport. Rates and percentiles use a one-minute window. In-flight is
+summed directly across worker instances, rather than inferred by subtracting
+counters. The default Compose stack exports and scrapes metrics every five
+seconds; these are sampled aggregates, not individual request timelines.
+Process termination can lose final measurements, and an in-flight series from a
+terminated instance may persist until it becomes stale. Missing series remain
+missing. Long-poll waits can legitimately produce high latency and nonzero
+in-flight while no tasks are executing.
+
 Claim labels are bounded: `lane=activity|workflow` and `transport=claim|poll`;
 duration also has `outcome`. Workflow-lane tasks are processor work, not
 business activities. Success uses the returned task type to classify its lane;
