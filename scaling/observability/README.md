@@ -65,39 +65,57 @@ stack if it is still running (set `WFC_OBSERVABILITY_PROJECT` to
 `workflow-hub-observability` for that command). Back up and migrate any data
 you need separately.
 
+The default Make command starts the validated policy-benchmark stack: two Hubs,
+four matching shards, and four processor containers with eight workflow and
+eight activity slots each. It builds the application images, applies migrations,
+and waits for the services and policy definitions to become ready. The project
+name and existing volumes are shared with the owner-recovery commands.
+
 ~~~bash
 # From the repository root:
-cp scaling/observability/.env.example scaling/observability/.env
-# Edit scaling/observability/.env to set strong local token/password.
-
-pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
-  --env-file scaling/observability/.env \
-  up -d --build --scale provisioner=4
-
-pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
-  --env-file scaling/observability/.env ps
-~~~
-
-GNU Make shortcuts are also available:
-
-~~~bash
 make obs-setup                      # create .env if it does not exist
 # Edit scaling/observability/.env to set a local token and password.
-make obs-up                         # build and start with four Provisioners
-make obs-scale PROVISIONERS=6       # change the number of Provisioners
+make obs-up                         # build/start the validated configuration
+make obs-up OBS_PROCESSORS=8        # optional processor-count override
+make obs-config                     # inspect effective flags and replica count
 make obs-ps
-make obs-stress-test                # use K6_* settings from .env
+make obs-logs
+make obs-test-4k                     # 4,000 policy workflows, 100 VUs + durable audit
 make obs-down                       # retain named volumes
-make obs-clean                      # delete stack and named volumes
 ~~~
+
+The preset enables snapshot contract reuse, SSE task push, matching long polling,
+event-gated dispatch, demand-aware claim admission, unconstrained split batch
+claims, indexed matching buckets, completion fast paths, batched history, the
+subscription-based native event lane, and the scheduler. The Hub pool stays at
+12 connections, with admission limit 3 and one waiter. The periodic SQL metrics
+sampler is disabled; OTEL metrics, traces and logs remain enabled.
+
+Ordered capability merge, new index 028 installation, capacity fanout, scoped
+claims, deferred owner checks and the FIFO-head prefilter are disabled in this
+preset. Existing indexes are retained. See the
+[throughput investigation](../docs/snapshot-contract-reuse-throughput.md) for
+the measured workload, recovery behavior and limitations.
+
+Flags use separate target-specific Make exports and override `.env` values for
+these short commands. Explicit Make assignments still work, for example
+`make obs-up WFC_HUB_REUSE_SNAPSHOT_CONTRACTS=false`. This restarts/recreates
+services when their configuration changes. First use `make obs-config` to review
+the configuration. Existing `.env` credentials are not replaced.
+
+`make obs-base-up` retains the previous base-only startup. The existing
+`obs-offboarding-*`, `obs-stress-test`, and `obs-owner-recovery-*` commands remain
+available for their specific workloads. `make obs-clean` explicitly deletes the
+project's named volumes; normal shutdown does not.
 
 Set `OBS_ENV_FILE` or `OBS_COMPOSE_FILE` to use different files. Compose
 environment variables override values in the env file as usual. For example,
 `K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
 that run. `make up` remains the separate PowerShell development stack.
 
-Startup targets build application images by default, reusing Docker's cache
-for unchanged inputs. To rebuild code using a cached Node base image, set
+`obs-up` always builds application images, reusing Docker's cache for unchanged
+inputs. The base and experimental startup targets use `OBS_LOCAL_IMAGES` to
+select their image behavior. To rebuild code using a cached Node base image, set
 `MONITOR_NODE_IMAGE` in `.env` to a compatible local Node 22 image (for example,
 `node:22.23.3-bookworm-slim` if `docker image inspect` confirms it exists), then
 run the usual `make obs-offboarding-up` or `make obs-offboarding-sse-up`.
@@ -115,13 +133,13 @@ Docker's configured build resolver.
 
 To skip builds entirely when container registries are unavailable, reuse this checkout's cached service
 images with `make obs-offboarding-up OBS_LOCAL_IMAGES=1`. The same option works
-with `obs-up`, `obs-offboarding-fanout-up`, and `obs-offboarding-sse-up`.
-It passes `up --no-build --pull never`, so the monitor uses its existing image
-without resolving or pulling its Node base image. All service images must
-already exist locally for this worktree's Compose project; missing images fail
-instead of being downloaded. Source changes require a later rebuild without
-`OBS_LOCAL_IMAGES=1`. For direct Compose use, place `--no-build --pull never`
-after `up`; `--no-pull` is not a global Compose option.
+with `obs-base-up`, `obs-offboarding-fanout-up`, and `obs-offboarding-sse-up`.
+These targets pass `up --pull never` and reuse existing service images; a missing
+application image can still trigger a build. Source changes require a later
+rebuild with `OBS_LOCAL_IMAGES=0`. For strict reuse without builds, invoke the
+Compose launcher with `up --no-build --pull never`; all service images must
+already exist locally for this worktree's project. These flags go after `up`;
+`--no-pull` is not a global Compose option.
 
 PowerShell:
 

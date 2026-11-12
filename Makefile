@@ -44,6 +44,8 @@ OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
 OFFBOARD_PROCESSORS ?= 16
+# Validated policy-benchmark stack: two Hubs, four matching shards.
+OBS_PROCESSORS ?= 4
 # Reuse previously built service images without contacting container registries.
 OBS_LOCAL_IMAGES ?= 1
 ifeq ($(OBS_LOCAL_IMAGES),1)
@@ -88,7 +90,7 @@ $(SSE_PUSH_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
 $(SSE_PUSH_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
-obs-up:
+obs-base-up:
 	$(OBS_COMPOSE) up -d $(OBS_UP_IMAGE_FLAGS)
 
 	
@@ -174,15 +176,9 @@ obs-offboarding-sse-logs:
 obs-offboarding-sse-down:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
-obs-down:
-	$(OBS_FANOUT_COMPOSE) --profile * down
-
 # Destructive: deletes named volumes belonging to this Compose project.
 obs-clean:
 	$(OBS_COMPOSE) --profile * down --volumes
-
-obs-ps:
-	$(OBS_COMPOSE) --profile * ps -a
 
 # Recovery suite uses the existing observability base, HA and shard overlays,
 # Grafana provisioning and k6-policy workload. No second runtime stack.
@@ -207,4 +203,44 @@ obs-owner-recovery-up-off-metric-sampler: obs-owner-recovery-up
 
 .PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))
 $(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
-	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)
+	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Processors $(OBS_PROCESSORS) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)
+
+# Default observability preset. Use one export per flag; command-line Make
+# assignments override these values. Private .env credentials are untouched.
+OBS_GOLDEN_TARGETS := obs-up obs-config obs-logs obs-ps obs-down obs-test-4k
+.PHONY: $(OBS_GOLDEN_TARGETS) obs-base-up
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_METRICS_SAMPLER_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_DB_POOL := 12
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_MODE := demand
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_LIMIT := 3
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS := 1
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_COMPLETION_FAST_PATH_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_BATCH_HISTORY_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_NATIVE_EVENT_LANE_MODE := subscriptions
+$(OBS_GOLDEN_TARGETS): export HUB_SCHEDULER_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_ADAPTIVE_CLAIMS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := 4
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_TASK_SSE_PUSH := true
+$(OBS_GOLDEN_TARGETS): export WORKFLOW_WORKERS := 8
+$(OBS_GOLDEN_TARGETS): export ACTIVITY_WORKERS := 8
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := 4
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE := 0
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_ORDERED_CAPABILITY_MERGE := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_INSTALL_SHARD4_READY_INDEX := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_SCOPED_CLAIMS := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_DEFER_OWNER_CHECK := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
+obs-up: obs-owner-recovery-up
+obs-config: obs-owner-recovery-config
+obs-logs: obs-owner-recovery-logs
+obs-ps: obs-owner-recovery-ps
+obs-down: obs-owner-recovery-down
+obs-test-4k: obs-owner-recovery-test-4k

@@ -7,6 +7,7 @@ param(
     [string]$ComposeFile = 'scaling/observability/compose.yaml',
     [string]$EnvFile = 'scaling/observability/.env',
     [ValidateRange(0,65200)][int]$PortBase = 0,
+    [ValidateRange(1,64)][int]$Processors = 4,
     [string]$Results = 'artifacts/owner-recovery',
     [string]$Python = 'python',
     [string]$Filter = '',
@@ -24,6 +25,11 @@ $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 if ($Task -eq 'help') {
     Write-Host @'
 Owner recovery on the existing Grafana/Prometheus/Tempo/Loki observability stack:
+  make obs-up                         Build/start validated defaults (4 processors)
+  make obs-up OBS_PROCESSORS=8        Override processor count
+  make obs-config                     Inspect the validated Compose configuration
+  make obs-test-4k                     Run 4,000 workflows / 100 VUs + durable audit
+  make obs-ps / obs-logs / obs-down   Inspect, log or stop the same stack (keep data)
   make obs-owner-recovery-setup        Create OBS_ENV_FILE if missing
   make obs-owner-recovery-up           Build/start base stack + HA/shards/recovery overlays
   make obs-owner-recovery-up-off-metric-sampler  Same stack, without Hub SQL metric sampling
@@ -40,6 +46,8 @@ K6_POLICY_MODE=unordered|partition|keyed K6_POLICY_COUNT=300 K6_POLICY_VUS=60
 OWNER_PORT_BASE=0 keeps .env ports; a nonzero base assigns distinct loopback ports.
 OWNER_FAULT_VICTIM=hub|hub-2|both OWNER_FAULT_MODE=idle|busy|both OWNER_FAULT_REPEAT=2
 Without Make: pwsh -NoProfile -File scripts/owner-recovery.ps1 test
+Direct startup: pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 4
+The validated feature-flag preset is exported by the short Make targets.
 '@
     exit 0
 }
@@ -66,6 +74,7 @@ $testProject = "$Project-owner-tests"
 $resultsPath = [IO.Path]::GetFullPath($Results, $root)
 New-Item -ItemType Directory -Path (Join-Path $resultsPath 'tests') -Force | Out-Null
 $env:WFC_OBSERVABILITY_PROJECT = $Project
+$env:OBS_PROCESSORS = "$Processors"
 $env:OWNER_RECOVERY_RESULTS = $resultsPath.Replace('\','/')
 if ($PortBase) {
     if ($PortBase -lt 1024) { throw 'A nonzero port base must be >=1024' }
@@ -147,7 +156,7 @@ function Start-Lab {
     Invoke-Compose up -d --wait postgres otel-collector prometheus tempo loki grafana postgres-process-exporter
     Invoke-Compose run --rm --no-deps migrate
     Invoke-Compose up -d --no-deps --wait hub hub-2 hub-lb monitor
-    Invoke-Compose up -d --no-deps --wait --scale processor=8 processor
+    Invoke-Compose up -d --no-deps --wait --scale "processor=$Processors" processor
     Wait-LabReady
     Write-Host "Hub: http://127.0.0.1:$lbPort; Grafana: http://127.0.0.1:$grafanaPort; Prometheus: http://127.0.0.1:$prometheusPort"
 }
@@ -207,7 +216,7 @@ switch ($Task) {
                 foreach ($laneMode in $modes) {
                     Invoke-Compose stop processor hub hub-2
                     Invoke-Compose up -d --no-deps --wait hub hub-2 hub-lb
-                    Invoke-Compose up -d --no-deps --wait --scale processor=4 processor
+                    Invoke-Compose up -d --no-deps --wait --scale "processor=$Processors" processor
                     $faultArgs = @('experiment','--label',"modified-compose-$target-$laneMode-$trial-$runId",'--victim',$target,'--seconds','85')
                     if ($laneMode -eq 'busy') { $faultArgs += '--busy' }
                     Invoke-Lab @faultArgs
