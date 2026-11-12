@@ -70,12 +70,16 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Index-backed filter for matching shard counts dividing 64; explicit opt-out
     // retains the legacy modulo expression for comparison.
     private readonly bool _indexedMatchingBucketClaimsEnabled;
+    private readonly bool _splitBatchClaimCandidatesEnabled;
+    private readonly bool _orderedCapabilityMergeEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
         bool? enableUnconstrainedBatchClaims = null,
         bool? enableFifoHeadPrefilter = null,
-        bool? enableIndexedMatchingBucketClaims = null)
+        bool? enableIndexedMatchingBucketClaims = null,
+        bool? enableSplitBatchClaimCandidates = null,
+        bool? enableOrderedCapabilityMerge = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -117,6 +121,11 @@ public sealed class HubTaskStore : IAsyncDisposable
         _indexedMatchingBucketClaimsEnabled = enableIndexedMatchingBucketClaims ??
             (!string.Equals(indexedBucketMode, "false", StringComparison.OrdinalIgnoreCase) &&
              indexedBucketMode != "0");
+        var splitBatchMode = Environment.GetEnvironmentVariable("WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES");
+        _splitBatchClaimCandidatesEnabled = enableSplitBatchClaimCandidates ??
+            (!string.Equals(splitBatchMode, "false", StringComparison.OrdinalIgnoreCase) && splitBatchMode != "0");
+        _orderedCapabilityMergeEnabled = enableOrderedCapabilityMerge ??
+            (Environment.GetEnvironmentVariable("WFC_HUB_ORDERED_CAPABILITY_MERGE") is "true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -255,7 +264,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
         int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null,
         int? matchingPartition = null, int? matchingPartitionCount = null,
-        bool deferWhenBusy = false)
+        bool deferWhenBusy = false, HubMatchingPartitionLease? matchingOwner = null)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
@@ -269,6 +278,14 @@ public sealed class HubTaskStore : IAsyncDisposable
                  matchingPartition!.Value < 0 ||
                  matchingPartition.Value >= matchingPartitionCount.Value)))
             throw new ArgumentException("Invalid worker claim parameters");
+
+        // Experimental owner-fenced admission is limited to the atomic,
+        // unconstrained batch. It never falls through to individually
+        // committed claims, which do not hold the owner lock.
+        if (matchingOwner is not null && (!_unconstrainedBatchClaimsEnabled ||
+            hubs.Count != 1 || matchingPartition is null || matchingPartitionCount is null ||
+            matchingOwner.HubId != hubs[0] || matchingOwner.Partition != matchingPartition))
+            throw new ArgumentException("Owner-fenced claims require one matching shard and batch claims");
 
         var matchPartition = matchingPartition ?? 0;
         var matchCount = matchingPartitionCount ?? 1;
@@ -360,7 +377,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             // The legacy path then fills any remaining slots, including all
             // resource-constrained work (FIFO / capacity permits).
             var batchLeases = await ClaimUnconstrainedBatchAsync(db, workerId,
-                hubs, supported, pins, maxTasks, lease, matchPartition, matchCount, matchingBuckets, ct);
+                hubs, supported, pins, maxTasks, lease, matchPartition, matchCount, matchingBuckets, ct,
+                matchingOwner);
             results.AddRange(batchLeases);
             span?.SetTag("tasks.unconstrained_batch_claimed", batchLeases.Count);
         }
@@ -379,7 +397,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         // found, probe at most one fallback task for unusual constrained work.
         var nativeOnlyBatch = _unconstrainedBatchClaimsEnabled && maxTasks > 1 &&
             capabilities.All(c => c.TaskType == "__native_workflow__");
-        var fallbackLimit = nativeOnlyBatch ? (results.Count == 0 ? 1 : results.Count) : maxTasks;
+        var fallbackLimit = matchingOwner is not null ? results.Count :
+            nativeOnlyBatch ? (results.Count == 0 ? 1 : results.Count) : maxTasks;
         for (var batch = results.Count; batch < fallbackLimit; batch++)
         {
             var candidates = new List<Guid>();
@@ -668,6 +687,84 @@ public sealed class HubTaskStore : IAsyncDisposable
         }
     }
 
+    // Each branch locks at most the requested batch size. Their ordered merge
+    // preserves the existing oldest-eligible selection, while SKIP LOCKED avoids
+    // waiting on competitors. Rows locked by a branch but omitted by the merge
+    // remain locked only until this transaction commits; they are never leased.
+    // Set WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES=false to use the original query.
+    private static readonly string SplitBatchClaimSql = """
+        WITH ready AS MATERIALIZED (
+            SELECT t.id,t.sequence FROM wfc_scale.hub_task t
+            WHERE t.state=0 AND t.due_at<=now() AND /*eligibility*/
+            ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
+        ), expired AS MATERIALIZED (
+            SELECT t.id,t.sequence FROM wfc_scale.hub_task t
+            WHERE t.state=1 AND t.lease_until<now() AND /*eligibility*/
+            ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
+        ), candidates AS MATERIALIZED (
+            SELECT id FROM (SELECT id,sequence FROM ready UNION ALL
+                            SELECT id,sequence FROM expired) eligible
+            ORDER BY sequence LIMIT @limit
+        )
+        UPDATE wfc_scale.hub_task t
+        SET state=1, owner=@owner, last_owner=@owner, epoch=t.epoch+1,
+            attempts=t.attempts+1, lease_until=now()+@lease, updated_at=now()
+        FROM candidates c WHERE t.id=c.id
+        RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
+                  t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
+                  COALESCE(t.workflow_step,t.native_step_id)
+        """.Replace("/*eligibility*/", BatchEligibility);
+
+    private const string BatchEligibility = """
+            /*hub_filter*/ AND /*indexed_partition_filter*/
+            AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
+            AND t.attempts < t.max_attempts
+            AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
+            AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
+                            WHERE w.id=t.workflow_id AND w.execution_mode='native'
+                              AND w.native_status<>'Runnable')
+            AND (t.task_type NOT IN ('__workflow__','__native_workflow__')
+                 OR @pins IS NULL OR EXISTS (
+                     SELECT 1 FROM wfc_scale.hub_workflow w,
+                         jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                     WHERE w.id=t.workflow_id AND w.hub_id=p.hub
+                       AND w.definition_id=p.definition AND w.definition_version=p.version))
+            """;
+
+    // Opt-in four-shard experiment. Each capability locks up to @limit ready
+    // rows in sequence order, then the merge chooses the globally oldest rows.
+    // Bound capability count at the call site: rows not selected by the merge
+    // remain locked until commit and can temporarily be skipped by competitors.
+    private static readonly string OrderedCapabilityMergeSql = """
+        WITH ready AS MATERIALIZED (
+            SELECT candidate.id,candidate.sequence
+            FROM (SELECT DISTINCT unnest(@types) AS capability) caps
+            CROSS JOIN LATERAL (
+                SELECT t.id,t.sequence FROM wfc_scale.hub_task t
+                WHERE t.state=0 AND t.due_at<=now() AND /*ready_eligibility*/
+                ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
+            ) candidate
+        ), expired AS MATERIALIZED (
+            SELECT t.id,t.sequence FROM wfc_scale.hub_task t
+            WHERE t.state=1 AND t.lease_until<now() AND /*eligibility*/
+            ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
+        ), candidates AS MATERIALIZED (
+            SELECT id FROM (SELECT id,sequence FROM ready UNION ALL
+                            SELECT id,sequence FROM expired) eligible
+            ORDER BY sequence LIMIT @limit
+        )
+        UPDATE wfc_scale.hub_task t
+        SET state=1, owner=@owner, last_owner=@owner, epoch=t.epoch+1,
+            attempts=t.attempts+1, lease_until=now()+@lease, updated_at=now()
+        FROM candidates c WHERE t.id=c.id
+        RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
+                  t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
+                  COALESCE(t.workflow_step,t.native_step_id)
+        """.Replace("/*ready_eligibility*/", BatchEligibility
+            .Replace("/*indexed_partition_filter*/", "t.partition_id % 4 = @matchPartition")
+            .Replace("= ANY(@types)", "= caps.capability"))
+           .Replace("/*eligibility*/", BatchEligibility);
+
     /// <summary>
     /// Single-round-trip row selection and lease update for tasks with NO
     /// hub_task_constraint rows. The SQL must exclude constrained tasks before
@@ -677,12 +774,19 @@ public sealed class HubTaskStore : IAsyncDisposable
     private async Task<IReadOnlyList<HubLeasedTask>> ClaimUnconstrainedBatchAsync(
         NpgsqlConnection db, string workerId, IReadOnlyList<string> hubs,
         string[] supported, string? pins, int maxTasks, TimeSpan lease,
-        int matchingPartition, int matchingCount, int[]? matchingBuckets, CancellationToken ct)
+        int matchingPartition, int matchingCount, int[]? matchingBuckets, CancellationToken ct,
+        HubMatchingPartitionLease? matchingOwner = null)
     {
         var started = Stopwatch.GetTimestamp();
         await using var tx = await db.BeginTransactionAsync(ct);
+        if (matchingOwner is not null &&
+            !await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+                db, tx, matchingOwner, matchingCount, ct))
+            throw new InvalidOperationException("Matching owner generation is no longer valid");
         var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
-        await using (var command = new NpgsqlCommand("""
+        var orderedMerge = _orderedCapabilityMergeEnabled && _splitBatchClaimCandidatesEnabled &&
+            matchingCount == 4 && hubs.Count == 1 && supported.Distinct().Take(9).Count() <= 8;
+        await using (var command = new NpgsqlCommand((orderedMerge ? OrderedCapabilityMergeSql : _splitBatchClaimCandidatesEnabled ? SplitBatchClaimSql : """
             WITH candidates AS MATERIALIZED (
                 SELECT t.id
                 FROM wfc_scale.hub_task t
@@ -716,7 +820,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
                       t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
                       COALESCE(t.workflow_step,t.native_step_id)
-            """.Replace("/*hub_filter*/", hubs.Count == 1
+            """).Replace("/*hub_filter*/", hubs.Count == 1
                 ? "t.hub_id = @hub" : "t.hub_id = ANY(@hubs)")
                .Replace("/*indexed_partition_filter*/", matchingCount == 1
                 ? "TRUE" : matchingBuckets is not null

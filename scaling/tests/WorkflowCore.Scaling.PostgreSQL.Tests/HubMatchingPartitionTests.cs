@@ -14,6 +14,137 @@ public sealed class HubMatchingPartitionTests
     private static string Hub() => "matching-shards-" + Guid.NewGuid().ToString("N");
 
     [Fact]
+    public async Task AdmissionLock_RechecksExpiryAfterWaitingForUnchangedOwnerRow()
+    {
+        if (Database is null) return;
+        await using var store = new HubTaskStore(Database, 4);
+        var owners = new HubMatchingPartitionLeaseStore(store);
+        var owner = await owners.AcquireOrReadAsync(Hub(), 0, 4, "hub-a", "http://hub:5100",
+            TimeSpan.FromSeconds(3), default);
+        await using var blocker = new NpgsqlConnection(Database);
+        await blocker.OpenAsync();
+        await using var blocking = await blocker.BeginTransactionAsync();
+        await using (var row = new NpgsqlCommand("""
+            SELECT 1 FROM wfc_scale.hub_matching_partition_owner
+            WHERE hub_id=@hub FOR UPDATE
+            """, blocker, blocking))
+        {
+            row.Parameters.AddWithValue("hub", owner.HubId);
+            await row.ExecuteScalarAsync();
+        }
+        await using var admission = new NpgsqlConnection(Database);
+        await admission.OpenAsync();
+        await using var tx = await admission.BeginTransactionAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var pending = HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+            admission, tx, owner, 4, timeout.Token);
+        await using (var blocked = new NpgsqlCommand(
+            "SELECT cardinality(pg_blocking_pids(@pid))>0", blocker, blocking))
+        {
+            blocked.Parameters.AddWithValue("pid", admission.ProcessID);
+            while (!(bool)(await blocked.ExecuteScalarAsync(timeout.Token))!)
+                await Task.Delay(10, timeout.Token);
+        }
+        // Expire the lease while admission is blocked, without updating the row.
+        // A predicate evaluated before LockRows would otherwise remain true.
+        await using (var expire = new NpgsqlCommand(
+            "SELECT pg_sleep(GREATEST(0,extract(epoch FROM (@expiry-clock_timestamp())))+0.1)",
+            blocker, blocking))
+        {
+            expire.Parameters.AddWithValue("expiry", owner.LeaseUntil);
+            await expire.ExecuteNonQueryAsync(timeout.Token);
+        }
+        await blocking.CommitAsync(timeout.Token);
+        Assert.False(await pending);
+        await tx.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task AdmissionLock_SerializesTakeover_AndRejectsOldEpoch()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        await using var store = new HubTaskStore(Database, 4);
+        var owners = new HubMatchingPartitionLeaseStore(store);
+        var old = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-a", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        await using var admission = new NpgsqlConnection(Database);
+        await admission.OpenAsync();
+        await using var tx = await admission.BeginTransactionAsync();
+        Assert.True(await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+            admission, tx, old, 4, default));
+
+        await using (var competitor = new NpgsqlConnection(Database))
+        {
+            await competitor.OpenAsync();
+            await using var change = new NpgsqlCommand("""
+                SET lock_timeout='250ms';
+                UPDATE wfc_scale.hub_matching_partition_owner
+                SET lease_until=clock_timestamp()-interval '1 second'
+                WHERE hub_id=@hub AND matching_partition=0
+                """, competitor);
+            change.Parameters.AddWithValue("hub", hub);
+            var error = await Assert.ThrowsAsync<PostgresException>(() => change.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.LockNotAvailable, error.SqlState);
+        }
+        await tx.CommitAsync();
+        Assert.True(await owners.ReleaseAsync(hub, 0, "hub-a", old.Epoch, default));
+        var replacement = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-a", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        Assert.True(replacement.Epoch > old.Epoch);
+        await using var next = await admission.BeginTransactionAsync();
+        Assert.False(await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+            admission, next, old, 4, default));
+        Assert.False(await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+            admission, next, replacement, 3, default));
+        Assert.True(await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
+            admission, next, replacement, 4, default));
+        await next.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task OwnerFencedBatch_RejectsStaleGeneration_AndDoesNotClaimConstrainedFallback()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        await using var store = new HubTaskStore(Database, 4, enableUnconstrainedBatchClaims: true);
+        var owners = new HubMatchingPartitionLeaseStore(store);
+        var old = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-a", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        var free = Guid.NewGuid();
+        var constrained = Guid.NewGuid();
+        await using (var db = new NpgsqlConnection(Database))
+        {
+            await db.OpenAsync();
+            await using var cmd = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+                VALUES (@free,@hub,0,'work',1,'{}'),(@constrained,@hub,0,'work',1,'{}');
+                INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
+                VALUES (@hub,1,true);
+                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
+                VALUES (@constrained,@hub)
+                """, db);
+            cmd.Parameters.AddWithValue("free", free);
+            cmd.Parameters.AddWithValue("constrained", constrained);
+            cmd.Parameters.AddWithValue("hub", hub);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        async Task<IReadOnlyList<HubLeasedTask>> Claim(HubMatchingPartitionLease owner) =>
+            await store.ClaimAsync("worker", [hub], [new(hub, "work", 1)], 8,
+                TimeSpan.FromSeconds(30), default, matchingPartition: 0,
+                matchingPartitionCount: 4, matchingOwner: owner);
+        Assert.True(await owners.ReleaseAsync(hub, 0, "hub-a", old.Epoch, default));
+        var current = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-b", "http://hub-2:5100",
+            TimeSpan.FromSeconds(30), default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Claim(old));
+        Assert.Equal(free, Assert.Single(await Claim(current)).Id);
+        Assert.Empty(await Claim(current));
+        var legacy = await store.ClaimAsync("legacy", [hub], [new(hub, "work", 1)], 1,
+            TimeSpan.FromSeconds(30), default);
+        Assert.Equal(constrained, Assert.Single(legacy).Id);
+    }
+
+    [Fact]
     public async Task DifferentMatchingPartitionsCanBeOwnedByDifferentHubReplicas()
     {
         if (Database is null) return;

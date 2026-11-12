@@ -28,7 +28,7 @@ Owner recovery on the existing Grafana/Prometheus/Tempo/Loki observability stack
   make obs-owner-recovery-up           Build/start base stack + HA/shards/recovery overlays
   make obs-owner-recovery-up-off-metric-sampler  Same stack, without Hub SQL metric sampling
   make obs-owner-recovery-test         Run k6 smoke on the running stack (unordered/keyed)
-  make obs-owner-recovery-test-4k      Run 4,000 workflows with 400 VUs on the running stack
+  make obs-owner-recovery-test-4k      Run 4,000 workflows with 100 VUs on the running stack
   make obs-owner-recovery-stress-test  Existing k6-policy workload + durable audit
   make obs-owner-recovery-db-test      Isolated test project, base postgres/migrate definitions
   make obs-owner-recovery-fault-test   Either owner, idle/busy, continuous tracing (85s each)

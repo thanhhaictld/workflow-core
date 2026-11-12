@@ -202,6 +202,7 @@ OWNER_TARGETS := help setup config build up ps logs down db-test smoke-test stre
 .PHONY: obs-owner-recovery-up-off-metric-sampler
 # Inherited by the normal up recipe; Compose applies this to both Hub replicas.
 obs-owner-recovery-up-off-metric-sampler: export WFC_HUB_METRICS_SAMPLER_ENABLED := false
+obs-owner-recovery-up-off-metric-sampler: export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
 obs-owner-recovery-up-off-metric-sampler: obs-owner-recovery-up
 
 .PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))

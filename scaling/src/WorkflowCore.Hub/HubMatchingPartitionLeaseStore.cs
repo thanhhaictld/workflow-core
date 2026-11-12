@@ -15,6 +15,34 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
 {
     private NpgsqlDataSource Source => tasks.DataSource;
 
+    /// <summary>
+    /// Locks and validates a captured matching-owner generation for a short
+    /// admission transaction. Keep the transaction open through the task
+    /// update and history commit so acquisition and release serialize on the
+    /// same owner row. This does not replace a task execution lease.
+    /// </summary>
+    public static async Task<bool> LockOwnerForAdmissionAsync(NpgsqlConnection db,
+        NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
+        int partitionCount, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand("""
+            WITH locked_owner AS MATERIALIZED (
+                SELECT o.lease_until FROM wfc_scale.hub_matching_partition_owner o
+                JOIN wfc_scale.hub_matching_partition_config c ON c.hub_id=o.hub_id
+                WHERE o.hub_id=@hub AND o.matching_partition=@partition
+                  AND c.partition_count=@count AND o.owner_id=@owner AND o.epoch=@epoch
+                FOR UPDATE OF o
+            )
+            SELECT 1 FROM locked_owner WHERE lease_until>clock_timestamp()
+            """, db, transaction);
+        cmd.Parameters.AddWithValue("hub", captured.HubId);
+        cmd.Parameters.AddWithValue("partition", captured.Partition);
+        cmd.Parameters.AddWithValue("count", partitionCount);
+        cmd.Parameters.AddWithValue("owner", captured.OwnerId);
+        cmd.Parameters.AddWithValue("epoch", captured.Epoch);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
     public async Task EnsureConfigAsync(string hub, int count, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(hub) || hub.Length > 80 ||

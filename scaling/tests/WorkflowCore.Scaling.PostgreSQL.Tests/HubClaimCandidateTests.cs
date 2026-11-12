@@ -118,6 +118,28 @@ public sealed class HubClaimCandidateTests
         Assert.Equal(expected, claimed.Select(task => task.Id));
     }
 
+    [Fact]
+    public async Task OrderedCapabilityMerge_RespectsWorkflowPinsAndNativeStatus()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (database is null) return;
+        var hub = "merge-pins-" + Guid.NewGuid().ToString("N");
+        await using var db = new NpgsqlConnection(database);
+        await db.OpenAsync();
+        var accepted = await InsertTask(db, hub, "__native_workflow__");
+        await InsertTask(db, hub, "__native_workflow__", definitionVersion: 2);
+        await InsertTask(db, hub, "__native_workflow__", status: "Suspended");
+        await InsertTask(db, hub, "activity", status: "Complete");
+        var activity = await InsertTask(db, hub, "activity", definitionVersion: 2);
+        await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: true,
+            enableOrderedCapabilityMerge: true);
+        var claimed = await store.ClaimAsync("worker", [hub],
+            [new(hub, "__native_workflow__", 1), new(hub, "activity", 1)],
+            8, TimeSpan.FromSeconds(30), default, [new(hub, "candidate", 1)],
+            matchingPartition: 0, matchingPartitionCount: 4);
+        Assert.True(new[] { accepted, activity }.ToHashSet().SetEquals(claimed.Select(t => t.Id)));
+    }
+
     private static async Task<Guid> InsertTask(NpgsqlConnection db, string hub, string taskType,
         string? mode = "native", string status = "Runnable", int definitionVersion = 1,
         bool workflowReference = true)

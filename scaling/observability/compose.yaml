@@ -28,6 +28,8 @@ services:
       PG_USER: ${PG_USER:-workflow}
       PG_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
       PG_DATABASE: ${PG_DATABASE:-workflow}
+      # Installing the experimental index is independent of query selection.
+      WFC_HUB_INSTALL_SHARD4_READY_INDEX: "${WFC_HUB_INSTALL_SHARD4_READY_INDEX:-false}"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -56,6 +58,10 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_native_reconcile_tasks.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/025_hub_claim_capability_sequence.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/026_hub_matching_bucket_claim_index.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/027_hub_ready_claim_indexes.sql
+        if [ "$$WFC_HUB_INSTALL_SHARD4_READY_INDEX" = "true" ]; then
+          PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/028_hub_claim_shard4_ready.sql
+        fi
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
@@ -101,6 +107,8 @@ services:
       WFC_HUB_CLAIM_ADMISSION_LIMIT: "${WFC_HUB_CLAIM_ADMISSION_LIMIT:-3}"
       WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS: "${WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS:-1}"
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: "${WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS:-false}"
+      WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES: "${WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES:-true}"
+      WFC_HUB_ORDERED_CAPABILITY_MERGE: "${WFC_HUB_ORDERED_CAPABILITY_MERGE:-false}"
       WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: "${WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED:-false}"
       WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS: "${WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS:-true}"
       WFC_HUB_MATCHING_SCOPED_CLAIMS: "${WFC_HUB_MATCHING_SCOPED_CLAIMS:-false}"
@@ -151,6 +159,7 @@ services:
       WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE: "${WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE:-0}"
       WFC_HUB_WORKER_CAPACITY_FANOUT: "${WFC_HUB_WORKER_CAPACITY_FANOUT:-false}"
       WFC_HUB_TASK_SSE_PUSH: "${WFC_HUB_TASK_SSE_PUSH:-false}"
+      WFC_HUB_REUSE_SNAPSHOT_CONTRACTS: "${WFC_HUB_REUSE_SNAPSHOT_CONTRACTS:-false}"
       WFC_HUB_WORKER_MAX_SHARD_POLLS: "${WFC_HUB_WORKER_MAX_SHARD_POLLS:-4}"
       POLICY_BENCHMARK_ENABLED: "${POLICY_BENCHMARK_ENABLED:-false}"
       POLICY_BENCHMARK_ONLY: "${POLICY_BENCHMARK_ONLY:-false}"

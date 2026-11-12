@@ -132,10 +132,15 @@ function Apply-DatabaseSchema {
         '020_hub_reconciliation_indexes.sql', '021_hub_active_task_indexes.sql',
         '022_hub_claim_index_selectivity.sql', '023_hub_claim_hub_sequence.sql',
         '024_hub_native_reconcile_tasks.sql', '025_hub_claim_capability_sequence.sql',
-        '026_hub_matching_bucket_claim_index.sql')) {
+        '026_hub_matching_bucket_claim_index.sql', '027_hub_ready_claim_indexes.sql')) {
         Write-Host "Applying $migration..."
         Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
             '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', "/migrations/$migration")
+    }
+    if ($env:WFC_HUB_INSTALL_SHARD4_READY_INDEX -eq 'true') {
+        Write-Host 'Applying optional 028_hub_claim_shard4_ready.sql...'
+        Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+            '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/028_hub_claim_shard4_ready.sql')
     }
 }
 
@@ -267,7 +272,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
-  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–026 migrations
+  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–027 (028 with WFC_HUB_INSTALL_SHARD4_READY_INDEX=true)
   pwsh ./scripts/dev.ps1 db-down     Stop PostgreSQL (keep data)
   pwsh ./scripts/dev.ps1 db-logs     Tail PostgreSQL logs
   pwsh ./scripts/dev.ps1 db-reset -ConfirmReset    DELETE local DB volume

@@ -50,6 +50,7 @@ the HA Compose overlay.
 - [Claim/completion A/B](workflow-p95-claim-completion-ab.md)
 - [SQL CPU investigation](sql-cpu-statement-investigation.md)
 - [Claim candidate query review and local tuning](hub-claim-query-tuning.md)
+- [Snapshot contract reuse and controlled throughput trials](snapshot-contract-reuse-throughput.md)
 - [Capacity assessment](throughput-1000-to-million-assessment.md)
 - [Historical 1,000-workflow activity benchmark](workflow-hub-1000-performance.md)
 
