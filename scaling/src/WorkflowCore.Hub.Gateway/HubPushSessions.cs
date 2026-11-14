@@ -63,7 +63,9 @@ public sealed class HubPushSessions
         _logger = logger;
         _matcher = new HubEventGatedClaimDispatcher(ClaimAsync, (_, _) => Task.FromResult(true),
             ownership.PartitionCount > 1, ownership.PartitionCount, maxWaiters: MaxSessions);
-        if (Enabled) readiness.TaskReady += _matcher.NotifyReady;
+        // Candidate matching already subscribes to readiness notifications.
+        if (Enabled && _candidate?.Enabled != true)
+            readiness.TaskReady += _matcher.NotifyReady;
     }
 
     private async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(HubClaimRequest request, CancellationToken ct)

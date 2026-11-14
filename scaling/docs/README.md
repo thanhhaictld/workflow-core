@@ -1,105 +1,39 @@
-# Distributed Workflow Core documentation
+# Distributed workflow documentation
 
-Start at the root [README](../../README.md), then read the
-**[current runtime guide](current-runtime.md)**. It consolidates implemented
-architecture, task delivery, scaling modes, configuration and source evidence.
-Reviewed against the working tree on 8 November 2026; all distributed paths
-remain experimental. Configuration in the repository does not prove a feature
-is enabled in a live deployment.
+## Start here — primary architecture
 
-## Current Hub guides
+**[Hub-native architecture: partition candidate matching + fenced SSE push](current-runtime.md)** is the canonical description of the current distributed runtime, its configuration, failure recovery and tests. PostgreSQL is the sole lease and resource/FIFO authority; in-memory matching is advisory.
 
-| Guide | Scope |
+This is one selected architecture, not a menu of recommended polling/streaming alternatives. Adaptive HTTP claims and historical stream adapters remain implementation-level compatibility and emergency rollback paths. The development preset uses two Hub replicas, matching partitions and SSE push.
+
+## Build and operate the Hub runtime
+
+| Document | Purpose |
 | --- | --- |
-| [Current runtime](current-runtime.md) | Runtime choices, Hub components, assignment, SSE/long polling, replica ownership and migration baseline |
-| [Native fluent runtime](hub-native-fluent-runtime.md) | Application registration, mappings, snapshots/inboxes, supported constructs and version compatibility |
-| [Scheduler and remote execution runbook](hub-remote-scheduler-implementation.md) | Hub boundaries, endpoints, local execution and verification |
-| [Activity policy updates](activity-policy-update.md) | Revision-checked operator concurrency changes |
-| [Explicit activity ordering](explicit-partition-ordering.md) | Ordering policies and their relationship to partitioning |
-| [Native commit event lane](native-commit-event-lane.md) | Event/subscription transaction serialization |
-| [Operations dashboard](operations-dashboard.md) | Monitor operational data and limitations |
-| [Monitor setup](../monitor/README.md) | Next.js monitor, development API and local stack |
-| [Observability stack](../observability/README.md) | Compose setup, telemetry and workload commands |
+| [Native workflow contracts](hub-native-fluent-runtime.md) | C# workflow definitions, activity registration, supported constructs and version compatibility |
+| [Scheduler and remote hosts](hub-remote-scheduler-implementation.md) | Generic Gateway, internal scheduling module, and separate processor/provisioner hosts |
+| [Activity policy updates](activity-policy-update.md) | Controlled updates to concurrency and resource policy |
+| [Ordering](explicit-partition-ordering.md) | Business ordering and strict FIFO, independently of matching partition routing |
+| [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
+| [Monitoring service](../monitor/README.md) | Next.js monitor and development API |
+| [Compose and local operation](../observability/README.md) | The two-Hub stack, observability pipeline and load generator |
 
-## Matching and performance
+## Verification and investigation
 
-The [batch matching and SSE task delivery review/plan](hub-batch-sse-dispatch-plan.md)
-is historical design context. Default SSE carries readiness hints; experimental
-opt-in [task distribution](sse-task-distributor.md) also pushes committed leases
-under fenced sessions and explicit worker credits.
+Run the [three-window candidate/SSE failover suite](../benchmarks/hub-matching-failover-suite.ps1), the [PostgreSQL integration tests](../tests/WorkflowCore.Scaling.PostgreSQL.Tests/) and controlled multi-processor benchmarks. Use the [14 November 2026 local push benchmark](hub-push-benchmark-2026-11-14.md) **only** as evidence about the push transport; it did not enable candidate matching.
 
-These documents describe implemented options and specific experiments. Their
-branch names, measurements and comparisons refer to the recorded investigation,
-not a guarantee for today's deployment. The current default transport is adaptive
-claiming plus SSE hints; matching long polling is opt-in in code and enabled by
-the HA Compose overlay.
+For performance investigations, these are retained as reference evidence rather than current architecture recommendations:
 
-- [Single-owner matching and HA](hub-distributed-matching-ha.md)
-- [Ownership recovery and scaling design](cadence-inspired-scaling-design.md)
-- [Ownership recovery validation and evidence](cadence-inspired-scaling-validation.md)
-- [Multiple matching partitions](hub-matching-multi-partition.md)
-- [Event-gated matching drain](hub-matching-event-gated-drain.md)
-- [Matching and claim flow diagrams](hub-matching-claim-flow.md)
-- [Experimental Hub push matching](hub-push-matching-design.md)
-- [Proposed partition-candidate matching plan](hub-partition-candidate-matching-plan.md)
-- [Hub push local benchmark](hub-push-benchmark-2026-11-14.md)
-- [PostgreSQL notification design and rollout](hub-postgres-notify-sse.md)
-- [Demand-aware claim admission](demand-aware-claim-admission.md)
-- [Dispatch and FIFO-head experiment](demand-aware-dispatch-fifo-head-experiment.md)
-- [Offboarding benchmark](offboarding-unconstrained-benchmark.md)
-- [Processor scaling investigation](linear-processor-scaling-pr22.md)
-- [Processor scaling diagnostics](processor-scaling-root-cause-diagnostics.md)
-- [Performance tuning harness instructions](performance-tuning-harness.md)
-- [Throughput investigation](throughput-investigation-report.md)
-- [Claim/completion A/B](workflow-p95-claim-completion-ab.md)
-- [SQL CPU investigation](sql-cpu-statement-investigation.md)
-- [Claim candidate query review and local tuning](hub-claim-query-tuning.md)
-- [Snapshot contract reuse and controlled throughput trials](snapshot-contract-reuse-throughput.md)
-- [Capacity assessment](throughput-1000-to-million-assessment.md)
-- [Historical 1,000-workflow activity benchmark](workflow-hub-1000-performance.md)
+- [Throughput investigation](throughput-investigation-report.md) and [claim/completion A/B](workflow-p95-claim-completion-ab.md)
+- [Claim SQL analysis](hub-claim-query-tuning.md) and [database CPU profiling](sql-cpu-statement-investigation.md)
+- [Processor scaling](linear-processor-scaling-pr22.md) and [offboarding benchmark](offboarding-unconstrained-benchmark.md)
+- [Historical matching owner HA experiments](hub-distributed-matching-ha.md) and [multiple matching partitions](hub-matching-multi-partition.md)
+- [Original push protocol design](hub-push-matching-design.md) and [candidate implementation plan](hub-partition-candidate-matching-plan.md)
 
-## Direct PostgreSQL runtime
+## Other engines and archived plans
 
-The following documents describe `WorkflowCore.Scaling.PostgreSQL`, whose workers
-access the database directly. Their statements about polling, host APIs and
-absent matching components do not describe the Hub native runtime.
+The direct-PostgreSQL `DistributedWorkPump` path is a **different runtime** whose workers have database credentials. Its [architecture](architecture.md), [persistence](persistence.md), [operations](operations.md), [execution semantics](execution-semantics.md), [testing](testing-and-benchmarks.md) and [deployment](deployment.md) are retained for historical/reference use. It must not run against Hub-managed workflow state.
 
-| Guide | Scope |
-| --- | --- |
-| [Architecture](architecture.md) | DistributedWorkPump, workflow gates and direct database execution |
-| [Execution semantics](execution-semantics.md) | Transactions, retry and event delivery |
-| [Execution history](execution-history.md) | Direct runtime durable attempts and audit |
-| [Persistence](persistence.md) | Direct runtime schema and queries |
-| [API and configuration](api-and-configuration.md) | Direct runtime DI and control-plane APIs |
-| [Deployment](deployment.md) | Direct runtime migration and cutover |
-| [Operations](operations.md) | Direct runtime leases, recovery and inspection |
-| [Testing and benchmarks](testing-and-benchmarks.md) | Direct runtime validation and historical results |
-| [Design decisions](design-decisions.md) | Direct runtime rationale |
-| [Security](security.md) | Direct runtime trust boundaries |
-| [Implementation inventory](implementation-inventory.md) | Direct runtime source inventory |
-| [Production readiness](production-readiness.md) | Direct runtime readiness checklist |
-| [Onboarding sample](onboarding-sample.md) | Direct runtime sample and signal flow |
-| [Definition metadata](definition-version-management.md) | Separate legacy definition archive and schema diffs |
+Older alternative designs—including [event-gated drain](hub-matching-event-gated-drain.md), [task SSE distributor](sse-task-distributor.md), [batch matching draft](hub-batch-sse-dispatch-plan.md), [PostgreSQL notification rollout](hub-postgres-notify-sse.md) and the [original embedded scheduler plan](hub-embedded-scheduler-final-plan.md)—remain accessible for decision history, but do **not** override the canonical Hub architecture.
 
-## Historical designs and issue reports
-
-Retained for design context and existing links. Read their scope/status notices
-before using examples; the current runtime guide takes precedence for present
-architecture and deployment scope.
-
-- [Original embedded scheduler plan](hub-embedded-scheduler-final-plan.md)
-- [Original activity-only Gateway runbook](workflow-hub-gateway.md)
-- [Native runtime implementation progress](native-runtime-progress.md)
-- [Activity policy issue history](bug-activity-policy-changes.md)
-
-## Sources of truth
-
-- [Hub host](../src/WorkflowCore.Hub.Server/), [Gateway](../src/WorkflowCore.Hub.Gateway/),
-  [durable stores](../src/WorkflowCore.Hub/), [scheduler](../src/WorkflowCore.Hub.Scheduling/)
-- [Remote native execution](../src/WorkflowCore.RemoteExecution/)
-- [Direct PostgreSQL runtime](../src/WorkflowCore.Scaling.PostgreSQL/)
-- [Ordered migrations](../sql/) and [integration tests](../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
-- [Compose configuration](../observability/compose.yaml) and [development script](../../scripts/dev.ps1)
-
-Source and tests determine implemented behavior. Documentation proposals and
-historical passing runs do not establish current verification results.
+Implementation and tests are the ultimate evidence: [Gateway](../src/WorkflowCore.Hub.Gateway/), [candidate registry](../src/WorkflowCore.Hub/HubPartitionCandidateRegistry.cs), [durable store](../src/WorkflowCore.Hub/HubTaskStore.cs), [processor](../src/WorkflowCore.RemoteExecution/) and [SQL migrations](../sql/). A passing earlier benchmark does not imply the current branch has passed all acceptance checks.

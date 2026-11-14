@@ -1,3 +1,8 @@
+> **Historical protocol design:** The selected and maintained runtime architecture
+> is [current-runtime.md](current-runtime.md). This document preserves the
+> design rationale and limitations of the first SSE push experiment; do not
+> treat its transport-option matrix as a deployment recommendation.
+
 # Hub-owned task matching and SSE push
 
 Status: **experimental opt-in implementation with limited v1 behavior**. The

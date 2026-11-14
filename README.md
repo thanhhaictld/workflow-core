@@ -15,25 +15,22 @@ https://github.com/danielgerlag/conductor
 
 ### Distributed Workflow Core (this fork)
 
-Start with the **[current distributed runtime guide](scaling/docs/current-runtime.md)**
-for implemented architecture, task assignment, SSE versus long polling, Hub
-replicas, matching partitions, migrations and source references. The
-[documentation index](scaling/docs/README.md) separates current guides from
-historical designs and benchmark reports.
+**Primary distributed architecture:** [Hub-native candidate matching and fenced
+SSE task delivery](scaling/docs/current-runtime.md).
 
-This fork contains two experimental distributed runtimes under `scaling/`:
+The Hub owns transient, partition-scoped worker matching; PostgreSQL remains
+authoritative for task leases, concurrency permits, FIFO, workflow history and
+results. Processors register C# workflows/typed activities and execute without
+PostgreSQL credentials. The scheduler remains an internal Hub module.
 
-- **Hub native runtime:** generic REST Hub with an embedded scheduler;
-  application hosts execute native C# workflows and typed activities without
-  database access. See [native workflow contracts](scaling/docs/hub-native-fluent-runtime.md).
-- **Direct PostgreSQL runtime:** `DistributedWorkPump` workers access PostgreSQL
-  directly and reuse the upstream executor with a separate durable work ledger.
-  See [direct runtime architecture](scaling/docs/architecture.md).
+Use [scaling/README.md](scaling/README.md) for the development preset,
+[the documentation index](scaling/docs/README.md) for contracts and operations,
+and [native workflow contracts](scaling/docs/hub-native-fluent-runtime.md) for
+the programmer API. The legacy direct-PostgreSQL worker implementation is
+retained for reference, not a second recommended Hub design.
 
-For local setup, use the [observability/Compose runbook](scaling/observability/README.md)
-or [monitor and development stack](scaling/monitor/README.md). Both runtimes
-remain experimental; development authentication and benchmark results do not
-establish production readiness.
+The distributed runtime is under validation; developer credentials and
+historical benchmarks are not evidence of production readiness.
 
 ### Upstream Workflow Core
 
