@@ -1,3 +1,8 @@
+> **Historical implementation plan:** The current default Hub design is
+> [candidate matching with fenced SSE push](current-runtime.md). The status
+> and milestone checklist below describe earlier implementation checkpoints;
+> use the canonical guide and source/tests for current behavior.
+
 # Partition candidate readers and Hub matching: implementation plan
 
 Status: **implementation started; candidate matching is not available**. The

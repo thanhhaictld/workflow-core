@@ -1,202 +1,213 @@
-# Current distributed runtime
+# Distributed Hub architecture — primary execution path
 
-Reviewed against the working tree on 14 November 2026. This guide describes
-implemented behavior, including opt-in paths; it does not establish which flags
-are enabled in a running deployment. The runtime remains experimental.
+> **Architecture decision:** The Hub-native runtime uses **partition-owned,
+> in-memory candidate matching and fenced SSE task delivery** as its primary
+> distributed execution model. PostgreSQL is the authoritative task/lease,
+> concurrency-policy, FIFO, workflow-history and result store.
+>
+> This is the selected architecture for the `make obs-up` and `make ups-16`
+> development/benchmark presets. It remains under correctness and failover
+> validation; enabling a development preset is not a production readiness claim.
+> This document supersedes the alternative transport proposals listed in
+> [historical matching investigations](README.md#historical-investigations).
 
-## Choose the runtime
-
-| Runtime | Entry point | Execution and persistence |
-| --- | --- | --- |
-| Hub native runtime | `AddHubWorkflowRuntime`, `HubWorkflowClient` | DB-free application hosts execute C# definitions; Hub persists snapshots, inboxes, tasks, leases and timers through REST |
-| Direct PostgreSQL runtime | `AddDistributedWorkflowCore`, `DistributedWorkflowEngine` | Application workers use `DistributedWorkPump` and access PostgreSQL directly |
-| Upstream Workflow Core | Original `src/` and `test/` | Original host, queue and provider APIs; the root README examples below the fork documentation section describe this runtime |
-
-The Hub also retains inline and sequential remote compatibility paths for
-existing data. Do not infer native capabilities from the sequential adapter,
-which supports an Activity/Delay slice. Never mix legacy background consumers
-with either distributed runtime for the same workflow state.
-
-## Hub components and execution
+## Architecture at a glance
 
 ```mermaid
 flowchart LR
-    C[Client / monitor] -->|REST| G[Hub Gateway replicas]
-    W[Application hosts: workflow and activity lanes] -->|REST claim or long poll| G
-    G -->|HTTP response or opt-in SSE: leased tasks| W
-    G -. SSE readiness hints .-> W
-    W -->|REST heartbeat / commit / result| G
-    G --> P[(PostgreSQL)]
-    S[Embedded scheduler in each enabled Hub] --> P
+    API[Clients and monitor] -->|REST| GW[Hub Gateway replicas]
+    PR[Provisioner / processor lanes] -->|register, credits| OWN[Current partition owner]
+    PR <-->|SSE committed lease assignments| OWN
+    PR -->|REST heartbeat and fenced results| GW
+    GW --> PG[(PostgreSQL)]
+    OWN -->|bounded indexed candidate pages| PG
+    OWN --> BUF[Bounded per-generation candidate metadata]
+    BUF --> MATCH[Match type / version / workflow pins to live credits]
+    MATCH --> ADMIT[Bounded concurrent claim-by-ID admission]
+    ADMIT -->|row locks, owner fence, resource permits, journal, commit| PG
+    ADMIT -->|committed leases only| OWN
+    TIMER[Embedded Hub scheduler] -->|timers / durable runnable tasks| PG
+    PG -.->|committed notifications + reconciliation| OWN
 ```
 
-- **Hub Server** composes the generic Gateway, durable stores, telemetry and
-  embedded scheduler. It does not load business workflow definitions.
-- **Application hosts** register definitions and typed activities, then execute
-  independently bounded workflow and activity lanes. The onboarding
-  `WorkflowCore.Provisioner.Host` combines both roles. The separate offboarding
-  processor is another application host, not a Hub component.
-- **Workflow tasks** load the durable native snapshot and inbox, run the native
-  executor, and submit a fenced commit. Ordinary steps execute in that lane;
-  registered activity types are routed to separate durable activity tasks.
-- **Activity tasks** execute application handlers and return results. Results
-  enter the durable inbox and wake workflow progression.
-- **Scheduler** scans durable timers and reconciles runnable native work. A wait
-  releases processor capacity; a future task resumes the run. The scheduler is
-  an in-process library, not a separately deployed service today.
+The Gateway hosts generic REST management and coordination, **not business
+workflow handlers**. The embedded scheduler is a distinct internal module; it
+persists timers and makes work runnable. A Provisioner or processor process
+registers C# workflow definitions and typed activity handlers, executes
+workflow/activity lanes and commits results through Hub REST. It does not require
+database credentials.
 
-Native support includes branches, loops, parallel joins, delays, events, retries,
-cancellation and compensation. Upstream's unimplemented `SubWorkflowStepBody`
-is rejected. See the [native contracts](hub-native-fluent-runtime.md) for limits,
-mapping rules and compatibility requirements.
+### Clear ownership boundary
 
-## How a task reaches a processor
-
-1. Startup publishes activity policies and workflow metadata. Workflow claims
-   advertise supported definition IDs and versions; activity claims advertise
-   task types and versions within Hub namespaces.
-2. A worker with free slots requests at most its available capacity, capped at
-   16 tasks per request in the native worker loop.
-3. Hub checks capabilities, due time, workflow status, attempt limits and
-   applicable resource capacity/FIFO constraints. PostgreSQL row locks protect
-   admission. Eligible tasks become leased to the requesting worker ID with an
-   incremented epoch and attempt count.
-4. A pull worker receives leases in its HTTP response. An opt-in push worker
-   receives an already-committed lease in its session SSE stream; ordinary
-   `tasks.available` SSE events remain hints, not leases.
-5. The processor heartbeats and submits a result or workflow commit. Worker ID,
-   epoch, lease validity and, for workflow commits, revision fence mutations.
-   Expired tasks can be reclaimed; exhausted attempts require recovery handling.
-
-Task execution is at least once. Stable dispatch identities support downstream
-idempotency; neither the transport nor fencing makes external effects exactly
-once. A workflow is not permanently attached to a processor.
-
-### Transport selection
-
-| Path | Selection | Behavior |
+| Component | Authoritative for | Not authoritative for |
 | --- | --- | --- |
-| Adaptive claim + SSE | Default native worker path | `POST /api/hub/workers/tasks:claim`; SSE shortens empty-queue backoff; periodic claims recover missed hints |
-| Matching long poll | `WFC_HUB_LONG_POLL_ENABLED=true` and a lane advertises exactly one Hub namespace | `POST /api/hub/workers/tasks:poll`; server holds the request for work; requires matching-enabled Hub configuration |
-| Experimental push | `WFC_HUB_PUSH_ENABLED=true` on Hub and worker, matching enabled, one Hub namespace per lane | Owner-fenced single-credit session, task assignment over SSE, REST heartbeat and completion |
-| Multi-Hub lane | Even when long polling or push is enabled | Uses the adaptive claim/SSE path until multi-Hub matching fan-out is implemented |
+| PostgreSQL | Task state, owner/lease epoch, attempts, FIFO/resource permits, workflow revisions, history | Worker connections |
+| Matching owner `(hub, partition, owner epoch)` | Live demand, advisory candidates, bounded reservations, SSE sessions | Durable task existence or permission to execute |
+| Worker lane | Local execution semaphore, side-effect idempotency, heartbeat progress | Task scheduling or overriding a stale lease |
+| Scheduler | Making persisted timers and workflow work eligible | Worker matching or delivery |
 
-Long polls wait up to 20 seconds in single-partition mode and 4 seconds in
-sharded mode. One outstanding poll per lane rotates across matching partitions.
-Push uses one credit per lane regardless of configured lane concurrency; it is
-experimental and has no separate durable delivery acknowledgement. Sharded
-sessions revoke the old grant and wait for the owner's no-claim/no-delivery
-barrier before rotating. On a lost stream the worker finishes any running task,
-waits 75 seconds, then requires an old-session revocation or a changed/expired
-matching-owner epoch before advertising a new credit.
-Claims still consume the existing attempt budget even when delivery is uncertain.
+Every matching owner is itself elected and fenced in PostgreSQL. Partition
+assignment uses `task.partition_id % matchingPartitionCount`; candidate
+discovery requires a matching count that divides 64. FIFO/resource scopes can
+span these matching partitions and are *always* rechecked transactionally.
 
-PostgreSQL transaction-committed NOTIFY hints wake Hub replicas; LISTEN reconnect
-and periodic reconciliation recover missed hints. These hints are not a durable
-queue. Legacy readiness sweeps run every 2 seconds; the opt-in event-gated
-matching path also uses a throttled 10-second capability/partition recovery scan.
-The push recovery scan shares that cadence and uses a bounded cursor to traverse
-hint pages rather than repeatedly reading only the first 512 keys.
+## End-to-end assignment
 
-## How Hub replicas scale
+1. **Task becomes ready:** the workflow engine or timer scheduler commits the
+   durable task. PostgreSQL notifications are latency hints, not durable
+   messages; the candidate reader periodically reconciles missed hints.
+2. **Discover once, share across workers:** the current owner reads paginated,
+   index-backed metadata (ID, epoch, type/version, partition, due time and
+   advisory resource keys). It holds bounded candidate buffers and cursors per
+   owner generation. No task is leased just for appearing in memory.
+3. **Match to available demand:** each connected worker SSE session advertises
+   sequenced free-slot credits. The matcher pairs a compatible buffered
+   candidate with **one** credit. Capability and workflow-definition version
+   checks in memory are an optimization, not authorization.
+4. **Claim authoritatively:** a bounded, concurrent admission worker locks and
+   validates matching ownership and task eligibility in PostgreSQL; constrained
+   tasks acquire their canonical resource permits and enforce strict FIFO. An
+   unconstrained batch may be claimed atomically by ID. The transaction writes
+   the new task lease epoch, attempts and workflow history before committing.
+5. **Push the committed lease:** the partition owner sends `task.assigned`
+   with the leased-task payload, epoch, worker/session/delivery IDs over SSE.
+   **One-shot candidate-matching credits are retired on a confirmed claim**;
+   the SSE session then owns the outstanding delivery accounting until worker
+   progress/release. An uncertain commit remains quarantined instead.
+6. **Execute and complete:** the worker checks its local semaphore, deduplicates
+   `(taskId, epoch)`, executes handlers and uses REST to heartbeat and
+   submit the fenced result or native workflow commit. Completion can make
+   dependent work ready and notify the owner.
 
-All replicas share a writable PostgreSQL database. REST requests can be load
-balanced; regular claims coordinate through database locks and task leases.
-Each enabled embedded scheduler can scan timers safely using transactional row
-locking. Database contention and the combined connection pools remain limits;
-adding replicas does not imply linear throughput.
+The candidate reader runs independently of bounded admission workers and the
+uncertainty reaper. This prevents a slow resource lock from blocking discovery
+or lease-retirement bookkeeping. `WFC_HUB_MATCHING_ADMISSION_CONCURRENCY`
+controls the maximum number of local admission groups (default 3). The
+existing PostgreSQL claim gate still applies and should not be configured
+higher than the available connection budget.
 
-Long-poll matching has a separate ownership layer:
+## SSE sessions and capacity
 
-| Configuration | Ownership and routing |
+- The primary routes are `POST /api/hub/workers/push-sessions`,
+  `GET /api/hub/workers/push-sessions/{id}/events`,
+  `PUT /api/hub/workers/push-sessions/{id}/capacity` and
+  `POST /api/hub/workers/push-sessions/{id}/revoke`.
+- Sessions are ephemeral and bound to one matching owner generation and one
+  matching partition. The worker authenticates to the owner URL returned by
+  registration, validated against configured trusted origins.
+- Capacity updates have monotonically increasing sequence numbers and carry
+  active/released delivery IDs. A capacity refresh never recreates credit for
+  an outstanding assignment; the worker's local semaphore is the last guard.
+- A lane rotates its partition membership with a zero-credit revocation
+  barrier, rather than duplicating capacity across owners. Tasks already
+  running continue with REST heartbeats.
+- SSE carries **committed lease assignments**, not an authoritative queue.
+  Notifications, candidate buffers, capacity credits and SSE frames are
+  disposable on owner takeover; committed leases are not.
+
+## Failover and delivery uncertainty
+
+| Failure point | Recovery and safety |
 | --- | --- |
-| Matching disabled | Regular claims remain available; the poll endpoint returns 404 |
-| Matching enabled, one partition | One matching owner per logical Hub namespace; other replicas forward polls to the owner |
-| Matching enabled, multiple partitions | One owner per `(hub, matching partition)`; preferred owners spread partitions across configured peers, with lease-based takeover |
+| Owner lost before claim | New owner re-reads durable candidates and receives fresh worker credits |
+| Owner lost after commit, before SSE send | Lease survives; no replay is assumed; expiry and fenced reclaim recover task |
+| SSE stream disconnect | Worker drains local running tasks and immediately tries old-session revocation (204/404), or verifies changed/expired owner epoch; only then reuses credits |
+| Neither revocation nor ownership proof available | Continue waiting with bounded network probes; never infer safe credit reuse from a timeout |
+| Commit result ambiguous | Keep the candidate reservation/credit quarantined until its exact epoch is no longer live |
+| Worker stops or misses heartbeat | Lease expires; a new worker may claim with a later epoch; stale heartbeat/result is rejected |
+| Notification dropped | Cursor-based bounded reconciliation restores discovery |
+| Database unavailable | No in-memory-only task admission or result commit is permitted |
 
-Matching ownership uses PostgreSQL-fenced leases lasting 8 seconds, renewed every
-2 seconds. It routes pending worker demand; **task leases remain separate**.
-Matching shard membership is `task.partition_id % matchingPartitionCount`.
-Claim queries use the expression index from migration 026 by default when the
-matching count divides 64: `partition_id % 64 = ANY(matchingBuckets)` selects
-exactly the same shard. Apply migration 026 before deploying this query path.
-Set `WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=false` to retain the legacy modulo
-filter for comparison. Counts not dividing 64 use the direct modulo filter;
-single-shard and unsharded claims omit partition filtering. This does not change
-persisted partition IDs or resource ordering.
-Matching partitions do not redefine business resource or FIFO ordering scopes.
-The partition count is persisted per namespace and must agree across Hubs and
-processors; it is not a live resharding control.
+A failed SSE send can still consume an attempt without execution, because
+the current implementation increments `attempts` when PostgreSQL grants the
+lease. Receipt-versus-execution attempt accounting is **not yet separated**.
+The runtime provides at-least-once execution, not exactly-once external side
+effects. Activity handlers must use the stable dispatch key or equivalent
+downstream idempotency.
 
-| Setting | Purpose |
+## Standard development deployment
+
+The supported main development preset layers the base stack, HA owner routing
+and matching shards together:
+
+```bash
+make obs-setup
+make obs-up
+# For 16 processor containers:
+make ups-16
+```
+
+The standard preset configures two Hub replicas, four matching partitions,
+candidate discovery, PostgreSQL claim admission and worker SSE push. The
+important environment settings are:
+
+| Setting | Main preset |
 | --- | --- |
-| `WFC_HUB_MATCHING_ENABLED` | Enable Hub long-poll matching (off unless configured) |
-| `WFC_HUB_MATCHING_NODE_ID` | Unique Hub matching node identity |
-| `WFC_HUB_MATCHING_ADVERTISE_URL`, `WFC_HUB_MATCHING_PEERS` | Reachable owner URL and configured trusted peer URLs |
-| `WFC_HUB_MATCHING_PARTITIONS` | Same count on Hubs and workers, 1–64; default 1 |
-| `WFC_HUB_LONG_POLL_ENABLED` | Worker transport opt-in; default off in code |
-| `WFC_HUB_PUSH_ENABLED` | Opt in separately on Hub and worker; matching must also be enabled on the Hub |
-| `WFC_HUB_PUSH_TRUSTED_OWNERS` | Comma-separated direct owner origins trusted by a worker when routed away from its configured Hub URL |
-| `WFC_HUB_WORKER_HUB` | Optional single-Hub lane filter, useful for push where a catalog spans namespaces |
-| `WFC_HUB_WORKER_LANE_INSTANCES` | Logical instances of each native lane in one host; default 1, primarily for controlled load tests |
-| `WORKFLOW_WORKERS`, `ACTIVITY_WORKERS` | Onboarding host lane concurrency; defaults 8 and 16 |
-| `WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE` | Optional cap applied independently to each native lane |
-| `WFC_HUB_DB_POOL` | Per-Hub connection pool setting; Compose default 12 |
+| `WFC_HUB_MATCHING_ENABLED` | `true` on Hub replicas |
+| `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `true` on Hub replicas |
+| `WFC_HUB_PUSH_ENABLED` | `true` on Hub replicas and workers |
+| `WFC_HUB_MATCHING_PARTITIONS` | `4`, consistent on Hub and worker |
+| `WFC_HUB_MATCHING_ADMISSION_CONCURRENCY` | `3` (per Hub) |
+| `WFC_HUB_CLAIM_ADMISSION_LIMIT` | `3`, DB-pool protection |
+| `WFC_HUB_MATCHING_ADVERTISE_URL`, `WFC_HUB_MATCHING_PEERS` | Direct reachable and trusted owner URLs |
+| `WFC_HUB_PUSH_TRUSTED_OWNERS` | Exact permitted worker-to-owner origins |
+| `WFC_HUB_LONG_POLL_ENABLED`, `WFC_HUB_TASK_SSE_PUSH`, `WFC_HUB_MATCHING_EVENT_GATED` | `false` in the primary preset; not competing push implementations |
 
-The [base Compose stack](../observability/compose.yaml) runs one Hub. Add the
-[HA overlay](../observability/compose.matching-ha.yaml) for two Hubs and Nginx;
-it enables worker long polling by default. Add the
-[sharding overlay](../observability/compose.matching-shards.yaml) after HA for
-four matching partitions by default. Peer configuration is explicit; automatic
-membership discovery and autoscaling are not implemented by these overlays.
+For a two-Hub stack, verify both instances have the same partition count,
+migration 029 is installed, direct owner URLs resolve from processors, and
+the load balancer does not buffer SSE. `WFC_HUB_AUTH_TOKEN` and database
+secrets remain necessary for local setup; production authentication and
+tenant isolation require separate security review.
 
-Event-gated matching, demand-aware claim admission, unconstrained batch claims
-and FIFO-head prefiltering are configurable experiments. Consult their
-[focused reports](README.md#matching-and-performance) before enabling them;
-implemented flags are not proof of a throughput improvement.
+### Monitoring
 
-## Setup, migrations and verification
+The authenticated `GET /api/hub/workers/transport-diagnostics` reports
+`candidateEnabled`, `candidateCredits`, `candidateReservations`,
+`candidateUncertain`, `candidateBuffered`, `candidateAdmissionsActive`,
+connected push sessions and claim/delivery counters. An idle SSE session may
+hold **one pending candidate credit** while waiting for work; this is not a
+leaked committed lease.
 
-Use .NET SDK 10, Node.js 22+ for the monitor, and PowerShell 7. Start with the
-[local observability runbook](../observability/README.md) or
-[monitor/development setup](../monitor/README.md). Run commands from the root:
+Track workflow/task backlog, schedule-to-start p95/p99, actual lease
+expiries, attempt exhaustion, owner epoch changes, admission wait, resource
+locks, active PostgreSQL connections and activity completion p95/p99. Avoid
+treating reduced HTTP calls alone as throughput proof.
 
-```powershell
-pwsh -NoProfile -File ./scripts/dev.ps1 help
+### Verification
+
+```bash
 dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
 pwsh -NoProfile -File ./scripts/dev.ps1 test
+# Requires the local PostgreSQL container and Release binaries:
+make obs-matcher-failover
 ```
 
-The current Compose migrator and `scripts/dev.ps1` apply ordered SQL migrations
-002 through 023. Preserve existing data and apply additive migrations in order;
-do not reset volumes to upgrade. The direct PostgreSQL runtime additionally uses
-the upstream EF schema. Compose initializes that schema through the separate
-monitor API migration service.
+The failover suite runs **before-claim**, **after-claim/pre-send**, and
+**during-execution** owner failures against isolated test databases. It asserts
+owner takeover, candidate mode active on both Hubs, reconnected SSE sessions,
+bounded reconnect latency, eventual completion, FIFO non-overlap, side-effect
+observations, stale heartbeat rejection and matching-credit conservation.
+Tests and local benchmark outcomes must be recorded before production rollout.
 
-The PostgreSQL integration suite needs `WFC_TEST_PG` and a configured schema;
-some tests return without exercising the database when it is unset. The dev
-script test command configures the local schema and environment. Relevant suites
-include `HubNative*Tests`, `HubRemoteSchedulerTests`, `HubMatchingOwnershipTests`,
-`HubMatchingPartitionTests` and `HubPostgresNotificationTests`. Existing test
-coverage is not a claim that those checks passed on this working tree.
+The [14 November SSE benchmark](hub-push-benchmark-2026-11-14.md) did
+**not** enable the candidate-matching feature flag: its 4,000-lane result
+is evidence about the SSE transport, not a combined candidate+push p95 claim.
+The feature should be benchmarked against the existing baseline at 8, 16,
+128, 1,000 and 4,000 logical lanes, and with multiple Hub replicas.
 
-Production identity, scoped authorization, tenant isolation, recovery operations
-and broader failure/load validation remain outstanding. The sample bearer token,
-monitor and simulated business handlers are development facilities.
+## Other code paths and historical work
 
-## Implementation evidence
+Adaptive HTTP claims and long polling remain in source for compatibility,
+emergency rollback and mixed-capability lanes; they are **not competing
+target architectures**. Multi-Hub-capability lanes still use the supported
+adaptive fallback until per-Hub session fan-out is implemented. The original
+upstream engine and direct-PostgreSQL `DistributedWorkPump` are separate
+projects and are not part of this Hub-native architecture. Do not run legacy
+background consumers against the same workflow state.
 
-- [Host composition](../src/WorkflowCore.Hub.Server/Program.cs)
-- [Native registration/options](../src/WorkflowCore.RemoteExecution/HubWorkflowRegistration.cs)
-  and [worker lanes/transport](../src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs)
-- [Task admission and leases](../src/WorkflowCore.Hub/HubTaskStore.cs)
-  and [HTTP endpoints](../src/WorkflowCore.Hub.Gateway/HubGatewayEndpoints.cs)
-- [Matching ownership](../src/WorkflowCore.Hub.Gateway/HubMatchingOwnership.cs),
-  [matcher](../src/WorkflowCore.Hub.Gateway/HubTaskMatcher.cs),
-  [readiness reconciliation](../src/WorkflowCore.Hub.Gateway/HubReadinessBroadcaster.cs)
-- [Scheduler](../src/WorkflowCore.Hub.Scheduling/HubSchedulingExtensions.cs)
-  and [timer transactions](../src/WorkflowCore.Hub/HubTimerStore.cs)
-- [Integration tests](../tests/WorkflowCore.Scaling.PostgreSQL.Tests/)
-
-Use the [documentation index](README.md) for detailed contracts, operations and
-historical reports. Source and tests take precedence over historical plans.
+For implementation details see [native workflow contracts](hub-native-fluent-runtime.md),
+[task store](../src/WorkflowCore.Hub/HubTaskStore.cs),
+[matcher](../src/WorkflowCore.Hub.Gateway/HubCandidateAcquisition.cs),
+[push sessions](../src/WorkflowCore.Hub.Gateway/HubPushSessions.cs),
+[worker lanes](../src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs)
+and the [documentation index](README.md).

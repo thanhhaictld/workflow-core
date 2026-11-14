@@ -27,40 +27,53 @@ The `scaling/src` projects reference original Workflow Core assemblies from
 are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 
 
-> **Start here:** [Current runtime architecture, task delivery and Hub scaling](docs/current-runtime.md).
-> This page describes the direct PostgreSQL runtime below; the Hub native runtime
-> uses DB-free application hosts instead.
+> **Start here:** [Primary distributed Hub architecture](docs/current-runtime.md).
+> Hub-owned bounded candidate matching and owner-fenced SSE lease delivery
+> are the selected runtime; PostgreSQL remains the durable authority.
 
-> **Full documentation:** [Architecture, design decisions, persistence, APIs, operations, deployment, testing, and risks](docs/README.md).
-
-For the proposed move from worker claims to Hub batch matching and SSE task
-delivery, see the [architecture review and implementation plan](docs/hub-batch-sse-dispatch-plan.md).
-This is a proposal; current Hub SSE carries readiness hints, not assignments.
-
-For REST/SSE execution through a generic Hub, use the combined
-[native fluent Provisioner](docs/hub-native-fluent-runtime.md). It reuses upstream
-`IWorkflow<TData>` definitions, routes registered typed steps to durable activity
-work, and retains existing sequential runs. The direct PostgreSQL runtime below
-is a separate deployment option.
-
-This branch introduces a **new .NET 10-only execution runtime** for Workflow Core.
-It intentionally does not preserve compatibility with the legacy queue/lock
-contracts. The original engine, workflow definitions, and execution pointers
-are reused, but workers must never run the old background consumers alongside
-the new `DistributedWorkPump`.
-
-## Architecture
+## Main architecture
 
 ```mermaid
-flowchart TD
-    API[DistributedWorkflowEngine Start/PublishEvent] -->|one transaction| PG[(PostgreSQL Workflow/Signal/Work tables)]
-    W1[Worker replica A] -->|SKIP LOCKED| PG
-    W2[Worker replica B] -->|SKIP LOCKED| PG
-    W1 --> G[Workflow gate: owner + epoch + revision]
-    W2 --> G
-    G --> E[WorkflowCore IWorkflowExecutor]
-    E -->|Fenced transaction: state + subscription + due-work + ACK| PG
-    PG -->|Due work| W1
+flowchart LR
+    API[Client and monitor] --> HUB[Hub Gateway replicas]
+    WORKER[Provisioner / processor lanes] <-->|SSE leases and capacity; REST results| HUB
+    HUB --> OWNER[Per-partition matching owner]
+    OWNER --> BUF[Bounded in-memory candidates]
+    BUF --> ADMIT[Concurrent fenced admission]
+    ADMIT --> PG[(PostgreSQL tasks, leases, FIFO, history)]
+    HUB --> PG
+    SCHED[Embedded scheduler] --> PG
+```
+
+The default development target uses **two Hub replicas, four matching shards,
+PostgreSQL-backed fenced claims and SSE worker assignments**. Older claim
+polling code remains an emergency rollback path rather than a parallel
+recommended design.
+
+```bash
+make obs-setup
+make obs-up
+make ups-16              # 16 processor containers
+make obs-matcher-failover # three owner-crash windows, isolated test databases
+```
+
+Detailed [runtime behavior and failure recovery](docs/current-runtime.md),
+[native workflow authoring](docs/hub-native-fluent-runtime.md),
+[operations dashboard](docs/operations-dashboard.md) and
+[documentation index](docs/README.md) are maintained separately.
+
+## Legacy direct-PostgreSQL runtime (not the Hub default)
+
+The older `DistributedWorkPump` mode allows workers to access PostgreSQL
+directly. Its database locking and executor setup differ from the Hub-native
+runtime; do not run it against the same rows as the Hub runtime. The remaining
+sections preserve its setup and historical semantics as reference material.
+
+```mermaid
+flowchart LR
+    API[Direct distributed engine] --> PG[(PostgreSQL)]
+    W1[Direct DB worker A] --> PG
+    W2[Direct DB worker B] --> PG
 ```
 
 ## Setup
