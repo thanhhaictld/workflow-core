@@ -39,6 +39,7 @@ the HA Compose overlay.
 - [Ownership recovery validation and evidence](cadence-inspired-scaling-validation.md)
 - [Multiple matching partitions](hub-matching-multi-partition.md)
 - [Event-gated matching drain](hub-matching-event-gated-drain.md)
+- [Matching and claim flow diagrams](hub-matching-claim-flow.md)
 - [PostgreSQL notification design and rollout](hub-postgres-notify-sse.md)
 - [Demand-aware claim admission](demand-aware-claim-admission.md)
 - [Dispatch and FIFO-head experiment](demand-aware-dispatch-fifo-head-experiment.md)
