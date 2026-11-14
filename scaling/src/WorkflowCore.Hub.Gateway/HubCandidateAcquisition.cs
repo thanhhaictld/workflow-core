@@ -57,6 +57,11 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 _registry.Notify(hub,owner.Partition,owner.Epoch);
     }
     internal int GenerationCount => _registry.Snapshot().Partitions;
+    public int CandidateCredits => _registry.Snapshot().Credits;
+    public int CandidateReservations => _registry.Snapshot().Reservations;
+    public int CandidateUncertain => _registry.Snapshot().Uncertain;
+    public int CandidateBuffered => _registry.Snapshot().Entries;
+    public int AdmissionActive => _activeAdmissions.Count;
 
     public async Task<IReadOnlyList<HubLeasedTask>> AcquireAsync(HubClaimRequest request, CancellationToken ct)
     {
