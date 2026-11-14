@@ -48,6 +48,64 @@ public sealed class HubPartitionCandidateRegistryTests
     { for(var i=0;i<turns;i++) { perTurn?.Invoke(); await registry.RunOneTurnAsync(clock.Now,default); } }
 
     [Fact]
+    public async Task DemandGatingStopsDiscoveryAndResumesWhenCreditArrives()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "demand-gate";
+        var candidate = Candidate(hub, 1);
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        using var registry = new HubPartitionCandidateRegistry(source, Options() with { RequireDemand = true }, clock);
+        registry.StartGeneration(Owner(hub), 64);
+        registry.Notify(hub, 0, 1);
+        await Pump(registry, clock, 10);
+        Assert.Equal(0, source.Captures);
+        Assert.Empty(source.Calls);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("first", hub)));
+        await Pump(registry, clock, 4);
+        var reservation = registry.TakeReservation(hub, 0, 1);
+        Assert.NotNull(reservation);
+        Assert.Equal(candidate.Id, reservation.Candidate.Id);
+        registry.Complete(reservation.Id, HubCandidateResolution.Leased, clock.Now);
+        var captures = source.Captures; var reads = source.Calls.Count;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        registry.Notify(hub, 0, 1);
+        await Pump(registry, clock, 10);
+        Assert.Equal(captures, source.Captures);
+        Assert.Equal(reads, source.Calls.Count);
+    }
+
+    [Fact]
+    public async Task CoalescedHintsPrioritizeTheirOwnedBucket()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "hint-priority";
+        using var registry = new HubPartitionCandidateRegistry(source, Options() with { RequireDemand = true }, clock);
+        registry.StartGeneration(Owner(hub), 1);
+        registry.Notify(hub, 0, 1, bucket: 17);
+        registry.Notify(hub, 0, 1, bucket: 17);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("credit", hub)));
+        await Pump(registry, clock, 2);
+        Assert.Equal(17, Assert.Single(source.Calls).Bucket);
+    }
+
+    [Fact]
+    public async Task WaitingDemandConsumesNoCreditUntilCompatibleCandidateIsAvailable()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "lazy-demand";
+        var task = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, task);
+        using var registry = new HubPartitionCandidateRegistry(source, Options() with { RequireDemand = true }, clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddWaitingDemand(hub, 0, 1));
+        Assert.False(registry.AddMatchedCredit(hub, 0, 1, Credit("incompatible", hub, "other")));
+        Assert.Equal(0, registry.Snapshot().Credits);
+        await Pump(registry, clock, 2);
+        Assert.False(registry.AddMatchedCredit(hub, 0, 1, Credit("incompatible", hub, "other")));
+        Assert.Equal(0, registry.Snapshot().Credits);
+        Assert.True(registry.AddMatchedCredit(hub, 0, 1, Credit("matched", hub)));
+        Assert.Equal(1, registry.Snapshot().Credits);
+        Assert.Equal(task.Id, registry.TakeReservation(hub, 0, 1)!.Candidate.Id);
+        registry.RemoveWaitingDemand(hub, 0, 1);
+    }
+
+    [Fact]
     public async Task FullBufferAndNotificationStormStillTraverseAndRediscover()
     {
         var clock = new Clock(); var source = new Discovery(); var hub = "fair";

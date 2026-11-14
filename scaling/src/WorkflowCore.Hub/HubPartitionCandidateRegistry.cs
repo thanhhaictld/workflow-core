@@ -7,7 +7,7 @@ internal sealed record HubCandidateCoordinatorOptions(
     long PartitionBytes = 4 * 1024 * 1024, long ProcessBytes = 64 * 1024 * 1024,
     int PartitionCredits = 2048, int ProcessCredits = 16384, int ProcessPartitions = 1024,
     int SequenceProbeEverySweeps = 8, TimeSpan? RecoveryCadence = null,
-    TimeSpan? ResourceCooldown = null)
+    TimeSpan? ResourceCooldown = null, bool RequireDemand = false)
 {
     // Reserve both page objects and temporary materialization. UTF-8 wire bytes
     // alone undercount managed UTF-16 strings, array slots and object headers.
@@ -76,6 +76,8 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public readonly LinkedList<Guid> Pending = new();
         public readonly Dictionary<string, DateTimeOffset> Blocked = new(StringComparer.Ordinal);
         public readonly List<Stream> Streams = [];
+        public readonly HashSet<int> HintedBuckets = [];
+        public int WaitingDemands;
         public HubCandidateHorizon? Horizon;
         public int NextStream;
         public bool Dirty = true;
@@ -200,6 +202,45 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             return true;
         }
     }
+    internal bool HasCandidateCapacity(string hub, int partition, long epoch)
+    {
+        lock (_sync)
+            return GetLocked(hub, partition, epoch, out var p) && p.Entries.Count > 0 &&
+                GroupCredits(hub, partition) < _options.PartitionCredits && _credits.Count < _options.ProcessCredits;
+    }
+    internal bool AddWaitingDemand(string hub, int partition, long epoch)
+    {
+        lock (_sync)
+        {
+            if (!GetLocked(hub, partition, epoch, out var p)) return false;
+            if (p.WaitingDemands++ == 0 && !p.Credits.Any(c => !c.Granted && c.Reservation is null))
+                p.Dirty = true;
+            return true;
+        }
+    }
+    internal void RemoveWaitingDemand(string hub, int partition, long epoch)
+    {
+        lock (_sync)
+            if (GetLocked(hub, partition, epoch, out var p) && p.WaitingDemands > 0) p.WaitingDemands--;
+    }
+    internal bool AddMatchedCredit(string hub, int partition, long epoch, HubCandidateCredit credit)
+    {
+        lock (_sync)
+        {
+            if (!GetLocked(hub, partition, epoch, out var p)) return false;
+            var now = _clock.GetUtcNow();
+            if (!p.Entries.Values.Any(e => e.Reservation is null && e.DeferredUntil <= now &&
+                !_reservedTasks.Contains((hub, e.Candidate.Id)) &&
+                (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)) &&
+                Compatible(credit, e.Candidate))) return false;
+            if (!AddCredit(hub, partition, epoch, credit)) return false;
+            var item = _credits[credit.Id].Credit;
+            if (item.Reservation is not null) return true;
+            // An older credit won the available candidate during matching.
+            RemoveCreditLocked(p, item);
+            return false;
+        }
+    }
     internal bool CancelCredit(string creditId)
     {
         lock (_sync)
@@ -242,6 +283,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             }
             return null;
         }
+    }
+    internal bool HasPending(string hub, int partition, long epoch)
+    {
+        lock (_sync) return GetLocked(hub, partition, epoch, out var p) && p.Pending.Count != 0;
     }
     // A dispatched reservation that has not entered admission can be retired
     // atomically without allowing the credit to rematch another candidate.
@@ -318,13 +363,14 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         else { p.Credits.Remove(credit); p.Credits.AddLast(credit); }
         ReleaseStoppedPartitionLocked(p);
     }
-    internal void Notify(string hub, int partition, long epoch, string? resource = null)
+    internal void Notify(string hub, int partition, long epoch, string? resource = null, int? bucket = null)
     {
         lock (_sync)
             if (GetLocked(hub, partition, epoch, out var p))
             {
                 p.Dirty = true;
                 p.HeadRequested = true;
+                if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition) p.HintedBuckets.Add(bucket.Value);
                 if (resource is not null)
                 {
                     RemoveBlockedLocked(p, resource);
@@ -354,6 +400,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 {
                     var index = (_nextPartition + i) % all.Length; var candidate = all[index];
                     MatchLocked(candidate, now);
+                    if (_options.RequireDemand && !candidate.Credits.Any(c => !c.Granted && c.Reservation is null) &&
+                        (candidate.WaitingDemands == 0 || GroupCredits(candidate.Owner.HubId, candidate.Owner.Partition) >= _options.PartitionCredits ||
+                         _credits.Count >= _options.ProcessCredits)) continue;
                     if (candidate.Horizon is null && !candidate.Dirty && now < candidate.NextSweep) continue;
                     p = candidate; _nextPartition = (index + 1) % all.Length; break;
                 }
@@ -366,7 +415,8 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     if (p.HeadRequested && p.ForwardSinceHead >= 8)
                     {
                         var buckets = 64 / p.Count;
-                        var bucket = p.Owner.Partition + (p.NextHeadBucket++ % buckets) * p.Count;
+                        var bucket = p.HintedBuckets.Count != 0 ? p.HintedBuckets.First() : p.Owner.Partition + (p.NextHeadBucket++ % buckets) * p.Count;
+                        p.HintedBuckets.Remove(bucket);
                         stream = new(bucket,HubCandidateStream.ReadyDue); head = true;
                         p.HeadRequested = false; p.ForwardSinceHead = 0;
                     }
@@ -390,7 +440,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 {
                     p.Horizon = horizon; p.Streams.Clear(); p.NextStream = 0;
                     var sequenceProbe = (p.Sweeps + 1) % _options.SequenceProbeEverySweeps == 0;
-                    for (var b = p.Owner.Partition; b < 64; b += p.Count)
+                    var buckets = Enumerable.Range(0, 64 / p.Count).Select(i => p.Owner.Partition + i * p.Count)
+                        .OrderByDescending(p.HintedBuckets.Contains).ToArray();
+                    p.HintedBuckets.Clear();
+                    foreach (var b in buckets)
                     {
                         p.Streams.Add(new(b, HubCandidateStream.ReadyDue));
                         p.Streams.Add(new(b, HubCandidateStream.Expired));
@@ -401,6 +454,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             }
             var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, p.Horizon!, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
+            HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
             lock (_sync)
             {
                 if (!p.Active) return true;

@@ -40,7 +40,8 @@ internal sealed record HubCandidateClaim(Guid TaskId, long ObservedEpoch,
     string WorkerId, string HubId, int Partition, int PartitionCount,
     IReadOnlyList<HubCapability> Capabilities, IReadOnlyList<HubWorkflowCapability>? Workflows,
     HubMatchingPartitionLease Owner, TimeSpan Lease);
-internal sealed record HubCandidateBatchItem(Guid TaskId, long ObservedEpoch);
+internal sealed record HubCandidateBatchItem(Guid TaskId, long ObservedEpoch, string? WorkerId = null,
+    IReadOnlyList<HubCapability>? Capabilities = null, IReadOnlyList<HubWorkflowCapability>? Workflows = null);
 internal sealed record HubCandidateBatchClaim(IReadOnlyList<HubCandidateBatchItem> Items, string WorkerId,
     string HubId, int Partition, int PartitionCount, IReadOnlyList<HubCapability> Capabilities,
     IReadOnlyList<HubWorkflowCapability>? Workflows, HubMatchingPartitionLease Owner, TimeSpan Lease);
@@ -596,12 +597,35 @@ public sealed class HubTaskStore : IAsyncDisposable
         return (bool)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
+    internal async Task<HashSet<(Guid Id, long Epoch)>> RetirableCandidateLeasesAsync(
+        IReadOnlyList<(HubLeasedTask Lease, string Worker)> leases, CancellationToken ct)
+    {
+        if (leases.Count is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(leases));
+        await using var cmd = _dataSource.CreateCommand("""
+            SELECT x.id,x.epoch FROM jsonb_to_recordset(@leases)
+              AS x(id uuid,hub text,worker text,epoch bigint,deadline timestamptz)
+            WHERE clock_timestamp() > x.deadline AND NOT EXISTS (
+                SELECT 1 FROM wfc_scale.hub_task t WHERE t.id=x.id AND t.hub_id=x.hub
+                  AND t.state=1 AND t.owner=x.worker AND t.epoch=x.epoch AND t.lease_until>clock_timestamp())
+            """);
+        cmd.Parameters.Add("leases", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(leases.Select(x => new {
+            id = x.Lease.Id, hub = x.Lease.HubId, worker = x.Worker, epoch = x.Lease.Epoch, deadline = x.Lease.LeaseUntil
+        }));
+        var result = new HashSet<(Guid, long)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) result.Add((reader.GetGuid(0), reader.GetInt64(1)));
+        HubTelemetry.CandidateReconciliationQueries.Add(1);
+        return result;
+    }
+
     // One owner, worker and transaction: callers must have a real reserved
     // credit for every item. Constrained rows are never admitted on this path.
     internal async Task<HubCandidateBatchResult> ClaimCandidateBatchAsync(HubCandidateBatchClaim request,
         CancellationToken ct, HubCandidateClaimTestHooks? testHooks = null)
     {
         if (request.Items.Count is < 1 or > 32 || request.Items.Any(x => x.TaskId == Guid.Empty || x.ObservedEpoch < 0) ||
+            request.Items.Any(x => x.WorkerId is not null && (string.IsNullOrWhiteSpace(x.WorkerId) || x.WorkerId.Length > 128) ||
+                x.Capabilities is { Count: < 1 or > 128 } || x.Workflows?.Count > 128) ||
             request.Items.Select(x => x.TaskId).Distinct().Count() != request.Items.Count ||
             string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length > 128 ||
             string.IsNullOrWhiteSpace(request.HubId) || request.HubId.Length > 80 ||
@@ -620,31 +644,33 @@ public sealed class HubTaskStore : IAsyncDisposable
             var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
             await using (var cmd = new NpgsqlCommand("""
                 WITH picked AS MATERIALIZED (
-                    SELECT t.id,t.sequence FROM wfc_scale.hub_task t
-                    JOIN jsonb_to_recordset(@selected) AS s(id uuid,epoch bigint) ON s.id=t.id AND s.epoch=t.epoch
+                    SELECT t.id,t.sequence,s.worker FROM wfc_scale.hub_task t
+                    JOIN jsonb_to_recordset(@selected) AS s(id uuid,epoch bigint,worker text,capabilities jsonb,pins jsonb) ON s.id=t.id AND s.epoch=t.epoch
                     WHERE t.hub_id=@hub AND t.partition_id % @count=@partition
-                      AND EXISTS (SELECT 1 FROM jsonb_to_recordset(@capabilities) AS c(hub text,task_type text,version integer)
+                      AND EXISTS (SELECT 1 FROM jsonb_to_recordset(s.capabilities) AS c(hub text,task_type text,version integer)
                           WHERE c.hub=t.hub_id AND c.task_type=t.task_type AND c.version=t.task_version)
                       AND t.attempts<t.max_attempts AND ((t.state=0 AND t.due_at<=now()) OR (t.state=1 AND t.lease_until<now()))
                       AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                       AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w WHERE w.id=t.workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
-                      AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS (
-                          SELECT 1 FROM wfc_scale.hub_workflow w,jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
+                      AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR s.pins IS NULL OR s.pins = 'null'::jsonb OR EXISTS (
+                          SELECT 1 FROM wfc_scale.hub_workflow w,jsonb_to_recordset(s.pins) AS p(hub text,definition text,version integer)
                           WHERE w.id=t.workflow_id AND w.hub_id=p.hub AND w.definition_id=p.definition AND w.definition_version=p.version))
                     ORDER BY t.sequence FOR UPDATE OF t SKIP LOCKED
                 )
-                UPDATE wfc_scale.hub_task t SET state=1,owner=@worker,last_owner=@worker,epoch=t.epoch+1,
+                UPDATE wfc_scale.hub_task t SET state=1,owner=p.worker,last_owner=p.worker,epoch=t.epoch+1,
                     attempts=t.attempts+1,lease_until=now()+@lease,updated_at=now()
                 FROM picked p WHERE t.id=p.id
                 RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,t.workflow_id,t.payload::text,
                     t.epoch,t.attempts,t.lease_until,COALESCE(t.workflow_step,t.native_step_id)
                 """,db,tx))
             {
-                cmd.Parameters.Add("selected",NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(request.Items.Select(x => new { id=x.TaskId, epoch=x.ObservedEpoch }));
-                cmd.Parameters.Add("capabilities",NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(request.Capabilities.Select(x => new { hub=x.HubId,task_type=x.TaskType,version=x.Version }));
-                cmd.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value = request.Workflows is null ? DBNull.Value : JsonSerializer.Serialize(request.Workflows.Select(x => new { hub=x.HubId,definition=x.DefinitionId,version=x.Version }));
+                cmd.Parameters.Add("selected",NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(request.Items.Select(x => new {
+                    id=x.TaskId, epoch=x.ObservedEpoch, worker=x.WorkerId ?? request.WorkerId,
+                    capabilities=(x.Capabilities ?? request.Capabilities).Select(c => new { hub=c.HubId,task_type=c.TaskType,version=c.Version }),
+                    pins=(x.Capabilities is null ? request.Workflows : x.Workflows)?.Select(w => new { hub=w.HubId,definition=w.DefinitionId,version=w.Version })
+                }));
                 cmd.Parameters.AddWithValue("hub",request.HubId); cmd.Parameters.AddWithValue("count",request.PartitionCount);
-                cmd.Parameters.AddWithValue("partition",request.Partition); cmd.Parameters.AddWithValue("worker",request.WorkerId);
+                cmd.Parameters.AddWithValue("partition",request.Partition);
                 cmd.Parameters.Add("lease",NpgsqlDbType.Interval).Value=request.Lease;
                 await using var rows = await cmd.ExecuteReaderAsync(ct);
                 while (await rows.ReadAsync(ct))
@@ -663,10 +689,10 @@ public sealed class HubTaskStore : IAsyncDisposable
                     UPDATE wfc_scale.hub_task_attempt SET finished_at=clock_timestamp(),outcome='LeaseExpired'
                     WHERE task_id=ANY(@ids) AND finished_at IS NULL;
                     INSERT INTO wfc_scale.hub_task_attempt(task_id,epoch,workflow_id,step_index,attempt_number,worker_id)
-                    SELECT id,epoch,workflow_id,COALESCE(workflow_step,native_step_id),attempts,@worker
+                    SELECT id,epoch,workflow_id,COALESCE(workflow_step,native_step_id),attempts,owner
                     FROM wfc_scale.hub_task WHERE id=ANY(@ids);
                     """,db,tx);
-                attempt.Parameters.AddWithValue("ids",stepIds); attempt.Parameters.AddWithValue("worker",request.WorkerId);
+                attempt.Parameters.AddWithValue("ids",stepIds);
                 await attempt.ExecuteNonQueryAsync(ct);
             }
             var workflowIds=claimed.Where(x => x.Lease.WorkflowId.HasValue && x.Lease.TaskType is "__workflow__" or "__native_workflow__").Select(x => x.Lease.Id).ToArray();
@@ -674,10 +700,10 @@ public sealed class HubTaskStore : IAsyncDisposable
             {
                 await using var journal = new NpgsqlCommand("""
                     INSERT INTO wfc_scale.hub_workflow_event(workflow_id,step_index,task_id,activity_type,event_type,payload)
-                    SELECT w.id,w.next_step,t.id,t.task_type,'WorkflowTaskClaimed',jsonb_build_object('worker',@worker,'epoch',t.epoch)
+                    SELECT w.id,w.next_step,t.id,t.task_type,'WorkflowTaskClaimed',jsonb_build_object('worker',t.owner,'epoch',t.epoch)
                     FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE t.id=ANY(@ids)
                     """,db,tx);
-                journal.Parameters.AddWithValue("ids",workflowIds); journal.Parameters.AddWithValue("worker",request.WorkerId);
+                journal.Parameters.AddWithValue("ids",workflowIds);
                 await journal.ExecuteNonQueryAsync(ct);
             }
             if (testHooks?.BeforeOwnerRecheck is not null) await testHooks.BeforeOwnerRecheck(ct);

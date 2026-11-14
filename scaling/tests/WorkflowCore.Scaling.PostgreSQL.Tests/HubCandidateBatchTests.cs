@@ -8,6 +8,35 @@ public sealed class HubCandidateBatchTests
 {
     private static string Database => Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
     [Fact]
+    public async Task MixedWorkerBatchRevalidatesEachWorkerAndDoesNotRejectOtherItems()
+    {
+        var hub = "mixed-worker-" + Guid.NewGuid().ToString("N");
+        var ids = Enumerable.Range(0, 4).Select(_ => Guid.NewGuid()).ToArray();
+        await using var db = new NpgsqlConnection(Database); await db.OpenAsync();
+        await using (var insert = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            VALUES (@a,@hub,0,'a',1,'{}'),(@b,@hub,0,'b',1,'{}'),(@bad,@hub,0,'a',1,'{}'),(@stale,@hub,0,'a',1,'{}')
+            """, db))
+        {
+            insert.Parameters.AddWithValue("a", ids[0]); insert.Parameters.AddWithValue("b", ids[1]);
+            insert.Parameters.AddWithValue("bad", ids[2]); insert.Parameters.AddWithValue("stale", ids[3]);
+            insert.Parameters.AddWithValue("hub", hub); await insert.ExecuteNonQueryAsync();
+        }
+        await using var store = new HubTaskStore(Database);
+        var owner = await new HubMatchingPartitionLeaseStore(store).AcquireOrReadAsync(hub, 0, 4,
+            "owner", "http://localhost:5100", TimeSpan.FromSeconds(60), default);
+        HubCapability[] a = [new(hub,"a",1)], b = [new(hub,"b",1)];
+        HubCandidateBatchItem[] items = [new(ids[0],0,"worker-a",a), new(ids[1],0,"worker-b",b),
+            new(ids[2],0,"worker-b",b), new(ids[3],1,"worker-a",a)];
+        var result = await store.ClaimCandidateBatchAsync(new(items,"worker-a",hub,0,4,a,null,owner,TimeSpan.FromSeconds(30)),default);
+        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status);
+        Assert.Equal(2,result.Leases.Count);
+        Assert.True(await store.IsCandidateLeaseCurrentAsync(result.Leases.Single(x => x.Id == ids[0]),"worker-a",default));
+        Assert.True(await store.IsCandidateLeaseCurrentAsync(result.Leases.Single(x => x.Id == ids[1]),"worker-b",default));
+        await using var check = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_task WHERE id=ANY(@ids) AND state=0 AND epoch=0",db);
+        check.Parameters.AddWithValue("ids",new[] { ids[2], ids[3] }); Assert.Equal(2L,(long)(await check.ExecuteScalarAsync())!);
+    }
+    [Fact]
     public async Task BatchRevalidatesEachIdPinsEpochAndConstraintsAndJournalsOnlyAdmitted()
     {
         var hub="candidate-batch-"+Guid.NewGuid().ToString("N"); var ids=Enumerable.Range(0,4).Select(_=>Guid.NewGuid()).ToArray();
@@ -48,13 +77,15 @@ public sealed class HubCandidateBatchTests
         { cmd.Parameters.AddWithValue("ids",ids); cmd.Parameters.AddWithValue("hub",hub); await cmd.ExecuteNonQueryAsync(); }
         await using var store=new HubTaskStore(Database); var owners=new HubMatchingPartitionLeaseStore(store);
         var owner=await owners.AcquireOrReadAsync(hub,0,4,"owner","http://localhost:5100",TimeSpan.FromSeconds(60),default);
-        var request=new HubCandidateBatchClaim(ids.Select(id=>new HubCandidateBatchItem(id,0)).ToArray(),"worker",hub,0,4,[new(hub,"activity",1)],null,owner,TimeSpan.FromSeconds(30));
+        HubCapability[] capabilities = [new(hub,"activity",1)];
+        var request=new HubCandidateBatchClaim(ids.Select((id,i)=>new HubCandidateBatchItem(id,0,"worker-"+i,capabilities)).ToArray(),"worker",hub,0,4,capabilities,null,owner,TimeSpan.FromSeconds(30));
         await Assert.ThrowsAsync<OperationCanceledException>(()=>store.ClaimCandidateBatchAsync(request,default,new(BeforeOwnerRecheck:_=>throw new OperationCanceledException())));
         await using (var check=new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_task WHERE id=ANY(@ids) AND state=0 AND epoch=0 AND attempts=0",db))
         { check.Parameters.AddWithValue("ids",ids); Assert.Equal(2L,(long)(await check.ExecuteScalarAsync())!); }
         var result=await store.ClaimCandidateBatchAsync(request,default,new(Commit:async(tx,ct)=>{await tx.CommitAsync(ct); throw new IOException("lost response");}));
         Assert.Equal(HubCandidateClaimStatus.CommitOutcomeUnknown,result.Status); Assert.Equal(2,result.Leases.Count);
-        foreach(var lease in result.Leases) Assert.True(await store.IsCandidateLeaseCurrentAsync(lease,"worker",default));
+        foreach(var lease in result.Leases)
+            Assert.True(await store.IsCandidateLeaseCurrentAsync(lease,"worker-"+Array.IndexOf(ids,lease.Id),default));
         var retry=await store.ClaimCandidateBatchAsync(request,default); Assert.Equal(HubCandidateClaimStatus.Unavailable,retry.Status);
     }
 }

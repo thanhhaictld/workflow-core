@@ -242,6 +242,18 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := http://hub:5100,http://hub-2:5100
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_CANDIDATES_ENABLED := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_ADMISSION_CONCURRENCY := 3
+# Experimental matching scale configuration for this observability preset.
+# These settings have correctness coverage but are not performance-qualified.
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_BACKPRESSURE := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_CROSS_WORKER_BATCH := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_BATCH_SIZE := 32
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY := 2
+# Outbox writes also require a database setting and an explicit rollout.
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_OUTBOX_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_OUTBOX_BATCH_SIZE := 128
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_OUTBOX_MIN_DELAY_MS := 10
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_OUTBOX_MAX_DELAY_MS := 1000
 obs-up: obs-owner-recovery-up
 # Start the default observability stack with 16 processor containers.
 ups-16: OBS_PROCESSORS := 16

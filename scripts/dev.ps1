@@ -145,6 +145,9 @@ function Apply-DatabaseSchema {
     Write-Host 'Applying 029_hub_partition_candidate_indexes.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/029_hub_partition_candidate_indexes.sql')
+    Write-Host 'Applying 030_hub_notification_outbox.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/030_hub_notification_outbox.sql')
 }
 
 function Install-Monitor {
@@ -275,7 +278,7 @@ Workflow Core Monitor — PowerShell 7+ (Windows, macOS, Linux)
   pwsh ./scripts/dev.ps1 check       Type-check Next.js
   pwsh ./scripts/dev.ps1 db-up       Start PostgreSQL 17
   pwsh ./scripts/dev.ps1 db-ef       Apply EF migrations
-  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–027 and 029 (028 with WFC_HUB_INSTALL_SHARD4_READY_INDEX=true)
+  pwsh ./scripts/dev.ps1 db-schema   Apply EF + 002–027 and 029–030 (028 with WFC_HUB_INSTALL_SHARD4_READY_INDEX=true)
   pwsh ./scripts/dev.ps1 db-down     Stop PostgreSQL (keep data)
   pwsh ./scripts/dev.ps1 db-logs     Tail PostgreSQL logs
   pwsh ./scripts/dev.ps1 db-reset -ConfirmReset    DELETE local DB volume
