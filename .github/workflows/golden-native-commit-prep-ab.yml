@@ -43,6 +43,8 @@ jobs:
           set -euo pipefail
           export WFC_OBSERVABILITY_PROJECT="golden-tx-$GITHUB_RUN_ID"
           mkdir -p scaling/observability/results/native-commit-prep-ab
+          # k6 executes as a non-root user and writes its handleSummary JSON here.
+          chmod 0777 scaling/observability/results scaling/observability/results/native-commit-prep-ab
           (nproc; free -h; docker version) > scaling/observability/results/native-commit-prep-ab/runner.txt
           docker compose -f scaling/observability/compose.yaml \
             -f scaling/observability/compose.matching-ha.yaml \
