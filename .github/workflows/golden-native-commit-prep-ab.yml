@@ -1,0 +1,161 @@
+name: Golden native commit transaction A/B
+
+on:
+  pull_request:
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/HubNativeWorkflowStore.cs'
+      - 'scaling/observability/compose.native-commit-prep-ab.yaml'
+      - '.github/workflows/golden-native-commit-prep-ab.yml'
+  workflow_dispatch:
+
+jobs:
+  native-commit-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      WFC_HUB_PUSH_ENABLED: 'true'
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_BATCH_HISTORY_ENABLED: 'true'
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: 'subscriptions'
+      WFC_HUB_REUSE_SNAPSHOT_CONTRACTS: 'true'
+      WFC_HUB_METRICS_SAMPLER_ENABLED: 'false'
+      WFC_HUB_DB_POOL: '12'
+      OFFBOARD_PROCESSOR_WORKERS: '8'
+      WFC_HUB_MATCHING_EVENT_GATED: 'false'
+      WFC_HUB_TASK_SSE_PUSH: 'false'
+      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
+      POLICY_BENCHMARK_ENABLED: 'false'
+      POLICY_BENCHMARK_ONLY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify solution builds
+        run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
+      - name: Build reusable Hub/processor images and record runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WFC_OBSERVABILITY_PROJECT="golden-tx-$GITHUB_RUN_ID"
+          mkdir -p scaling/observability/results/native-commit-prep-ab
+          (nproc; free -h; docker version) > scaling/observability/results/native-commit-prep-ab/runner.txt
+          docker compose -f scaling/observability/compose.yaml \
+            -f scaling/observability/compose.matching-ha.yaml \
+            -f scaling/observability/compose.matching-shards.yaml \
+            -f scaling/observability/compose.native-commit-prep-ab.yaml \
+            --env-file scaling/observability/.env.example config --quiet
+          docker compose -f scaling/observability/compose.yaml \
+            -f scaling/observability/compose.matching-ha.yaml \
+            -f scaling/observability/compose.matching-shards.yaml \
+            -f scaling/observability/compose.native-commit-prep-ab.yaml \
+            --env-file scaling/observability/.env.example build hub hub-2 processor
+      - name: Compare OFF ON ON OFF with fresh PostgreSQL per stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WFC_OBSERVABILITY_PROJECT="golden-tx-$GITHUB_RUN_ID"
+          OUT=scaling/observability/results/native-commit-prep-ab
+          ENVFILE=scaling/observability/.env.example
+          dc() {
+            docker compose -f scaling/observability/compose.yaml \
+              -f scaling/observability/compose.matching-ha.yaml \
+              -f scaling/observability/compose.matching-shards.yaml \
+              -f scaling/observability/compose.native-commit-prep-ab.yaml \
+              --env-file "$ENVFILE" "$@"
+          }
+          cleanup() { dc --profile offboarding-load --profile offboarding-k6 down --volumes --remove-orphans || true; }
+          trap cleanup EXIT
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for stage in off1 on1 on2 off2; do
+            case "$stage" in
+              on*) export WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION=true;;
+              off*) export WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION=false;;
+            esac
+            echo "STAGE $stage: prepare history outside transaction=$WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION"
+            cleanup
+            dc up -d hub hub-2 hub-lb prometheus
+            for i in {1..90}; do
+              if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null 2>&1; then break; fi
+              sleep 2
+            done
+            curl --fail-with-body -fsS http://127.0.0.1:5110/health/ready
+            dc --profile offboarding-load up -d --no-deps --scale processor=8 processor
+            count="$(dc --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$count" -eq 8
+            for i in {1..90}; do
+              if curl -fsS -H "Authorization: Bearer $token" \
+                http://127.0.0.1:5110/api/hub/definitions | \
+                jq -e 'any(.[]; .hubId=="offboarding" and .definitionId=="tenant-offboarding-fast")' >/dev/null 2>&1; then break; fi
+              sleep 2
+            done
+            curl --fail-with-body -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/definitions | \
+              jq -e 'any(.[]; .hubId=="offboarding" and .definitionId=="tenant-offboarding-fast")'
+            warm="tx-$stage-$GITHUB_RUN_ID-warm"
+            dc --profile offboarding-k6 run --rm --no-deps \
+              -e K6_OFFBOARD_COUNT=40 -e K6_OFFBOARD_VUS=40 \
+              -e K6_OFFBOARD_TIMEOUT_SECONDS=240 -e K6_OFFBOARD_RUN_ID="$warm" \
+              k6-offboarding > "$OUT/$stage-warm.log" 2>&1 || {
+                tail -100 "$OUT/$stage-warm.log"; dc logs --tail=100 hub hub-2 processor; exit 1;
+              }
+            run="tx-$stage-$GITHUB_RUN_ID-measured"
+            dc --profile offboarding-k6 run --rm --no-deps \
+              -e K6_OFFBOARD_COUNT=500 -e K6_OFFBOARD_VUS=100 \
+              -e K6_OFFBOARD_TIMEOUT_SECONDS=540 -e K6_OFFBOARD_RUN_ID="$run" \
+              k6-offboarding > "$OUT/$stage-k6.log" 2>&1 || {
+                tail -120 "$OUT/$stage-k6.log"; dc logs --tail=120 hub hub-2 processor; exit 1;
+              }
+            cp scaling/observability/results/k6-offboarding-summary.json "$OUT/$stage-k6-summary.json"
+            curl --fail-with-body -fsS -H "Authorization: Bearer $token" \
+              "http://127.0.0.1:5110/api/hub/runs/$run/summary" > "$OUT/$stage-summary.json"
+            printf "SELECT json_build_object('workflows',count(*),'completed',count(*) FILTER (WHERE state=2),'historyEvents',(SELECT count(*) FROM wfc_scale.hub_workflow_event e JOIN wfc_scale.hub_workflow x ON x.id=e.workflow_id WHERE x.run_id='%s'),'extraAttempts',(SELECT COALESCE(sum(GREATEST(t.attempts-1,0)),0) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow x ON x.id=t.workflow_id WHERE x.run_id='%s')) FROM wfc_scale.hub_workflow WHERE run_id='%s';\n" "$run" "$run" "$run" | \
+              dc exec -T postgres psql -U workflow -d workflow -At > "$OUT/$stage-audit.json"
+            STAGE="$stage" MODE="$WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION" RUN="$run" OUT="$OUT" python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime
+          out=pathlib.Path(os.environ["OUT"])
+          stage=os.environ["STAGE"]
+          summary=json.loads((out/f"{stage}-summary.json").read_text())
+          audit=json.loads((out/f"{stage}-audit.json").read_text())
+          assert summary["total"]==summary["completed"]==500 and summary["failed"]==0, summary
+          assert audit["workflows"]==audit["completed"]==500 and audit["historyEvents"]>0, audit
+          def instant(s): return datetime.fromisoformat(s.replace("Z","+00:00"))
+          elapsed=(instant(summary["lastCompletedAt"])-instant(summary["firstCreatedAt"])).total_seconds()
+          assert elapsed>0
+          row={"stage":stage,"prepareHistoryOutsideTransaction":os.environ["MODE"]=="true",
+               "runId":os.environ["RUN"],"completed":500,"failed":0,
+               "elapsedSeconds":round(elapsed,4),"throughputWorkflowsPerSec":round(500/elapsed,4),
+               "workflowP95Ms":summary["p95CompletionMs"],"workflowP99Ms":summary["p99CompletionMs"],
+               "durableHistoryEvents":audit["historyEvents"],"extraTaskAttempts":audit["extraAttempts"]}
+          (out/f"{stage}.json").write_text(json.dumps(row,indent=2)+"\n")
+          print(json.dumps(row,indent=2))
+          PY
+          done
+          python3 - <<'PY'
+          import json, pathlib
+          out=pathlib.Path("scaling/observability/results/native-commit-prep-ab")
+          rows=[json.loads((out/f"{name}.json").read_text()) for name in ("off1","on1","on2","off2")]
+          off=[row for row in rows if not row["prepareHistoryOutsideTransaction"]]
+          on=[row for row in rows if row["prepareHistoryOutsideTransaction"]]
+          def pooled(group):
+              return sum(r["completed"] for r in group)/sum(r["elapsedSeconds"] for r in group)
+          base=pooled(off); experiment=pooled(on)
+          result={"baselineThroughputWorkflowsPerSec":round(base,3),
+                  "experimentThroughputWorkflowsPerSec":round(experiment,3),
+                  "throughputRatio":round(experiment/base,4),
+                  "stages":rows,"note":"Two samples per mode on one shared CI runner. No confidence interval; compare drift across OFF runs and ON runs."}
+          (out/"report.json").write_text(json.dumps(result,indent=2)+"\n")
+          print(json.dumps(result,indent=2))
+          PY
+      - name: Upload A/B evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-native-commit-prep-ab
+          path: scaling/observability/results/native-commit-prep-ab/
+          if-no-files-found: warn
