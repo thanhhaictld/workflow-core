@@ -208,7 +208,7 @@ $(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
 # Default observability preset. Use one export per flag; command-line Make
 # assignments override these values. Private .env credentials are untouched.
 OBS_GOLDEN_TARGETS := obs-up obs-config obs-logs obs-ps obs-down obs-test-4k
-.PHONY: $(OBS_GOLDEN_TARGETS) obs-base-up
+.PHONY: $(OBS_GOLDEN_TARGETS) obs-base-up ups-16
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_METRICS_SAMPLER_ENABLED := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_DB_POOL := 12
@@ -238,7 +238,12 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_SCOPED_CLAIMS := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_DEFER_OWNER_CHECK := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := true
 obs-up: obs-owner-recovery-up
+# Start the default observability stack with 16 processor containers.
+ups-16: OBS_PROCESSORS := 16
+ups-16: obs-up
 obs-config: obs-owner-recovery-config
 obs-logs: obs-owner-recovery-logs
 obs-ps: obs-owner-recovery-ps

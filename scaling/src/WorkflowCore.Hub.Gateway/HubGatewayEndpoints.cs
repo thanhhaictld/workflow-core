@@ -12,6 +12,7 @@ namespace WorkflowCore.Hub.Gateway;
 /// </summary>
 public static class HubGatewayEndpoints
 {
+    private static long _pullClaims, _pullEmptyClaims, _pullFailedClaims;
     // Optional: the matcher verifies the current PostgreSQL ownership epoch
     // immediately before every SQL task claim. The Gateway has already read
     // the live partition owner to route the HTTP poll, so another gateway-side
@@ -32,6 +33,7 @@ public static class HubGatewayEndpoints
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
         services.AddSingleton<HubTaskMatcher>();
         services.AddSingleton<HubSseTaskDistributor>();
+        services.AddSingleton<HubPushSessions>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -347,6 +349,76 @@ public static class HubGatewayEndpoints
             return task is null ? Results.NotFound() : Results.Ok(task);
         });
 
+        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions, HubReadinessBroadcaster readiness) =>
+            Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
+                pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
+                pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
+                pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
+                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions }));
+
+        routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
+            HubPushSessions sessions, CancellationToken ct) =>
+        {
+            if (!sessions.Enabled) return Results.NotFound();
+            try
+            {
+                var (session, owner) = await sessions.RegisterAsync(registration, ct);
+                return session is null
+                    ? Results.Conflict(new { ownerUrl = owner.OwnerUrl, ownerEpoch = owner.Epoch })
+                    : Results.Ok(new HubPushSession(session.Id, owner.OwnerUrl, owner.Epoch, HubPushSessions.TtlSeconds));
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException) { return Results.StatusCode(503); }
+        });
+
+        routes.MapPut("/workers/push-sessions/{id:guid}/capacity", (Guid id, HubPushCapacity capacity,
+            HubPushSessions sessions) =>
+        {
+            var session = sessions.Find(id);
+            return session is null ? Results.NotFound() : sessions.Update(session, capacity)
+                ? Results.NoContent() : Results.Conflict();
+        });
+
+        routes.MapPost("/workers/push-sessions/{id:guid}/revoke", (Guid id, HubPushSessions sessions) =>
+        {
+            var session = sessions.Find(id);
+            return session is null ? Results.NotFound() : sessions.Revoke(session)
+                ? Results.NoContent() : Results.Conflict();
+        });
+
+        routes.MapGet("/workers/push-owners/{hub}/{partition:int}", async (string hub, int partition,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled || partition < 0 || partition >= ownership.PartitionCount ||
+                string.IsNullOrWhiteSpace(hub) || hub.Length > 80) return Results.BadRequest();
+            var owner = await ownership.ReadPartitionAsync(hub, partition, ct);
+            return owner is null ? Results.NotFound() : Results.Ok(owner);
+        });
+
+        routes.MapGet("/workers/push-sessions/{id:guid}/events", async (Guid id, HttpContext context,
+            HubPushSessions sessions, CancellationToken ct) =>
+        {
+            var session = sessions.Find(id);
+            if (session is null) { context.Response.StatusCode = 404; return; }
+            if (!sessions.Connect(session)) { context.Response.StatusCode = 409; return; }
+            try
+            {
+                context.Response.ContentType = "text/event-stream";
+                context.Response.Headers.CacheControl = "no-cache";
+                await context.Response.WriteAsync(": connected\n\n", ct);
+                await context.Response.Body.FlushAsync(ct);
+                await sessions.RunAsync(session, async (assignment, token) =>
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    await context.Response.WriteAsync("event: task.assigned\ndata: " +
+                        JsonSerializer.Serialize(assignment) + "\n\n", deadline.Token);
+                    await context.Response.Body.FlushAsync(deadline.Token);
+                }, ct);
+            }
+            finally { sessions.Close(session); }
+        });
+
         // Temporal-inspired demand-driven task matching. An incoming request
         // is routed to the active per-Hub owner, which parks the worker in memory
         // and only claims PostgreSQL tasks when demand and readiness intersect.
@@ -489,11 +561,18 @@ public static class HubGatewayEndpoints
                 var items = await store.ClaimAsync(request.WorkerId,
                     request.Hubs, request.Capabilities, request.MaxTasks,
                     TimeSpan.FromSeconds(45), ct, request.Workflows);
+                Interlocked.Increment(ref _pullClaims);
+                if (items.Count == 0) Interlocked.Increment(ref _pullEmptyClaims);
                 return Results.Ok(items);
             }
             catch (ArgumentException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch
+            {
+                Interlocked.Increment(ref _pullFailedClaims);
+                throw;
             }
         });
 

@@ -1,4 +1,5 @@
 using Npgsql;
+using System.Text.Json;
 using WorkflowCore.Hub;
 using Xunit;
 
@@ -142,6 +143,100 @@ public sealed class HubMatchingPartitionTests
         var legacy = await store.ClaimAsync("legacy", [hub], [new(hub, "work", 1)], 1,
             TimeSpan.FromSeconds(30), default);
         Assert.Equal(constrained, Assert.Single(legacy).Id);
+    }
+
+    [Fact]
+    public async Task ReconciliationPagesReachHintsBeyondTheFirst512()
+    {
+        if (Database is null) return;
+        var hub = "zz-push-page-" + Guid.NewGuid().ToString("N");
+        await using var db = new NpgsqlConnection(Database);
+        await db.OpenAsync();
+        await using (var insert = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            SELECT gen_random_uuid(),@hub,0,'type-' || lpad(n::text,4,'0'),1,'{}'::jsonb
+            FROM generate_series(1,520) n
+            """, db))
+        {
+            insert.Parameters.AddWithValue("hub", hub);
+            Assert.Equal(520, await insert.ExecuteNonQueryAsync());
+        }
+        await using var tasks = new HubTaskStore(Database, 4);
+        (string Hub, string TaskType, int Version, int Partition)? cursor = null;
+        var found = new HashSet<string>();
+        for (var page = 0; page < 100; page++)
+        {
+            var hints = await tasks.ReadyMatchingHintsAsync(default, cursor);
+            foreach (var hint in hints.Where(h => h.Hub == hub)) found.Add(hint.TaskType);
+            if (hints.Count < 512) break;
+            cursor = hints[^1];
+        }
+        Assert.Equal(520, found.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ClaimOwnerFenceRejectsTakeoverForBothClaimPaths(bool batch)
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        await using var tasks = new HubTaskStore(Database, 4, enableUnconstrainedBatchClaims: batch);
+        var owners = new HubMatchingPartitionLeaseStore(tasks);
+        var old = await owners.AcquireOrReadAsync(hub, 0, 1, "old", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var payload = JsonSerializer.SerializeToElement(new { value = 1 });
+        var id = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+            payload.GetRawText(), null, null, default);
+        Assert.True(await owners.ReleaseAsync(hub, 0, old.OwnerId, old.Epoch, default));
+        var current = await owners.AcquireOrReadAsync(hub, 0, 1, "new", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        Task<IReadOnlyList<HubLeasedTask>> Claim(HubClaimOwnerFence fence) =>
+            tasks.ClaimAsync("worker", [hub], [new(hub, "work", 1)], 1,
+                TimeSpan.FromSeconds(30), default, matchingPartition: 0,
+                matchingPartitionCount: 1, ownerFence: fence);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Claim(new(old.OwnerId, old.Epoch)));
+        var leased = Assert.Single(await Claim(new(current.OwnerId, current.Epoch)));
+        Assert.Equal(id, leased.Id);
+        Assert.Equal(1L, leased.Epoch);
+        Assert.Equal(1, leased.Attempts);
+    }
+
+    [Fact]
+    public async Task ClaimRacingTakeoverWaitsAndRejectsTheOldEpoch()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        await using var tasks = new HubTaskStore(Database, 4, enableUnconstrainedBatchClaims: true);
+        var owners = new HubMatchingPartitionLeaseStore(tasks);
+        var old = await owners.AcquireOrReadAsync(hub, 0, 1, "old", "http://hub:5100",
+            TimeSpan.FromSeconds(30), default);
+        var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var payload = JsonSerializer.SerializeToElement(new { value = 1 });
+        await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+            payload.GetRawText(), null, null, default);
+        await using var db = new NpgsqlConnection(Database);
+        await db.OpenAsync();
+        await using var tx = await db.BeginTransactionAsync();
+        await using (var takeover = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_matching_partition_owner
+            SET owner_id='new', epoch=epoch+1, lease_until=clock_timestamp()+interval '30 seconds'
+            WHERE hub_id=@hub AND matching_partition=0
+            """, db, tx))
+        {
+            takeover.Parameters.AddWithValue("hub", hub);
+            Assert.Equal(1, await takeover.ExecuteNonQueryAsync());
+        }
+        var claim = tasks.ClaimAsync("worker", [hub], [new(hub, "work", 1)], 1,
+            TimeSpan.FromSeconds(30), default, matchingPartition: 0,
+            matchingPartitionCount: 1, ownerFence: new(old.OwnerId, old.Epoch));
+        await tx.CommitAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => claim);
+        var newClaim = await tasks.ClaimAsync("worker", [hub], [new(hub, "work", 1)], 1,
+            TimeSpan.FromSeconds(30), default, matchingPartition: 0,
+            matchingPartitionCount: 1, ownerFence: new("new", old.Epoch + 1));
+        Assert.Equal(1L, Assert.Single(newClaim).Epoch);
     }
 
     [Fact]

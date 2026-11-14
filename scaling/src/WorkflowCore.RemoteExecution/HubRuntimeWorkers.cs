@@ -46,13 +46,13 @@ internal sealed class HubRuntimePublisher(HubRestClient client,HubNativeCatalog 
 internal sealed class HubNativeWorkflowWorker(HubRestClient client,HubNativeCatalog catalog,HubRuntimeOptions options,
     HubNativeExecutor executor,ILogger<HubNativeWorkflowWorker> logger,IServiceProvider services,HubRuntimeStartup startup)
     : HubRuntimeWorker(client,options,logger,options.WorkflowConcurrency,
-        catalog.Definitions.Select(d=>new HubCapability(d.HubId,"__native_workflow__",1))
+        catalog.Definitions.Where(d=>options.WorkerHub is null || d.HubId==options.WorkerHub).Select(d=>new HubCapability(d.HubId,"__native_workflow__",1))
             .Concat(options.SequentialVersionOneCompatibility
-                ? (services.GetService<RemoteWorkflowRegistry>()?.All()??[]).Select(d=>new HubCapability(d.HubId,"__workflow__",1)) : [])
+                ? (services.GetService<RemoteWorkflowRegistry>()?.All()??[]).Where(d=>options.WorkerHub is null || d.HubId==options.WorkerHub).Select(d=>new HubCapability(d.HubId,"__workflow__",1)) : [])
             .Distinct().ToArray(),startup,
-        catalog.Definitions.Select(d=>new HubWorkflowCapability(d.HubId,d.DefinitionId,d.Version))
+        catalog.Definitions.Where(d=>options.WorkerHub is null || d.HubId==options.WorkerHub).Select(d=>new HubWorkflowCapability(d.HubId,d.DefinitionId,d.Version))
             .Concat(options.SequentialVersionOneCompatibility
-                ? (services.GetService<RemoteWorkflowRegistry>()?.All()??[]).Select(d=>new HubWorkflowCapability(d.HubId,d.DefinitionId,d.Version)) : [])
+                ? (services.GetService<RemoteWorkflowRegistry>()?.All()??[]).Where(d=>options.WorkerHub is null || d.HubId==options.WorkerHub).Select(d=>new HubWorkflowCapability(d.HubId,d.DefinitionId,d.Version)) : [])
             .Distinct().ToArray())
 {
     protected override async Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct)
@@ -81,8 +81,8 @@ internal sealed class HubNativeWorkflowWorker(HubRestClient client,HubNativeCata
 internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCatalog catalog,HubRuntimeOptions options,
     HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup)
     : HubRuntimeWorker(client,options,logger,options.ActivityConcurrency,
-        catalog.Activities.Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,a.Policy.Version))
-            .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,1)) : [])
+        catalog.Activities.Where(a=>options.WorkerHub is null || a.Policy.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,a.Policy.Version))
+            .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Where(a=>options.WorkerHub is null || a.Policy.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,1)) : [])
             .Distinct().ToArray(),startup)
 {
     protected override async Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct)=>
@@ -111,6 +111,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         // after lease acquisition merely to obtain an execution slot.
         var effectiveConcurrency = options.WorkerConcurrencyCap > 0
             ? Math.Min(concurrency, options.WorkerConcurrencyCap) : concurrency;
+        if (options.PushEnabled && effectiveConcurrency > 0 &&
+            capabilities.Select(c => c.HubId).Distinct().Count() == 1 &&
+            await Push(effectiveConcurrency,ct)) return;
         var running=new List<Task>();
         // A matching poll requires one Hub namespace. Multi-hub workers retain
         // the proven PR #18 SSE/adaptive path until per-Hub fan-out is added.
@@ -594,6 +597,229 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         }
     }
 
+    // Local slots remain the final guard if a capacity snapshot races delivery.
+    private async Task<bool> Push(int maxConcurrency, CancellationToken ct)
+    {
+        var hub = capabilities[0].HubId;
+        var partition = Random.Shared.Next(options.MatchingPartitions);
+        var seen = new HashSet<(Guid, long)>();
+        var seenOrder = new Queue<(Guid, long)>();
+        var gate = new object();
+        var running = new Dictionary<Guid, Task>();
+        using var slots = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        var everConnected = false;
+        while (!ct.IsCancellationRequested)
+        {
+            Uri target = client.Http.BaseAddress!;
+            HubPushSession? session = null;
+            var connected = false;
+            var revoked = false;
+            try
+            {
+                var registration = new HubPushRegistration(_owner, hub, partition,
+                    options.MatchingPartitions, capabilities, workflows, maxConcurrency);
+                for (var hop = 0; hop < 2; hop++)
+                {
+                    using var response = await client.Http.PostAsJsonAsync(
+                        new Uri(target, "api/hub/workers/push-sessions"), registration, ct);
+                    if (response.StatusCode == HttpStatusCode.NotFound && !everConnected) return false;
+                    if (response.StatusCode == HttpStatusCode.Conflict)
+                    {
+                        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                        var owner = body.RootElement.GetProperty("ownerUrl").GetString();
+                        if (!Uri.TryCreate(owner, UriKind.Absolute, out var next) ||
+                            next.Scheme != Uri.UriSchemeHttps &&
+                            !(next.Scheme == Uri.UriSchemeHttp && (next.IsLoopback || options.AllowInsecureHttp)) ||
+                            !string.IsNullOrEmpty(next.UserInfo) ||
+                            !options.PushTrustedOwners.Append(client.Http.BaseAddress!.GetLeftPart(UriPartial.Authority))
+                                .Any(allowed => Uri.TryCreate(allowed, UriKind.Absolute, out var trusted) &&
+                                    trusted.GetLeftPart(UriPartial.Authority).Equals(
+                                        next.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase)))
+                            throw new InvalidOperationException("Unsafe matching owner URL");
+                        target = new Uri(next.AbsoluteUri.TrimEnd('/') + "/");
+                        continue;
+                    }
+                    response.EnsureSuccessStatusCode();
+                    session = await response.Content.ReadFromJsonAsync<HubPushSession>(cancellationToken: ct)
+                        ?? throw new InvalidOperationException("Missing push session");
+                    break;
+                }
+                if (session is null) throw new InvalidOperationException("Push owner routing failed");
+                using var request = new HttpRequestMessage(HttpMethod.Get,
+                    new Uri(target, $"api/hub/workers/push-sessions/{session.SessionId}/events"));
+                using var streamResponse = await client.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                streamResponse.EnsureSuccessStatusCode();
+                everConnected = true;
+                connected = true;
+                using var connection = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var capacityWake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+                    { FullMode = BoundedChannelFullMode.DropWrite });
+                var rotating = false;
+                var released = new HashSet<Guid>();
+                long sequence = 0;
+                async Task RotateLater()
+                {
+                    if (options.MatchingPartitions <= 1) return;
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(30), connection.Token);
+                        lock (gate) rotating = true;
+                        capacityWake.Writer.TryWrite(true);
+                    }
+                    catch (OperationCanceledException) when (connection.IsCancellationRequested) { }
+                }
+                var rotation = RotateLater();
+                async Task CapacityLoop()
+                {
+                    while (!connection.IsCancellationRequested)
+                    {
+                        int free; Guid[] active; Guid[] completed; bool revoke;
+                        lock (gate)
+                        {
+                            free = rotating ? 0 : maxConcurrency - running.Count;
+                            active = running.Keys.ToArray();
+                            completed = released.ToArray();
+                            revoke = rotating;
+                        }
+                        using var update = await client.Http.PutAsJsonAsync(
+                            new Uri(target, $"api/hub/workers/push-sessions/{session.SessionId}/capacity"),
+                            new HubPushCapacity(++sequence, free, SeenDeliveryIds: active,
+                                ReleasedDeliveryIds: completed), connection.Token);
+                        update.EnsureSuccessStatusCode();
+                        lock (gate) foreach (var id in completed) released.Remove(id);
+                        if (revoke)
+                        {
+                            using var response = await client.Http.PostAsync(new Uri(target,
+                                $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, connection.Token);
+                            if (response.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound)
+                            {
+                                revoked = true;
+                                await connection.CancelAsync();
+                                return;
+                            }
+                            if (response.StatusCode != HttpStatusCode.Conflict) response.EnsureSuccessStatusCode();
+                        }
+                        using var delay = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
+                        await Task.WhenAny(Task.Delay(revoke ? TimeSpan.FromMilliseconds(250) : TimeSpan.FromSeconds(4), delay.Token),
+                            capacityWake.Reader.WaitToReadAsync(delay.Token).AsTask());
+                        await delay.CancelAsync();
+                        while (capacityWake.Reader.TryRead(out _)) { }
+                    }
+                }
+                var updates = CapacityLoop();
+                try
+                {
+                    await using var stream = await streamResponse.Content.ReadAsStreamAsync(connection.Token);
+                    using var reader = new StreamReader(stream);
+                    while (!connection.IsCancellationRequested)
+                    {
+                        var read = reader.ReadLineAsync(connection.Token).AsTask();
+                        var finished = await Task.WhenAny(read, updates);
+                        if (finished == updates) { await updates; break; }
+                        var line = await read;
+                        if (line is null) break;
+                        if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+                        var assignment = JsonSerializer.Deserialize<HubPushAssignment>(line[6..]);
+                        if (assignment is null || assignment.SessionId != session.SessionId ||
+                            assignment.WorkerId != _owner || assignment.Task.HubId != hub ||
+                            assignment.Task.LeaseUntil <= DateTime.UtcNow || assignment.Task.Epoch < 1 ||
+                            !capabilities.Any(c => c.TaskType == assignment.Task.TaskType &&
+                                c.Version == assignment.Task.Version)) continue;
+                        lock (gate)
+                        {
+                            var key = (assignment.Task.Id, assignment.Task.Epoch);
+                            if (!seen.Add(key))
+                            {
+                                if (!running.ContainsKey(assignment.DeliveryId))
+                                {
+                                    released.Add(assignment.DeliveryId);
+                                    capacityWake.Writer.TryWrite(true);
+                                }
+                                continue;
+                            }
+                            seenOrder.Enqueue(key);
+                            if (seenOrder.Count > 4096) seen.Remove(seenOrder.Dequeue());
+                            if (!slots.Wait(0))
+                            {
+                                // Never execute without a slot; the unstarted
+                                // lease remains fenced until its natural expiry.
+                                released.Add(assignment.DeliveryId);
+                                capacityWake.Writer.TryWrite(true);
+                                continue;
+                            }
+                            var task = Run(assignment.Task, ct);
+                            running.Add(assignment.DeliveryId, task);
+                            _ = task.ContinueWith(_ =>
+                            {
+                                lock (gate)
+                                {
+                                    running.Remove(assignment.DeliveryId);
+                                    released.Add(assignment.DeliveryId);
+                                    slots.Release();
+                                }
+                                capacityWake.Writer.TryWrite(true);
+                            },
+                                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                        }
+                    }
+                }
+                finally
+                {
+                    await connection.CancelAsync();
+                    try { await updates; } catch (OperationCanceledException) when (connection.IsCancellationRequested) { }
+                    await rotation;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception ex) { logger.LogWarning(ex, "Push session disconnected; reconnecting"); }
+            Task[] draining;
+            // Run continuations can remove entries; snapshot until all finish.
+            while (true)
+            {
+                lock (gate) draining = running.Values.ToArray();
+                if (draining.Length == 0) break;
+                await Task.WhenAll(draining);
+            }
+            if (ct.IsCancellationRequested) break;
+            // On an uncertain disconnect, wait out both session and task TTLs,
+            // then require either an old-owner revocation barrier or a changed /
+            // expired database owner epoch before reusing this lane's credit.
+            if (connected && !revoked && session is not null)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(75), ct);
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var revoke = await client.Http.PostAsync(new Uri(target,
+                            $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, ct);
+                        if (revoke.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound) break;
+                    }
+                    catch (HttpRequestException) { }
+                    catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
+                    try
+                    {
+                        using var owner = await client.Http.GetAsync(
+                            $"api/hub/workers/push-owners/{Uri.EscapeDataString(hub)}/{partition}", ct);
+                        if (owner.StatusCode == HttpStatusCode.NotFound) break;
+                        owner.EnsureSuccessStatusCode();
+                        var current = await owner.Content.ReadFromJsonAsync<HubMatchingPartitionLease>(cancellationToken: ct);
+                        if (current is not null && (current.Epoch != session.OwnerEpoch || current.LeaseUntil <= DateTime.UtcNow)) break;
+                    }
+                    catch (HttpRequestException) { }
+                    catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                }
+            }
+            else if (!connected) await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            partition = (partition + 1) % options.MatchingPartitions;
+        }
+        Task[] remaining;
+        lock (gate) remaining = running.Values.ToArray();
+        await Task.WhenAll(remaining);
+        return true;
+    }
+
     private async Task Listen(CancellationToken ct)
     {
         var hubs=string.Join(",",capabilities.Select(c=>c.HubId).Distinct());
@@ -632,6 +858,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         try
         {
             object result;
+            HubExecutionObservation.Started(task);
             using (var bodySpan = HubTelemetry.Traces.StartActivity("hub.worker.execute.body"))
             {
                 bodySpan?.SetTag("task.id", task.Id.ToString());
