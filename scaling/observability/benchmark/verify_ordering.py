@@ -41,12 +41,29 @@ assert re.fullmatch(r"[A-Za-z0-9_-]{1,100}", args.run_id)
 assert 0 < args.count <= 100000
 assert 0 <= args.max_extra_attempts <= args.count
 
-def query(sql):
-    result = subprocess.run([
-        "pwsh", "-NoProfile", "-File", "scaling/observability/compose.ps1", "-f", "scaling/observability/compose.yaml",
+# The former verification helper called compose.ps1 with only the base file.
+# In Actions that wrapper chooses a distinct project name and therefore
+# queried a PostgreSQL container which CI had never started. Use the exact
+# active 2-Hub/four-partition project for both CI and local tests.
+def compose_command():
+    files = [
+        "-f", "scaling/observability/compose.yaml",
+        "-f", "scaling/observability/compose.matching-ha.yaml",
+        "-f", "scaling/observability/compose.matching-shards.yaml",
         "--env-file", "scaling/observability/.env.example",
-        "exec", "-T", "postgres", "psql", "-X", "-U", "workflow", "-d",
-        "workflow", "-Atc", sql
+    ]
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # In CI, compose.yaml derives project name from GITHUB_RUN_ID.
+        return ["docker", "compose", *files]
+    # Local development sets its unique project name in this wrapper.
+    return ["pwsh", "-NoProfile", "-File",
+            "scaling/observability/compose.ps1", *files]
+
+
+def query(sql):
+    result = subprocess.run(compose_command() + [
+        "exec", "-T", "postgres", "psql", "-X", "-U", "workflow",
+        "-d", "workflow", "-Atc", sql
     ], check=True, capture_output=True, text=True, timeout=60)
     return int(result.stdout.strip())
 
