@@ -8,14 +8,32 @@ namespace WorkflowCore.RemoteExecution;
 
 /// <summary>Retains native pointer persistence types across process restarts.
 /// Type metadata is restricted to registered application assemblies and safe value/container types.</summary>
-public sealed class HubSnapshotCodec(HubNativeCatalog catalog)
+public sealed class HubSnapshotCodec
 {
+    private readonly HubNativeCatalog _catalog;
+    private readonly JsonSerializerSettings? _sharedSettings;
+
+    public HubSnapshotCodec(HubNativeCatalog catalog) : this(catalog, reuseContracts: null) { }
+
+    public HubSnapshotCodec(HubNativeCatalog catalog, bool? reuseContracts)
+    {
+        _catalog = catalog;
+        var enabled = reuseContracts ?? Environment.GetEnvironmentVariable(
+            "WFC_HUB_REUSE_SNAPSHOT_CONTRACTS") is "true" or "1" or "True";
+        // Json.NET creates a serializer per operation. Private settings and the
+        // resolver's contract metadata are reused within this catalog. Our
+        // converters are stateless; application converter attributes must also
+        // support concurrent reuse when opting in.
+        if (enabled) _sharedSettings = CreateSettings(catalog);
+    }
+
     public JsonElement EncodeValue(object? value) => Encode(new HubSnapshotValue{NativeValue=value});
     internal static bool IsEncodedValue(JsonElement value) => value.ValueKind==JsonValueKind.Object &&
         value.TryGetProperty("$hubValueFormat",out var format) && format.ValueKind==JsonValueKind.String && format.GetString()=="v1";
     public object? DecodeValue(JsonElement value) => IsEncodedValue(value)?Decode<HubSnapshotValue>(value).NativeValue:
         throw new InvalidOperationException("Unknown native value format");
-    private JsonSerializerSettings Settings => new()
+    private JsonSerializerSettings Settings => _sharedSettings ?? CreateSettings(_catalog);
+    private static JsonSerializerSettings CreateSettings(HubNativeCatalog catalog) => new()
     {
         TypeNameHandling=TypeNameHandling.Auto,
         DateTimeZoneHandling=DateTimeZoneHandling.Utc,

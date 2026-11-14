@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Http.Json;
@@ -116,6 +117,17 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var matchingPoll=options.LongPollingEnabled &&
             capabilities.Select(c => c.HubId).Distinct().Count() == 1;
         var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        // True Hub-to-worker SSE distribution: server acquires a fenced
+        // lease on readiness and pushes it over a persistent stream. A separate
+        // REST credit frame replenishes capacity after execution completes.
+        if (matchingPoll && options.MatchingPartitions > 1 &&
+            effectiveConcurrency > 0 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_TASK_SSE_PUSH") is
+                ("true" or "1" or "True"))
+        {
+            await RunSseTaskPushAsync(effectiveConcurrency, ct);
+            return;
+        }
         // Experimental: reserve one actual execution slot for each outstanding
         // shard poll. The current single rotating poll stays the default.
         // Do not enable for multi-Hub lanes, which still use SSE/REST fallback.
@@ -357,6 +369,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var started = Stopwatch.GetTimestamp();
         var outcome = "error";
         HubTelemetry.ClaimAttempts.Add(1, lane, transport);
+        HubTelemetry.ClaimInflight.Add(1, lane, transport);
         try
         {
             var leases = await send();
@@ -376,6 +389,208 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         {
             var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
             HubTelemetry.ClaimHttpDuration.Record(elapsed, lane, transport, new KeyValuePair<string, object?>("outcome", outcome));
+            HubTelemetry.ClaimInflight.Add(-1, lane, transport);
+        }
+    }
+
+    /// <summary>
+    /// Hub-side server-push SSE. A lane-wide coordinator owns ALL execution
+    /// slots. It offers one-shot credits to whichever matching shard needs
+    /// work; zero-credit streams still receive ownership-fencing heartbeats.
+    /// No shard can independently overbook the same execution slot.
+    /// </summary>
+    private async Task RunSseTaskPushAsync(int capacity, CancellationToken ct)
+    {
+        capacity = Math.Min(capacity, 64); // the SSE registration protocol bound
+        var credits = new HubSseWorkerCreditCoordinator(capacity, options.MatchingPartitions);
+        var running = new ConcurrentDictionary<Guid, Task>();
+        logger.LogInformation(
+            "SSE task push enabled: {Capacity} globally shared execution slots across {Shards} matching shards",
+            capacity, options.MatchingPartitions);
+        try
+        {
+            var streams = Enumerable.Range(0, options.MatchingPartitions)
+                .Select(shard => RunSseShardAsync(shard, credits, running, ct));
+            await Task.WhenAll(streams.Append(RunSseGrantSchedulerAsync(credits, ct)));
+        }
+        finally
+        {
+            await Task.WhenAll(running.Values);
+        }
+    }
+
+    private async Task RunSseGrantSchedulerAsync(
+        HubSseWorkerCreditCoordinator credits, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            if (!credits.TryOffer(out var offer))
+            {
+                await credits.WaitForChangeAsync(ct);
+                continue;
+            }
+
+            try
+            {
+                // A task is NOT claimed by this call. The server may lease
+                // exactly one task and push it on the matching SSE stream.
+                using var response = await client.Http.PostAsJsonAsync(
+                    "api/hub/workers/tasks:credit",
+                    new {
+                        sessionId = offer.SessionId,
+                        ownerEpoch = offer.OwnerEpoch,
+                        workerId = _owner,
+                        hubId = capabilities[0].HubId,
+                        matchingPartition = offer.Shard,
+                        creditId = offer.CreditId
+                    }, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    credits.OfferFailed(offer);
+                    // 409 / 503 / 404 means the session/owner may have
+                    // transitioned. Reconnect rather than retrying a credit
+                    // blindly into the wrong owner's in-memory registry.
+                    credits.Invalidate(offer.Shard, offer.SessionId);
+                    logger.LogWarning(
+                        "SSE credit grant rejected for shard {Shard}: HTTP {Status}",
+                        offer.Shard, (int)response.StatusCode);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                credits.OfferFailed(offer);
+                credits.Invalidate(offer.Shard, offer.SessionId);
+                logger.LogWarning(ex,
+                    "SSE credit grant transport failure on shard {Shard}", offer.Shard);
+                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+            }
+        }
+    }
+
+    private async Task RunSseShardAsync(int shard,
+        HubSseWorkerCreditCoordinator credits,
+        ConcurrentDictionary<Guid, Task> running, CancellationToken ct)
+    {
+        var attempted = false;
+        while (!ct.IsCancellationRequested)
+        {
+            if (attempted) HubTelemetry.SseTaskReconnects.Add(1);
+            attempted = true;
+            Guid sessionId = Guid.Empty;
+            using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post,
+                    "api/hub/workers/tasks:stream");
+                request.Content = JsonContent.Create(new {
+                    claim = new HubClaimRequest(_owner,
+                        capabilities.Select(c => c.HubId).Distinct().ToArray(),
+                        capabilities, MaxTasks: 1, Workflows: workflows,
+                        MatchingPartition: shard,
+                        MatchingPartitionCount: options.MatchingPartitions),
+                    capacity = credits.Capacity,
+                    initialCredits = 0
+                });
+                using var response = await client.Http.SendAsync(request,
+                    HttpCompletionOption.ResponseHeadersRead, sessionStop.Token);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(sessionStop.Token);
+                using var reader = new StreamReader(stream);
+                string? eventName = null;
+                string? payload = null;
+                while (await reader.ReadLineAsync(sessionStop.Token) is string line)
+                {
+                    if (line.StartsWith("event: ", StringComparison.Ordinal))
+                        eventName = line["event: ".Length..];
+                    else if (line.StartsWith("data: ", StringComparison.Ordinal))
+                        payload = line["data: ".Length..];
+                    else if (line.Length == 0)
+                    {
+                        if (eventName == "session" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            var nextId = json.RootElement.GetProperty("sessionId").GetGuid();
+                            var epoch = json.RootElement.GetProperty("ownerEpoch").GetInt64();
+                            credits.Connected(shard, nextId, epoch, () => sessionStop.Cancel());
+                            sessionId = nextId;
+                        }
+                        else if (eventName == "credit.unused" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            credits.Unused(shard, sessionId,
+                                json.RootElement.GetProperty("creditId").GetGuid());
+                        }
+                        else if (eventName == "task.leased" && payload is not null)
+                        {
+                            using var json = JsonDocument.Parse(payload);
+                            var creditId = json.RootElement.GetProperty("creditId").GetGuid();
+                            var task = json.RootElement.GetProperty("task").Deserialize<HubLeasedTask>(
+                                new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                                ?? throw new InvalidOperationException("Empty SSE task lease");
+                            if (!credits.Dispatched(shard, sessionId, creditId, task.Id))
+                            {
+                                // The session or credit was revoked while a
+                                // response was in flight. Never execute an
+                                // unreserved lease; PostgreSQL will recover it.
+                                logger.LogWarning(
+                                    "Ignoring stale/unreserved SSE task {Task} from shard {Shard}",
+                                    task.Id, shard);
+                            }
+                            else
+                            {
+                                var done = new TaskCompletionSource(
+                                    TaskCreationOptions.RunContinuationsAsynchronously);
+                                if (!running.TryAdd(task.Id, done.Task))
+                                {
+                                    credits.Finished(task.Id);
+                                    logger.LogWarning("Duplicate SSE task {Task} rejected", task.Id);
+                                }
+                                else
+                                {
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try { await Run(task, ct); }
+                                        catch (Exception ex)
+                                        {
+                                            logger.LogError(ex,
+                                                "SSE task execution error for {Task}", task.Id);
+                                        }
+                                        finally
+                                        {
+                                            running.TryRemove(task.Id, out _);
+                                            credits.Finished(task.Id);
+                                            done.TrySetResult();
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        eventName = null;
+                        payload = null;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException)
+            {
+                // Session was explicitly invalidated because owner changed,
+                // or a grant was rejected during matching failover.
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "SSE task stream for shard {Shard} disconnected; retrying", shard);
+            }
+            finally
+            {
+                credits.Disconnected(shard, sessionId);
+            }
+            // Existing tasks are allowed to finish independently of session
+            // re-establishment; their PostgreSQL epochs remain authoritative.
+            try { await Task.Delay(TimeSpan.FromMilliseconds(350), ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
     }
 

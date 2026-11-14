@@ -22,7 +22,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Manually dispatch the indexed matching-bucket A/B through this registered
+  # workflow (already on master). PR-triggered FIFO tests remain unchanged.
+  indexed-bucket-ab:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    uses: ./.github/workflows/workflow-hub-indexed-bucket-ab.yml
+
   fifo-sql-ab:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

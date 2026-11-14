@@ -256,3 +256,4 @@ scaling/monitor/.env.local
 scaling/monitor/.env.*.local
 scaling/monitor/.next/
 scaling/monitor/*.tsbuildinfo
+scaling/observability/.build-resolv.conf

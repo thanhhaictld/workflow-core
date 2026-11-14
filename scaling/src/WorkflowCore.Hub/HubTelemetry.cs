@@ -48,6 +48,8 @@ public static class HubTelemetry
     // Worker-observed HTTP claims and newly committed activity completions.
     // Names omit Prometheus suffixes; the collector adds _total to counters.
     public static readonly Counter<long> ClaimAttempts = Meter.CreateCounter<long>("workflow_claim_attempts");
+    // Pending worker HTTP requests, including server-held long polls; not task execution.
+    public static readonly UpDownCounter<long> ClaimInflight = Meter.CreateUpDownCounter<long>("workflow_claim_inflight");
     public static readonly Counter<long> ClaimEmpty = Meter.CreateCounter<long>("workflow_claim_empty");
     public static readonly Counter<long> ClaimSuccess = Meter.CreateCounter<long>("workflow_claim_success");
     public static readonly Histogram<double> ClaimHttpDuration = Meter.CreateHistogram<double>("workflow_claim_duration_seconds", "s");
@@ -107,6 +109,20 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_pg_notify_listeners", "{connection}");
     public static readonly UpDownCounter<long> SseConnections =
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_connections", "{connection}");
+    public static readonly UpDownCounter<long> SseTaskSessions =
+        Meter.CreateUpDownCounter<long>("workflow_hub_sse_task_sessions", "{session}");
+    public static readonly Counter<long> SseTasksDispatched =
+        Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
+    public static readonly Counter<long> MatchingOwnershipChanges =
+        Meter.CreateCounter<long>("workflow_hub_matching_ownership_changes", "{change}");
+    public static readonly Counter<long> MatchingResolutionFailures =
+        Meter.CreateCounter<long>("workflow_hub_matching_resolution_failures", "{failure}");
+    public static readonly Counter<long> MatchingRouteFallbacks =
+        Meter.CreateCounter<long>("workflow_hub_matching_route_fallbacks", "{fallback}");
+    public static readonly Counter<long> SseTaskReconnects =
+        Meter.CreateCounter<long>("workflow_hub_sse_task_reconnects", "{reconnect}");
+    public static readonly Histogram<double> SseSessionFirstDispatch =
+        Meter.CreateHistogram<double>("workflow_hub_sse_session_first_dispatch_seconds", "s");
     public static readonly UpDownCounter<long> WorkerInflight =
         Meter.CreateUpDownCounter<long>("workflow_hub_worker_inflight", "{task}");
     public static readonly Counter<long> WorkerExecutions =
@@ -166,35 +182,33 @@ public static class HubTelemetry
         ProcessMeter.CreateObservableGauge("workflow_hub_threadpool_pending",
             () => ThreadPool.PendingWorkItemCount, "{work_item}");
 
-    private static long _databaseConnections;
-    private static long _activeDatabaseConnections;
-    private static long _queueReady;
-    private static long _queueLeased;
-    private static long _queueDead;
+    // No measurements until the first sample succeeds. Disabling the sampler
+    // must leave these series absent rather than report fabricated zero values.
+    private static HubDatabaseDiagnostics? _databaseSnapshot;
     private static readonly ObservableGauge<long> DatabaseConnections =
         Meter.CreateObservableGauge("workflow_hub_database_connections",
-            () => Volatile.Read(ref _databaseConnections), "{connection}");
+            () => DatabaseMeasurements(s => s.DatabaseConnections), "{connection}");
     private static readonly ObservableGauge<long> ActiveDatabaseConnections =
         Meter.CreateObservableGauge("workflow_hub_database_active_connections",
-            () => Volatile.Read(ref _activeDatabaseConnections), "{connection}");
+            () => DatabaseMeasurements(s => s.ActiveDbConnections), "{connection}");
     private static readonly ObservableGauge<long> QueueReady =
         Meter.CreateObservableGauge("workflow_hub_queue_ready",
-            () => Volatile.Read(ref _queueReady), "{task}");
+            () => DatabaseMeasurements(s => s.ReadyTasks), "{task}");
     private static readonly ObservableGauge<long> QueueLeased =
         Meter.CreateObservableGauge("workflow_hub_queue_leased",
-            () => Volatile.Read(ref _queueLeased), "{task}");
+            () => DatabaseMeasurements(s => s.LeasedTasks), "{task}");
     private static readonly ObservableGauge<long> QueueDead =
         Meter.CreateObservableGauge("workflow_hub_queue_dead",
-            () => Volatile.Read(ref _queueDead), "{task}");
+            () => DatabaseMeasurements(s => s.DeadTasks), "{task}");
 
-    public static void PublishDatabaseSnapshot(HubDatabaseDiagnostics stats)
+    private static IEnumerable<Measurement<long>> DatabaseMeasurements(Func<HubDatabaseDiagnostics, long> select)
     {
-        Interlocked.Exchange(ref _databaseConnections, stats.DatabaseConnections);
-        Interlocked.Exchange(ref _activeDatabaseConnections, stats.ActiveDbConnections);
-        Interlocked.Exchange(ref _queueReady, stats.ReadyTasks);
-        Interlocked.Exchange(ref _queueLeased, stats.LeasedTasks);
-        Interlocked.Exchange(ref _queueDead, stats.DeadTasks);
+        var snapshot = Volatile.Read(ref _databaseSnapshot);
+        if (snapshot is not null) yield return new Measurement<long>(select(snapshot));
     }
+
+    public static void PublishDatabaseSnapshot(HubDatabaseDiagnostics stats) =>
+        Volatile.Write(ref _databaseSnapshot, stats);
 
     public static KeyValuePair<string, object?> HubTag(string hub) => new("hub", hub);
     public static KeyValuePair<string, object?> ActivityTag(string type) =>

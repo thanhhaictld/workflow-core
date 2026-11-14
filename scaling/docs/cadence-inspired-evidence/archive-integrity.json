@@ -1,0 +1,18 @@
+[
+  {
+    "archive": "historical-evidence.zip",
+    "bytes": 746709,
+    "sha256": "212be04aea090f942306355b764c7b9ef360a26f43c4a09298d19c9bcc4133df",
+    "files": 168,
+    "uncompressedBytes": 31872613,
+    "manifestSha256": "99f95b0ba94d10fd0f41a1c897b10bfbda0601604de0c20f7af944e241ccfb3e"
+  },
+  {
+    "archive": "runtime-evidence.zip",
+    "bytes": 20658787,
+    "sha256": "a019924560184b0da98dd21999d00cca7e47ee57a2e78a0c60babfeff5a1fac1",
+    "files": 747,
+    "uncompressedBytes": 423249079,
+    "manifestSha256": "5442f3e9b4f6ed00063d17ab3f3158daecab20c042fb1f98317848f344b20b56"
+  }
+]

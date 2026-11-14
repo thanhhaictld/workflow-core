@@ -44,9 +44,23 @@ OBS_COMPOSE_FILE ?= scaling/observability/compose.yaml
 OBS_ENV_FILE ?= scaling/observability/.env
 PROVISIONERS ?= 4
 OFFBOARD_PROCESSORS ?= 16
-OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" --env-file "$(OBS_ENV_FILE)"
+# Validated policy-benchmark stack: two Hubs, four matching shards.
+OBS_PROCESSORS ?= 4
+# Reuse previously built service images without contacting container registries.
+OBS_LOCAL_IMAGES ?= 1
+ifeq ($(OBS_LOCAL_IMAGES),1)
+OBS_UP_IMAGE_FLAGS = --pull never
+else
+OBS_UP_IMAGE_FLAGS = --build
+endif
+OBS_BUILD_DNS ?= 0
+ifeq ($(OBS_BUILD_DNS),1)
+OBS_BUILD_DNS_COMPOSE = -f "scaling/observability/compose.build-dns.yaml"
+OBS_BUILD_DNS_HA_COMPOSE = -f "scaling/observability/compose.build-dns-ha.yaml"
+endif
+OBS_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" $(OBS_BUILD_DNS_COMPOSE) --env-file "$(OBS_ENV_FILE)"
 # Preserve the base file and layer matching HA and four-shard ownership.
-OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" --env-file "$(OBS_ENV_FILE)"
+OBS_FANOUT_COMPOSE = $(COMPOSE) -f "$(OBS_COMPOSE_FILE)" -f "scaling/observability/compose.matching-ha.yaml" -f "scaling/observability/compose.matching-shards.yaml" $(OBS_BUILD_DNS_COMPOSE) $(OBS_BUILD_DNS_HA_COMPOSE) --env-file "$(OBS_ENV_FILE)"
 FANOUT_MATCHING_SHARDS ?= 4
 FANOUT_MAX_SHARD_POLLS ?= 4
 K6_OFFBOARD_VUS ?= 200
@@ -64,13 +78,31 @@ $(FANOUT_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := $(FANOUT_MAX_SHARD_P
 $(FANOUT_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := $(FANOUT_MATCHING_SHARDS)
 $(FANOUT_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
 $(FANOUT_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
+
+# Server-initiated task leases over persistent SSE. Credit replenishment uses
+# authenticated REST; existing long-poll flags remain OFF for this target.
+SSE_PUSH_TARGETS := obs-offboarding-sse-up obs-offboarding-sse-test obs-offboarding-sse-ps obs-offboarding-sse-logs obs-offboarding-sse-down
+.PHONY: $(SSE_PUSH_TARGETS)
+$(SSE_PUSH_TARGETS): export WFC_HUB_TASK_SSE_PUSH := true
+$(SSE_PUSH_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
+$(SSE_PUSH_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := $(FANOUT_MATCHING_SHARDS)
+$(SSE_PUSH_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
+$(SSE_PUSH_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
-obs-up:
-	$(OBS_COMPOSE) up -d --build --scale provisioner=$(PROVISIONERS)
+obs-base-up:
+	$(OBS_COMPOSE) up -d $(OBS_UP_IMAGE_FLAGS)
+
+	
+# Push variant of the same two-Hub + four-matching-shard laboratory.
+obs-onboarding-sse-up:
+	$(OBS_FANOUT_COMPOSE) --profile onboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
+
+obs-onboarding-sse-test:
+	$(OBS_FANOUT_COMPOSE) --profile onboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-onboarding
 
 obs-scale:
-	$(OBS_COMPOSE) up -d --scale provisioner=$(PROVISIONERS)
+	$(OBS_COMPOSE) up -d
 
 obs-stress-test:
 	$(OBS_COMPOSE) --profile load run --rm k6
@@ -78,7 +110,7 @@ obs-stress-test:
 # Run exactly eight native-only offboarding processor containers; disable the
 # normal onboarding Provisioner replicas to make the test easy to interpret.
 obs-offboarding-up:
-	$(OBS_COMPOSE) --profile offboarding-load up -d --build --scale processor=$(OFFBOARD_PROCESSORS) --scale provisioner=0
+	$(OBS_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
 
 # Run exactly eight native-only offboarding processor containers; disable the
 # normal onboarding Provisioner replicas to make the test easy to interpret.
@@ -93,7 +125,7 @@ obs-offboarding-test:
 	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
 
 obs-offboarding-test-4k:
-	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=200 -e K6_OFFBOARD_COUNT=4000 k6-offboarding
+	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=100 -e K6_OFFBOARD_COUNT=4000 k6-offboarding
 
 obs-offboarding-test-100b:
 	$(OBS_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) k6-offboarding
@@ -105,7 +137,7 @@ obs-offboarding-ps:
 # + HA load balancer + four matching shards + native-only processor replicas.
 # Requires obs-setup (configured scaling/observability/.env) before first run.
 obs-offboarding-fanout-up:
-	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d --build --scale provisioner=0 --scale processor=$(OFFBOARD_PROCESSORS)
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
 
 # Use the identical three-file topology for k6, inspection and cleanup.
 obs-offboarding-fanout-test:
@@ -125,12 +157,90 @@ obs-offboarding-fanout-logs:
 obs-offboarding-fanout-down:
 	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
-obs-down:
-	$(OBS_FANOUT_COMPOSE) --profile * down
+# Push variant of the same two-Hub + four-matching-shard laboratory.
+obs-offboarding-sse-up:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load up -d $(OBS_UP_IMAGE_FLAGS) --scale processor=$(OFFBOARD_PROCESSORS)
+
+obs-offboarding-sse-test:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=$(K6_OFFBOARD_VUS) -e K6_OFFBOARD_COUNT=$(K6_OFFBOARD_COUNT) k6-offboarding
+
+obs-offboarding-sse-test-4k:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-k6 run --rm -e K6_OFFBOARD_VUS=400 -e K6_OFFBOARD_COUNT=10000 k6-offboarding
+
+obs-offboarding-sse-ps:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load ps
+
+obs-offboarding-sse-logs:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load logs --tail=100 processor hub hub-2 hub-lb
+
+obs-offboarding-sse-down:
+	$(OBS_FANOUT_COMPOSE) --profile offboarding-load down
 
 # Destructive: deletes named volumes belonging to this Compose project.
 obs-clean:
 	$(OBS_COMPOSE) --profile * down --volumes
 
-obs-ps:
-	$(OBS_COMPOSE) --profile * ps -a
+# Recovery suite uses the existing observability base, HA and shard overlays,
+# Grafana provisioning and k6-policy workload. No second runtime stack.
+OWNER_PROJECT ?=
+OWNER_PORT_BASE ?= 0
+OWNER_RESULTS ?= artifacts/owner-recovery
+OWNER_PYTHON ?= python
+OWNER_TEST_FILTER ?=
+OWNER_FAULT_VICTIM ?= both
+OWNER_FAULT_MODE ?= both
+OWNER_FAULT_REPEAT ?= 1
+K6_POLICY_MODE ?= unordered
+K6_POLICY_COUNT ?= 300
+K6_POLICY_VUS ?= 60
+K6_POLICY_TIMEOUT_SECONDS ?= 600
+OWNER_TARGETS := help setup config build up ps logs down db-test smoke-test stress-test test test-4k fault-test
+.PHONY: obs-owner-recovery-up-off-metric-sampler
+# Inherited by the normal up recipe; Compose applies this to both Hub replicas.
+obs-owner-recovery-up-off-metric-sampler: export WFC_HUB_METRICS_SAMPLER_ENABLED := false
+obs-owner-recovery-up-off-metric-sampler: export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
+obs-owner-recovery-up-off-metric-sampler: obs-owner-recovery-up
+
+.PHONY: $(addprefix obs-owner-recovery-,$(OWNER_TARGETS))
+$(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
+	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 $(patsubst obs-owner-recovery-%,%,$@) -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Processors $(OBS_PROCESSORS) -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)
+
+# Default observability preset. Use one export per flag; command-line Make
+# assignments override these values. Private .env credentials are untouched.
+OBS_GOLDEN_TARGETS := obs-up obs-config obs-logs obs-ps obs-down obs-test-4k
+.PHONY: $(OBS_GOLDEN_TARGETS) obs-base-up
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_METRICS_SAMPLER_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_DB_POOL := 12
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_MODE := demand
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_LIMIT := 3
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS := 1
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_COMPLETION_FAST_PATH_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_BATCH_HISTORY_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_NATIVE_EVENT_LANE_MODE := subscriptions
+$(OBS_GOLDEN_TARGETS): export HUB_SCHEDULER_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_ADAPTIVE_CLAIMS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := 4
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_TASK_SSE_PUSH := true
+$(OBS_GOLDEN_TARGETS): export WORKFLOW_WORKERS := 8
+$(OBS_GOLDEN_TARGETS): export ACTIVITY_WORKERS := 8
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := 4
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE := 0
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_ORDERED_CAPABILITY_MERGE := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_INSTALL_SHARD4_READY_INDEX := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_SCOPED_CLAIMS := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_DEFER_OWNER_CHECK := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
+obs-up: obs-owner-recovery-up
+obs-config: obs-owner-recovery-config
+obs-logs: obs-owner-recovery-logs
+obs-ps: obs-owner-recovery-ps
+obs-down: obs-owner-recovery-down
+obs-test-4k: obs-owner-recovery-test-4k

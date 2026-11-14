@@ -3,7 +3,8 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 ARG PROJECT
-RUN test -n "$PROJECT" && dotnet publish "$PROJECT" -c Release -o /out /p:UseAppHost=false
+RUN --mount=type=secret,id=build_dns,target=/etc/resolv.conf \
+    test -n "$PROJECT" && dotnet publish "$PROJECT" -c Release -o /out /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app

@@ -208,6 +208,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                   AND NOT (dispatch_key=ANY(@active));
                 UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
                 FROM wfc_scale.hub_task t WHERE a.task_id=t.id AND t.workflow_id=@id
+                  AND a.workflow_id=@id
                   AND t.last_error='Native pointer cancelled' AND a.finished_at IS NULL
                 """,ct,("id",id),("active",active));
         }
@@ -441,18 +442,26 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     {
         var candidates=new List<(Guid Id,string Hub)>();
         await using(var cmd=tasks.DataSource.CreateCommand("""
-            SELECT w.id,w.hub_id FROM wfc_scale.hub_workflow w
-            WHERE w.execution_mode='native' AND w.native_status IN ('Runnable','Suspended') AND (
-              EXISTS(SELECT 1 FROM wfc_scale.hub_native_subscription s
-                JOIN wfc_scale.hub_native_event e ON e.hub_id=w.hub_id AND e.event_name=s.event_name AND e.event_key=s.event_key
-                WHERE s.workflow_id=w.id AND e.effective_at>=s.as_of AND e.effective_at<=now()
-                  AND NOT EXISTS(SELECT 1 FROM wfc_scale.hub_native_inbox i WHERE i.workflow_id=w.id
-                    AND i.pointer_id=s.pointer_id AND i.kind='Event' AND (NOT i.consumed OR i.source_key=e.id::text)))
-              OR EXISTS(SELECT 1 FROM wfc_scale.hub_task t WHERE t.workflow_id=w.id AND t.dispatch_key IS NOT NULL
-                AND t.state=3 AND t.last_error IS DISTINCT FROM 'Native pointer cancelled'
+            SELECT DISTINCT candidates.id,candidates.hub_id FROM (
+              SELECT w.id,w.hub_id
+              FROM wfc_scale.hub_native_subscription s
+              JOIN wfc_scale.hub_workflow w ON w.id=s.workflow_id
+              JOIN wfc_scale.hub_native_event e ON e.hub_id=w.hub_id AND e.event_name=s.event_name AND e.event_key=s.event_key
+              WHERE w.execution_mode='native' AND w.native_status IN ('Runnable','Suspended')
+                AND e.effective_at>=s.as_of AND e.effective_at<=now()
                 AND NOT EXISTS(SELECT 1 FROM wfc_scale.hub_native_inbox i WHERE i.workflow_id=w.id
-                  AND i.pointer_id=t.execution_pointer_id AND i.kind='Activity' AND i.source_key=t.dispatch_key)))
-            ORDER BY w.id LIMIT @take
+                  AND i.pointer_id=s.pointer_id AND i.kind='Event' AND (NOT i.consumed OR i.source_key=e.id::text))
+              UNION ALL
+              SELECT w.id,w.hub_id
+              FROM wfc_scale.hub_task t
+              JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+              WHERE t.state=3 AND t.dispatch_key IS NOT NULL
+                AND t.last_error IS DISTINCT FROM 'Native pointer cancelled'
+                AND w.execution_mode='native' AND w.native_status IN ('Runnable','Suspended')
+                AND NOT EXISTS(SELECT 1 FROM wfc_scale.hub_native_inbox i WHERE i.workflow_id=w.id
+                  AND i.pointer_id=t.execution_pointer_id AND i.kind='Activity' AND i.source_key=t.dispatch_key)
+            ) candidates
+            ORDER BY candidates.id LIMIT @take
             """))
         {
             cmd.Parameters.AddWithValue("take",take);
@@ -560,6 +569,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             WHERE workflow_id=@id AND state IN (0,1);
             UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
             FROM wfc_scale.hub_task t WHERE t.id=a.task_id AND t.workflow_id=@id
+              AND a.workflow_id=@id
               AND t.last_error='Workflow ended' AND a.finished_at IS NULL
             """,ct,("id",id));
     }

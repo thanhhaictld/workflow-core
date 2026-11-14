@@ -3,6 +3,11 @@
 For current runtime boundaries, transport selection and Hub replica scaling,
 start with the [current runtime guide](../docs/current-runtime.md).
 
+For recovery testing on this same Grafana/Prometheus/Tempo/Loki stack, see the
+[ownership recovery suite](owner-recovery.md). It layers HA/shard/recovery
+settings on `compose.yaml`, reuses `k6-policy` for smoke/stress workloads, and
+adds isolated PostgreSQL tests (`make obs-owner-recovery-test`).
+
 This is an optional, private local stack for independently hosted C# workflow processors and activity provisioners.
 The generic Hub includes an embedded durable timer scheduler. The combined Provisioner runs native `IWorkflow<T>` workflows and typed activities
 over REST/SSE. See [native runtime contracts](../docs/hub-native-fluent-runtime.md).
@@ -60,6 +65,12 @@ stack if it is still running (set `WFC_OBSERVABILITY_PROJECT` to
 `workflow-hub-observability` for that command). Back up and migrate any data
 you need separately.
 
+The default Make command starts the validated policy-benchmark stack: two Hubs,
+four matching shards, and four processor containers with eight workflow and
+eight activity slots each. It builds the application images, applies migrations,
+and waits for the services and policy definitions to become ready. The project
+name and existing volumes are shared with the owner-recovery commands.
+
 ~~~bash
 # From the repository root:
 cp scaling/observability/.env.example scaling/observability/.env
@@ -78,18 +89,71 @@ GNU Make shortcuts are also available:
 ~~~bash
 make obs-setup                      # create .env if it does not exist
 # Edit scaling/observability/.env to set a local token and password.
-make obs-up                         # build and start with four Provisioners
-make obs-scale PROVISIONERS=6       # change the number of Provisioners
+make obs-up                         # build/start the validated configuration
+make obs-up OBS_PROCESSORS=8        # optional processor-count override
+make obs-config                     # inspect effective flags and replica count
 make obs-ps
-make obs-stress-test                # use K6_* settings from .env
+make obs-logs
+make obs-test-4k                     # 4,000 policy workflows, 100 VUs + durable audit
 make obs-down                       # retain named volumes
-make obs-clean                      # delete stack and named volumes
 ~~~
+
+The preset enables snapshot contract reuse, SSE task push, matching long polling,
+event-gated dispatch, demand-aware claim admission, unconstrained split batch
+claims, indexed matching buckets, completion fast paths, batched history, the
+subscription-based native event lane, and the scheduler. The Hub pool stays at
+12 connections, with admission limit 3 and one waiter. The periodic SQL metrics
+sampler is disabled; OTEL metrics, traces and logs remain enabled.
+
+Ordered capability merge, new index 028 installation, capacity fanout, scoped
+claims, deferred owner checks and the FIFO-head prefilter are disabled in this
+preset. Existing indexes are retained. See the
+[throughput investigation](../docs/snapshot-contract-reuse-throughput.md) for
+the measured workload, recovery behavior and limitations.
+
+Flags use separate target-specific Make exports and override `.env` values for
+these short commands. Explicit Make assignments still work, for example
+`make obs-up WFC_HUB_REUSE_SNAPSHOT_CONTRACTS=false`. This restarts/recreates
+services when their configuration changes. First use `make obs-config` to review
+the configuration. Existing `.env` credentials are not replaced.
+
+`make obs-base-up` retains the previous base-only startup. The existing
+`obs-offboarding-*`, `obs-stress-test`, and `obs-owner-recovery-*` commands remain
+available for their specific workloads. `make obs-clean` explicitly deletes the
+project's named volumes; normal shutdown does not.
 
 Set `OBS_ENV_FILE` or `OBS_COMPOSE_FILE` to use different files. Compose
 environment variables override values in the env file as usual. For example,
 `K6_WORKFLOWS=2000 K6_VUS=200 make obs-stress-test` changes the load for
 that run. `make up` remains the separate PowerShell development stack.
+
+`obs-up` always builds application images, reusing Docker's cache for unchanged
+inputs. The base and experimental startup targets use `OBS_LOCAL_IMAGES` to
+select their image behavior. To rebuild code using a cached Node base image, set
+`MONITOR_NODE_IMAGE` in `.env` to a compatible local Node 22 image (for example,
+`node:22.23.3-bookworm-slim` if `docker image inspect` confirms it exists), then
+run the usual `make obs-offboarding-up` or `make obs-offboarding-sse-up`.
+Both monitor build stages use that image. Package installation may still
+require access to the package registry when dependency layers are uncached.
+If Docker build steps fail with `EAI_AGAIN` while the host can reach package
+registries, create `scaling/observability/.build-resolv.conf` with a reachable
+resolver, for example `nameserver 1.1.1.1` after verifying it works from a
+container. Set `WFC_BUILD_DNS_FILE=.build-resolv.conf` in `.env` and run
+`make obs-offboarding-sse-up OBS_BUILD_DNS=1` (also supported by the other
+startup targets). The optional Compose overlays supply the resolver file to
+the Node and .NET build steps through a temporary BuildKit mount. Runtime and
+Docker daemon DNS settings are unchanged. Omit `OBS_BUILD_DNS=1` to use
+Docker's configured build resolver.
+
+To skip builds entirely when container registries are unavailable, reuse this checkout's cached service
+images with `make obs-offboarding-up OBS_LOCAL_IMAGES=1`. The same option works
+with `obs-base-up`, `obs-offboarding-fanout-up`, and `obs-offboarding-sse-up`.
+These targets pass `up --pull never` and reuse existing service images; a missing
+application image can still trigger a build. Source changes require a later
+rebuild with `OBS_LOCAL_IMAGES=0`. For strict reuse without builds, invoke the
+Compose launcher with `up --no-build --pull never`; all service images must
+already exist locally for this worktree's project. These flags go after `up`;
+`--no-pull` is not a global Compose option.
 
 PowerShell:
 
@@ -98,7 +162,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
-The migrate container applies SQL migrations 002–023, followed by the
+The migrate container applies SQL migrations 002–027 (and optional 028 when enabled), followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
@@ -263,6 +327,15 @@ workflow commits per hub even though this sample has no business constraints.
 
 See [offboarding benchmark design](../docs/offboarding-unconstrained-benchmark.md).
 
+For the matching HA and SSE variants, clients wait for `hub-lb` to pass its
+HTTP readiness check before starting. If k6 reports `lookup hub-lb` or
+`Hub not healthy: 0`, check `hub-lb` startup with the same Compose files and
+`compose.ps1` project used for the workload. A host port conflict can leave the
+load balancer without a network attachment. Set `HUB_LB_PORT` in `.env` to an
+unused port (for example, `5111` when another checkout owns `5110`), then
+rerun the matching HA or SSE `up` target before retrying the test. Internal
+clients continue to use `http://hub-lb:5100`.
+
 
 ### Finding offboarding under Workflow definitions
 
@@ -369,6 +442,17 @@ including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ### Worker claims and durable activity completions
 
+To compare Hub SQL sampling overhead, set `WFC_HUB_METRICS_SAMPLER_ENABLED=false`
+and restart the Hub processes. The default is enabled. The owner-recovery stack
+has a shortcut: `make obs-owner-recovery-up-off-metric-sampler`; normal
+`make obs-owner-recovery-up` restores the default unless your shell or `.env`
+disables it. Both Hub replicas receive the flag. This removes the five-second
+database/queue sampler and its minute-level operations-history writes, while
+retaining claim/execution metrics and OTEL export. Sampled queue/connection
+series remain absent until a real sample is published, and operations history
+has a gap. Collector SQL, on-demand monitor queries, and runtime scheduling
+remain active. See [sampler A/B usage](owner-recovery.md#start-test-and-stress).
+
 The `WorkflowCore.Hub` meter exports `workflow_claim_attempts_total`,
 `workflow_claim_empty_total`, and `workflow_claim_success_total`, plus
 `workflow_claim_duration_seconds` and `workflow_claim_batch_size` histograms.
@@ -381,6 +465,25 @@ Batch size records every successful response including zero; its explicit bounds
 are 0, 1, 2, 4, 8, 16, 24, and 32. Duration bounds are 0.0005, 0.001,
 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 30, and 60 seconds. Both include the implicit +Inf bucket.
+
+`workflow_claim_inflight` tracks pending worker HTTP requests, including held
+long polls. It increases before sending and decreases when the request finishes,
+including errors and cancellation. It uses `lane` and `transport` labels and
+excludes task execution, retry backoff, and persistent SSE task delivery.
+`workflow_claim_attempts_total` counts request starts; the duration histogram's
+`workflow_claim_duration_seconds_count` counts request finishes with an outcome.
+Finishing a request does not mean its returned tasks have completed execution.
+
+Dashboard panels 37–40 show starts versus finishes per second, requests in flight,
+finished outcomes, and p95/p99 HTTP latency for both workflow and activity lanes,
+split by transport. Rates and percentiles use a one-minute window. In-flight is
+summed directly across worker instances, rather than inferred by subtracting
+counters. The default Compose stack exports and scrapes metrics every five
+seconds; these are sampled aggregates, not individual request timelines.
+Process termination can lose final measurements, and an in-flight series from a
+terminated instance may persist until it becomes stale. Missing series remain
+missing. Long-poll waits can legitimately produce high latency and nonzero
+in-flight while no tasks are executing.
 
 Claim labels are bounded: `lane=activity|workflow` and `transport=claim|poll`;
 duration also has `outcome`. Workflow-lane tasks are processor work, not

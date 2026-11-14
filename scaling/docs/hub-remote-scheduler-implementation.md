@@ -8,6 +8,16 @@ Status: **experimental native fluent runtime and sequential compatibility path**
 Branch: `feat/hub-remote-processor-scheduler`; based on `refactor/scaling-project-layout`.
 See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 
+For sharded SSE owner loss, see the [recovery validation](cadence-inspired-scaling-validation.md)
+and [design](cadence-inspired-scaling-design.md). A preferred peer's connection
+or header timeout now permits a conditional PostgreSQL takeover after expiry;
+failure of a live owner's transport never authorizes stealing its lease.
+Accepted SSE bodies have no three-second header deadline. Task execution leases
+remain independent, so uncertain deliveries can still wait for normal expiry.
+`WFC_HUB_OWNER_DIAGNOSTICS=true` enables route exception logs for investigation;
+unset it afterward. Check owner epochs/DB time and trusted peer reachability when
+diagnosing 503, and do not infer recovery from health checks alone.
+
 ## Implemented boundaries
 
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
@@ -22,6 +32,12 @@ See [final architecture plan](hub-embedded-scheduler-final-plan.md).
 - Apply `scaling/sql/021_hub_active_task_indexes.sql` after 020 for workflow retirement; index creation can briefly block writes.
 - Apply `scaling/sql/022_hub_claim_index_selectivity.sql` after 021 and before deploying the corresponding Hub query. It narrows the ordered claim index so unrelated point updates do not scan the active queue when statistics are stale.
 - Apply `scaling/sql/023_hub_claim_hub_sequence.sql` after 022 to support hub-selective ordered claims. Creating the index on an existing large database can block writes; plan deployment accordingly.
+- Apply `scaling/sql/024_hub_native_reconcile_tasks.sql` after 023 before deploying the revised native inbox sweep. It indexes exhausted native activity tasks; index creation on a large existing table can block writes.
+- Apply `scaling/sql/025_hub_claim_capability_sequence.sql` after 024 to index active tasks by advertised capability for claim scans. Creating the index on an existing large table can block writes.
+- Apply `scaling/sql/026_hub_matching_bucket_claim_index.sql` after 025 before deploying the default indexed matching claim path. It indexes capability, `partition_id % 64`, and sequence without changing stored task IDs or routing. Index creation on an existing large table can block writes. `scripts/dev.ps1 db-schema` and observability Compose apply it; set `WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS=false` to opt out of the indexed query path.
+- Apply `scaling/sql/027_hub_ready_claim_indexes.sql` after 026 before deploying split batch claims. When unconstrained batching is enabled, the default path separately locks ordered ready and expired candidates and merges them by sequence; set `WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES=false` to revert to the original query. It can lock up to one batch per state even when fewer are leased; contention and performance must be evaluated under the target workload. The fallback for resource-constrained tasks is unchanged. Index creation on an existing large table can block writes.
+- Optional migration `scaling/sql/028_hub_claim_shard4_ready.sql` adds a four-shard ready-task index. Compose and `scripts/dev.ps1 db-schema` install it only with `WFC_HUB_INSTALL_SHARD4_READY_INDEX=true` (default false). Existing indexes are retained. Index creation on a large table can block writes and adds write cost even when the experiment is disabled. Install it before enabling `WFC_HUB_ORDERED_CAPABILITY_MERGE=true`, with batch and split claims enabled, to experiment with an ordered per-capability ready scan for a single Hub, four matching shards, and at most eight distinct capabilities. Other requests use the previous split query. Each capability can lock up to the batch limit, plus one batch of expired rows, until commit; competitors may temporarily skip unselected rows. The normal constrained-task path, task fencing and journal transactions are unchanged. Disable the query flag to roll back query selection; evaluate contention and throughput under the intended workload.
+- `WFC_HUB_REUSE_SNAPSHOT_CONTRACTS=true` opts remote workers into per-catalog Json.NET contract metadata reuse (default false). Each encode/decode still uses a separate serializer and the same format and allow-list. It is independent of the matching SQL flags and requires no schema change. See the [throughput investigation](snapshot-contract-reuse-throughput.md) for measured scope and limitations.
 - The existing Next.js unified workflow list and waterfall remain in place; durable `TimerScheduled` and `TimerFired` journal events create waiting bars. OpenTelemetry spans remain short-lived, rather than spanning long waits.
 
 **Contract note:** native runs use execution-pointer snapshots and durable inboxes. Tested scenarios include mappings, branches, loops, parallel joins, delays, schedules, recurrence, events, activities, retries, cancellation, and compensation. Upstream's unimplemented `SubWorkflowStepBody` is rejected. See the [native runtime guide](hub-native-fluent-runtime.md) for contracts and limits. Existing sequential and inline runs retain their execution modes.

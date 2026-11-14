@@ -96,7 +96,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(workflow_hub_database_connections) or vector(0)",
+          "expr": "sum(workflow_hub_database_connections)",
           "legendFormat": "",
           "range": true,
           "interval": ""
@@ -1748,6 +1748,150 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 37,
+      "type": "timeseries",
+      "title": "Claim requests started / ended per second",
+      "description": "Worker-observed HTTP request starts and finishes, including empty responses, errors and cancellations. Finishes do not mean task execution completed. Rates are averaged over one minute.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 141,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (lane, transport) (rate(workflow_claim_attempts_total[1m]))",
+          "legendFormat": "started {{lane}} {{transport}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (lane, transport) (rate(workflow_claim_duration_seconds_count[1m]))",
+          "legendFormat": "ended {{lane}} {{transport}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 38,
+      "type": "timeseries",
+      "title": "Claim requests in flight",
+      "description": "Pending worker HTTP claim requests and long polls. Long-poll waiting is included; task execution, backoff and persistent SSE task streams are excluded. Process-local, sampled telemetry; abrupt exits may lose final measurements.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 141,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (lane, transport) (workflow_claim_inflight)",
+          "legendFormat": "{{lane}} {{transport}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Claim requests ended by outcome",
+      "description": "One finish per HTTP request, whether claimed, empty, error or cancelled. A claimed response can contain multiple tasks. Includes both workflow and activity lanes; excludes persistent SSE task delivery.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 149,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (lane, transport, outcome) (rate(workflow_claim_duration_seconds_count[1m]))",
+          "legendFormat": "{{lane}} {{transport}} {{outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Claim request latency p95 / p99",
+      "description": "Worker-observed HTTP latency, including server-held long-poll waiting and transport time, excluding retry backoff and task execution. Aggregates buckets across worker instances before calculating percentiles.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 149,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
+          "legendFormat": "p95 {{lane}} {{transport}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
+          "legendFormat": "p99 {{lane}} {{transport}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
           "custom": {
             "spanNulls": false
           }

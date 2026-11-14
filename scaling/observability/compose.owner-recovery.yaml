@@ -1,0 +1,50 @@
+# Recovery settings only. Layer after compose.yaml, compose.matching-ha.yaml
+# and compose.matching-shards.yaml. Grafana/Prometheus/Tempo/Loki, PostgreSQL,
+# migrations, processor builds and k6 come from those existing files.
+x-recovery-env: &recovery-env
+  WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+  WFC_HUB_MATCHING_EVENT_GATED: "${WFC_HUB_MATCHING_EVENT_GATED:-true}"
+  WFC_HUB_CLAIM_ADMISSION_ENABLED: "${WFC_HUB_CLAIM_ADMISSION_ENABLED:-true}"
+  WFC_HUB_CLAIM_ADMISSION_MODE: "${WFC_HUB_CLAIM_ADMISSION_MODE:-demand}"
+  WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: "${WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS:-true}"
+  WFC_HUB_OWNER_DIAGNOSTICS: "${OWNER_RECOVERY_DIAGNOSTICS:-false}"
+  WFC_HUB_PG_NOTIFY_ENABLED: "${OWNER_RECOVERY_NOTIFY:-true}"
+
+services:
+  hub:
+    environment: *recovery-env
+  hub-2:
+    environment: *recovery-env
+    # Optional direct route tracing; application traffic continues through hub-lb.
+    ports:
+      - "127.0.0.1:${HUB2_PORT:-5101}:5100"
+  processor:
+    deploy:
+      replicas: ${OBS_PROCESSORS:-4}
+    environment:
+      WORKFLOW_WORKERS: "${WORKFLOW_WORKERS:-8}"
+      ACTIVITY_WORKERS: "${ACTIVITY_WORKERS:-8}"
+      WFC_HUB_MATCHING_PARTITIONS: "${WFC_HUB_MATCHING_PARTITIONS:-4}"
+      WFC_HUB_TASK_SSE_PUSH: "${WFC_HUB_TASK_SSE_PUSH:-true}"
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
+      WFC_HUB_WORKER_CAPACITY_FANOUT: "${WFC_HUB_WORKER_CAPACITY_FANOUT:-false}"
+      POLICY_BENCHMARK_ENABLED: "true"
+      POLICY_BENCHMARK_ONLY: "true"
+  otel-collector:
+    ports:
+      - "127.0.0.1:${OWNER_METRICS_PORT:-9464}:9464"
+  k6-policy:
+    environment:
+      K6_PROMETHEUS_RW_TREND_STATS: "p(95),p(99),max"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "false"
+  tests:
+    profiles: [owner-tests]
+    build:
+      context: ../..
+      dockerfile: scaling/observability/benchmark/OwnerTests.Dockerfile
+    environment:
+      WFC_TEST_PG: Host=postgres;Database=${PG_DATABASE:-workflow};Username=${PG_USER:-workflow};Password=${PG_PASSWORD:-workflow_dev_only};Maximum Pool Size=40
+    volumes:
+      - ${OWNER_RECOVERY_RESULTS:-../../artifacts/owner-recovery}/tests:/results
+    # The launcher runs this in a separate <observability-project>-owner-tests
+    # project, reusing base postgres/migrate services without touching runtime DB.

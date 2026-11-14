@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using WorkflowCore.Hub;
+using WorkflowCore.Hub.Gateway;
 using WorkflowCore.RemoteExecution;
 using Xunit;
 
@@ -13,6 +16,60 @@ public sealed class MetricIsolationCollection { }
 [Collection("Metric isolation")]
 public sealed class HubMetricTests
 {
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("true", true)]
+    [InlineData("1", true)]
+    [InlineData("false", false)]
+    [InlineData("False", false)]
+    [InlineData("FALSE", false)]
+    [InlineData("0", false)]
+    public async Task MetricsSamplerCanBeDisabledWithoutRemovingGatewayStores(string? flag, bool enabled)
+    {
+        const string flagName = "WFC_HUB_METRICS_SAMPLER_ENABLED";
+        var previous = Environment.GetEnvironmentVariable(flagName);
+        try
+        {
+            Environment.SetEnvironmentVariable(flagName, flag);
+            var services = new ServiceCollection();
+            services.AddHubGateway("Host=localhost;Database=sampler-registration;Username=test;Password=unused");
+            await using var store = Assert.IsType<HubTaskStore>(
+                services.Single(d => d.ServiceType == typeof(HubTaskStore)).ImplementationInstance);
+            Assert.Equal(enabled, services.Any(d => d.ServiceType == typeof(IHostedService) &&
+                d.ImplementationType == typeof(HubMetricsSampler)));
+            Assert.Contains(services, d => d.ServiceType == typeof(HubOperationsStore));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(flagName, previous);
+        }
+    }
+
+    [Fact]
+    public void DatabaseGaugesPublishActualSnapshotValuesIncludingZero()
+    {
+        var expected = new Dictionary<string, long> {
+            ["workflow_hub_database_connections"] = 11,
+            ["workflow_hub_database_active_connections"] = 3,
+            ["workflow_hub_queue_ready"] = 7,
+            ["workflow_hub_queue_leased"] = 2,
+            ["workflow_hub_queue_dead"] = 0
+        };
+        var actual = new Dictionary<string, long>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) => {
+            if (instrument.Meter.Name == HubTelemetry.MeterName && expected.ContainsKey(instrument.Name))
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, value, _, _) => actual[instrument.Name] = value);
+        listener.Start();
+        HubTelemetry.PublishDatabaseSnapshot(new(11, 3, 7, 2, 0));
+        listener.RecordObservableInstruments();
+        Assert.Equal(expected.Count, actual.Count);
+        Assert.All(expected, pair => Assert.Equal(pair.Value, actual[pair.Key]));
+    }
+
     private sealed record Measurement(string Name, double Value, Dictionary<string, object?> Tags);
     private sealed class Capture : IDisposable
     {
@@ -36,12 +93,14 @@ public sealed class HubMetricTests
     }
 
     [Theory]
-    [InlineData("claim")]
-    [InlineData("poll")]
-    public async Task ClaimMeasurementsCaptureAllOutcomesAndTaskLanes(string transport)
+    [InlineData("activity", "claim")]
+    [InlineData("activity", "poll")]
+    [InlineData("workflow", "claim")]
+    [InlineData("workflow", "poll")]
+    public async Task ClaimMeasurementsCaptureAllOutcomesAndTaskLanes(string laneName, string transport)
     {
         using var capture = new Capture();
-        var lane = new KeyValuePair<string, object?>("lane", "activity");
+        var lane = new KeyValuePair<string, object?>("lane", laneName);
         var endpoint = "tasks:" + transport;
         HubLeasedTask TaskOf(string type) => new(Guid.NewGuid(), "test", 0, type, 1,
             null, JsonSerializer.SerializeToElement(new {}), 1, 1, DateTime.UtcNow.AddMinutes(1));
@@ -62,6 +121,96 @@ public sealed class HubMetricTests
         var duration = values.Where(x => x.Name == "workflow_claim_duration_seconds").ToArray();
         Assert.Equal(new[] {"cancelled", "claimed", "empty", "error"}, duration.Select(x => (string)x.Tags["outcome"]!).Order());
         Assert.All(values, x => Assert.Equal(transport, x.Tags["transport"]));
+        var inflight = values.Where(x => x.Name == "workflow_claim_inflight").ToArray();
+        Assert.Equal(new double[] {1, -1, 1, -1, 1, -1, 1, -1}, inflight.Select(x => x.Value));
+        Assert.All(inflight, x => Assert.Equal(laneName, x.Tags["lane"]));
+        Assert.All(values, x => Assert.Equal(
+            x.Name == "workflow_claim_duration_seconds" ? 3 : 2, x.Tags.Count));
+    }
+
+    [Theory]
+    [InlineData("activity", "claim", "claimed")]
+    [InlineData("activity", "claim", "empty")]
+    [InlineData("activity", "claim", "error")]
+    [InlineData("activity", "claim", "cancelled")]
+    [InlineData("activity", "poll", "claimed")]
+    [InlineData("activity", "poll", "empty")]
+    [InlineData("activity", "poll", "error")]
+    [InlineData("activity", "poll", "cancelled")]
+    [InlineData("workflow", "claim", "claimed")]
+    [InlineData("workflow", "claim", "empty")]
+    [InlineData("workflow", "claim", "error")]
+    [InlineData("workflow", "claim", "cancelled")]
+    [InlineData("workflow", "poll", "claimed")]
+    [InlineData("workflow", "poll", "empty")]
+    [InlineData("workflow", "poll", "error")]
+    [InlineData("workflow", "poll", "cancelled")]
+    public async Task PendingClaimRemainsInflightUntilRequestEnds(string laneName, string transport, string outcome)
+    {
+        using var capture = new Capture();
+        var response = new TaskCompletionSource<HubLeasedTask[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = HubRuntimeWorker.InstrumentClaimAsync("tasks:" + transport,
+            new KeyValuePair<string, object?>("lane", laneName), () => response.Task);
+
+        Assert.False(pending.IsCompleted);
+        Assert.Single(capture.Values, x => x.Name == "workflow_claim_attempts");
+        Assert.Equal(1, capture.Values.Where(x => x.Name == "workflow_claim_inflight").Sum(x => x.Value));
+        Assert.DoesNotContain(capture.Values, x => x.Name == "workflow_claim_duration_seconds");
+
+        if (outcome == "error")
+        {
+            response.SetException(new HttpRequestException());
+            await Assert.ThrowsAsync<HttpRequestException>(() => pending);
+        }
+        else if (outcome == "cancelled")
+        {
+            response.SetCanceled();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        }
+        else
+        {
+            response.SetResult(outcome == "empty" ? [] : [new HubLeasedTask(
+                Guid.NewGuid(), "test", 0, laneName == "workflow" ? "__native_workflow__" : "activity", 1,
+                null, JsonSerializer.SerializeToElement(new {}), 1, 1, DateTime.UtcNow.AddMinutes(1))]);
+            await pending;
+        }
+
+        Assert.Equal(0, capture.Values.Where(x => x.Name == "workflow_claim_inflight").Sum(x => x.Value));
+        var finished = Assert.Single(capture.Values, x => x.Name == "workflow_claim_duration_seconds");
+        Assert.Equal(outcome, finished.Tags["outcome"]);
+        Assert.True(finished.Value >= 0);
+        Assert.All(capture.Values, x => {
+            Assert.Equal(laneName, x.Tags["lane"]);
+            Assert.Equal(transport, x.Tags["transport"]);
+        });
+    }
+
+    [Theory]
+    [InlineData("activity", "claim")]
+    [InlineData("activity", "poll")]
+    [InlineData("workflow", "claim")]
+    [InlineData("workflow", "poll")]
+    public async Task InflightTracksConcurrentClaimsEndingOutOfOrder(string laneName, string transport)
+    {
+        using var capture = new Capture();
+        var responses = Enumerable.Range(0, 3).Select(_ =>
+            new TaskCompletionSource<HubLeasedTask[]>(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var pending = responses.Select(response => HubRuntimeWorker.InstrumentClaimAsync("tasks:" + transport,
+            new KeyValuePair<string, object?>("lane", laneName), () => response.Task)).ToArray();
+        double Inflight() => capture.Values.Where(x => x.Name == "workflow_claim_inflight").Sum(x => x.Value);
+
+        Assert.Equal(3, Inflight());
+        responses[1].SetResult([]);
+        await pending[1];
+        Assert.Equal(2, Inflight());
+        responses[2].SetResult([]);
+        await pending[2];
+        Assert.Equal(1, Inflight());
+        responses[0].SetResult([]);
+        await pending[0];
+        Assert.Equal(0, Inflight());
+        Assert.Equal(3, capture.Values.Count(x => x.Name == "workflow_claim_attempts"));
+        Assert.Equal(3, capture.Values.Count(x => x.Name == "workflow_claim_duration_seconds"));
     }
 
     [Fact]

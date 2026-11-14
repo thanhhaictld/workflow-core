@@ -24,8 +24,9 @@ is enabled in a live deployment.
 ## Matching and performance
 
 The [batch matching and SSE task delivery review/plan](hub-batch-sse-dispatch-plan.md)
-proposes capacity-aware assignments across workers. It is not implemented;
-current SSE continues to carry readiness hints only.
+is historical design context. Default SSE carries readiness hints; experimental
+opt-in [task distribution](sse-task-distributor.md) also pushes committed leases
+under fenced sessions and explicit worker credits.
 
 These documents describe implemented options and specific experiments. Their
 branch names, measurements and comparisons refer to the recorded investigation,
@@ -34,18 +35,23 @@ claiming plus SSE hints; matching long polling is opt-in in code and enabled by
 the HA Compose overlay.
 
 - [Single-owner matching and HA](hub-distributed-matching-ha.md)
+- [Ownership recovery and scaling design](cadence-inspired-scaling-design.md)
+- [Ownership recovery validation and evidence](cadence-inspired-scaling-validation.md)
 - [Multiple matching partitions](hub-matching-multi-partition.md)
 - [Event-gated matching drain](hub-matching-event-gated-drain.md)
+- [Matching and claim flow diagrams](hub-matching-claim-flow.md)
 - [PostgreSQL notification design and rollout](hub-postgres-notify-sse.md)
 - [Demand-aware claim admission](demand-aware-claim-admission.md)
 - [Dispatch and FIFO-head experiment](demand-aware-dispatch-fifo-head-experiment.md)
 - [Offboarding benchmark](offboarding-unconstrained-benchmark.md)
 - [Processor scaling investigation](linear-processor-scaling-pr22.md)
 - [Processor scaling diagnostics](processor-scaling-root-cause-diagnostics.md)
+- [Performance tuning harness instructions](performance-tuning-harness.md)
 - [Throughput investigation](throughput-investigation-report.md)
 - [Claim/completion A/B](workflow-p95-claim-completion-ab.md)
 - [SQL CPU investigation](sql-cpu-statement-investigation.md)
 - [Claim candidate query review and local tuning](hub-claim-query-tuning.md)
+- [Snapshot contract reuse and controlled throughput trials](snapshot-contract-reuse-throughput.md)
 - [Capacity assessment](throughput-1000-to-million-assessment.md)
 - [Historical 1,000-workflow activity benchmark](workflow-hub-1000-performance.md)
 

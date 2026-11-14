@@ -96,7 +96,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Top statements show estimated execution time during the selected time range, sampled every 15 seconds. Execution time includes waits and concurrent calls; it is not CPU time. New or evicted statements and collection gaps can make totals incomplete. At least two samples are required. Query text is truncated to 500 characters."
+        "content": "Top statements show estimated execution time during the selected time range, sampled every 15 seconds. Execution time includes waits and concurrent calls; it is not CPU time. New or evicted statements and collection gaps can make totals incomplete. At least two samples are required. Query text is truncated to 500 characters. I/O counts are PostgreSQL shared and temporary blocks read or written, not necessarily physical disk I/O."
       }
     },
     {
@@ -186,6 +186,118 @@
             "sort": [
               {
                 "field": "Execution time (ms)",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Top queries by blocks read and written in selected range",
+      "description": "Ranked by shared and temporary blocks read and written. PostgreSQL block counts are buffer activity, not necessarily physical disk I/O. Sampled every 15 seconds; counter resets, newly observed or evicted statements, and collection gaps can make estimates incomplete. At least two samples are required.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, ((sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range])))) > 0)",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "(sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) and on (query_id, query) (topk(10, ((sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range])))) > 0))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "expr": "(sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) and on (query_id, query) (topk(10, ((sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range])))) > 0))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "expr": "(sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) and on (query_id, query) (topk(10, ((sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range])))) > 0))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "E",
+          "expr": "(sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range]))) and on (query_id, query) (topk(10, ((sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_written_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_read_total[$__range]))) + (sum by (query_id, query) (increase(workflow_postgres_statement_temp_blocks_written_total[$__range])))) > 0))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "query_id",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "query 2": true,
+              "query 3": true,
+              "query 4": true,
+              "query 5": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "query_id": "Query ID",
+              "query": "Query",
+              "query 1": "Query",
+              "Value #A": "Total blocks",
+              "Value #B": "Shared read",
+              "Value #C": "Shared written",
+              "Value #D": "Temp read",
+              "Value #E": "Temp written"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Total blocks",
                 "desc": true
               }
             ]
