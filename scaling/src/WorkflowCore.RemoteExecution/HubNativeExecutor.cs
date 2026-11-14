@@ -266,6 +266,9 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
         try
         {
             var pointer=codec.Decode<ExecutionPointer>(metadata.GetProperty("pointer"));
+            // Preserve the stable dispatch identity for activity-side
+            // observation and downstream idempotency helpers.
+            pointer.ExtensionAttributes["hubDispatchKey"] = key;
             var context=new StepExecutionContext{Workflow=new WorkflowInstance{Id=metadata.GetProperty("workflowId").GetString(),
                 WorkflowDefinitionId=metadata.GetProperty("definitionId").GetString()??throw new InvalidOperationException("Missing activity definition identity"),
                 Version=metadata.GetProperty("version").GetInt32()},

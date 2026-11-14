@@ -1,6 +1,6 @@
 # Current distributed runtime
 
-Reviewed against the working tree on 8 November 2026. This guide describes
+Reviewed against the working tree on 14 November 2026. This guide describes
 implemented behavior, including opt-in paths; it does not establish which flags
 are enabled in a running deployment. The runtime remains experimental.
 
@@ -23,7 +23,7 @@ with either distributed runtime for the same workflow state.
 flowchart LR
     C[Client / monitor] -->|REST| G[Hub Gateway replicas]
     W[Application hosts: workflow and activity lanes] -->|REST claim or long poll| G
-    G -->|HTTP response: leased tasks| W
+    G -->|HTTP response or opt-in SSE: leased tasks| W
     G -. SSE readiness hints .-> W
     W -->|REST heartbeat / commit / result| G
     G --> P[(PostgreSQL)]
@@ -61,8 +61,9 @@ mapping rules and compatibility requirements.
    applicable resource capacity/FIFO constraints. PostgreSQL row locks protect
    admission. Eligible tasks become leased to the requesting worker ID with an
    incremented epoch and attempt count.
-4. The **HTTP claim or poll response carries the leased tasks**. SSE carries
-   `tasks.available` readiness hints, not task payloads or ownership.
+4. A pull worker receives leases in its HTTP response. An opt-in push worker
+   receives an already-committed lease in its session SSE stream; ordinary
+   `tasks.available` SSE events remain hints, not leases.
 5. The processor heartbeats and submits a result or workflow commit. Worker ID,
    epoch, lease validity and, for workflow commits, revision fence mutations.
    Expired tasks can be reclaimed; exhausted attempts require recovery handling.
@@ -77,16 +78,25 @@ once. A workflow is not permanently attached to a processor.
 | --- | --- | --- |
 | Adaptive claim + SSE | Default native worker path | `POST /api/hub/workers/tasks:claim`; SSE shortens empty-queue backoff; periodic claims recover missed hints |
 | Matching long poll | `WFC_HUB_LONG_POLL_ENABLED=true` and a lane advertises exactly one Hub namespace | `POST /api/hub/workers/tasks:poll`; server holds the request for work; requires matching-enabled Hub configuration |
-| Multi-Hub lane | Even when long polling is enabled | Uses the adaptive claim/SSE path until multi-Hub matching fan-out is implemented |
+| Experimental push | `WFC_HUB_PUSH_ENABLED=true` on Hub and worker, matching enabled, one Hub namespace per lane | Owner-fenced single-credit session, task assignment over SSE, REST heartbeat and completion |
+| Multi-Hub lane | Even when long polling or push is enabled | Uses the adaptive claim/SSE path until multi-Hub matching fan-out is implemented |
 
 Long polls wait up to 20 seconds in single-partition mode and 4 seconds in
 sharded mode. One outstanding poll per lane rotates across matching partitions.
-There is no SSE task-push or processor delivery-acknowledgement protocol today.
+Push uses one credit per lane regardless of configured lane concurrency; it is
+experimental and has no separate durable delivery acknowledgement. Sharded
+sessions revoke the old grant and wait for the owner's no-claim/no-delivery
+barrier before rotating. On a lost stream the worker finishes any running task,
+waits 75 seconds, then requires an old-session revocation or a changed/expired
+matching-owner epoch before advertising a new credit.
+Claims still consume the existing attempt budget even when delivery is uncertain.
 
 PostgreSQL transaction-committed NOTIFY hints wake Hub replicas; LISTEN reconnect
 and periodic reconciliation recover missed hints. These hints are not a durable
 queue. Legacy readiness sweeps run every 2 seconds; the opt-in event-gated
 matching path also uses a throttled 10-second capability/partition recovery scan.
+The push recovery scan shares that cadence and uses a bounded cursor to traverse
+hint pages rather than repeatedly reading only the first 512 keys.
 
 ## How Hub replicas scale
 
@@ -125,6 +135,10 @@ processors; it is not a live resharding control.
 | `WFC_HUB_MATCHING_ADVERTISE_URL`, `WFC_HUB_MATCHING_PEERS` | Reachable owner URL and configured trusted peer URLs |
 | `WFC_HUB_MATCHING_PARTITIONS` | Same count on Hubs and workers, 1–64; default 1 |
 | `WFC_HUB_LONG_POLL_ENABLED` | Worker transport opt-in; default off in code |
+| `WFC_HUB_PUSH_ENABLED` | Opt in separately on Hub and worker; matching must also be enabled on the Hub |
+| `WFC_HUB_PUSH_TRUSTED_OWNERS` | Comma-separated direct owner origins trusted by a worker when routed away from its configured Hub URL |
+| `WFC_HUB_WORKER_HUB` | Optional single-Hub lane filter, useful for push where a catalog spans namespaces |
+| `WFC_HUB_WORKER_LANE_INSTANCES` | Logical instances of each native lane in one host; default 1, primarily for controlled load tests |
 | `WORKFLOW_WORKERS`, `ACTIVITY_WORKERS` | Onboarding host lane concurrency; defaults 8 and 16 |
 | `WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE` | Optional cap applied independently to each native lane |
 | `WFC_HUB_DB_POOL` | Per-Hub connection pool setting; Compose default 12 |

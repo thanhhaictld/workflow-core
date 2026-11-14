@@ -19,8 +19,12 @@ public sealed class HubReadinessBroadcaster(
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
     private readonly bool _eventGated =
         Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_EVENT_GATED") is "true" or "1" or "True";
+    private readonly bool _pushEnabled =
+        Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     private long _lastMatchingRecoveryAt;
+    private (string Hub, string TaskType, int Version, int Partition)? _recoveryCursor;
     private readonly SemaphoreSlim _matchingRecoveryGate = new(1, 1);
+    public int ConnectedCount => _clients.Count;
 
     // Optional in-process matching subscriber; SSE remains available for fallback.
     public event Action<string, string?, int, int?>? TaskReady;
@@ -86,7 +90,7 @@ public sealed class HubReadinessBroadcaster(
             if (_eventGated) PublishLegacy(hub);
             else Publish(hub);
         }
-        if (!_eventGated) return;
+        if (!_eventGated && !_pushEnabled) return;
 
         // Recovery must not turn into a worker *SQL-claim storm*: every
         // 10 seconds one Hub-wide query yields task type + partition hints.
@@ -103,9 +107,16 @@ public sealed class HubReadinessBroadcaster(
                 Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastMatchingRecoveryAt)).TotalSeconds < 10)
                 return;
             // A failed scan must be retried on the next sweep.
-            var ready = await store.ReadyMatchingHintsAsync(ct);
-            foreach (var hint in ready)
-                PublishMatchingHint(hint.Hub, hint.TaskType, hint.Version, hint.Partition);
+            // Continue from the previous page instead of repeatedly scanning
+            // the first 512 keys. Bound each sweep and eventually wrap.
+            for (var page = 0; page < 4; page++)
+            {
+                var ready = await store.ReadyMatchingHintsAsync(ct, _recoveryCursor);
+                foreach (var hint in ready)
+                    PublishMatchingHint(hint.Hub, hint.TaskType, hint.Version, hint.Partition);
+                _recoveryCursor = ready.Count < 512 ? null : ready[^1];
+                if (_recoveryCursor is null) break;
+            }
             Interlocked.Exchange(ref _lastMatchingRecoveryAt, now);
         }
         finally { _matchingRecoveryGate.Release(); }

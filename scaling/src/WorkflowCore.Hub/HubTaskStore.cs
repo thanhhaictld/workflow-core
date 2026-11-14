@@ -24,6 +24,9 @@ public sealed record HubCompletionRoute(string HubId, HubCompletionKind Kind);
 public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
     HubCapability[] Capabilities, int MaxTasks = 8, HubWorkflowCapability[]? Workflows = null,
     int? MatchingPartition = null, int? MatchingPartitionCount = null);
+// Internal claim fence for a future owner-directed delivery transport. It is
+// deliberately not part of the public worker claim request.
+public sealed record HubClaimOwnerFence(string OwnerId, long Epoch);
 public sealed record HubEnqueueRequest(string HubId, string TaskType, int Version,
     JsonElement Payload, Guid? WorkflowId = null, string? IdempotencyKey = null);
 public sealed record HubTaskResultRequest(string WorkerId, long Epoch,
@@ -264,7 +267,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         string workerId, IReadOnlyList<string> hubs, IReadOnlyList<HubCapability> capabilities,
         int maxTasks, TimeSpan lease, CancellationToken ct, IReadOnlyList<HubWorkflowCapability>? workflows = null,
         int? matchingPartition = null, int? matchingPartitionCount = null,
-        bool deferWhenBusy = false, HubMatchingPartitionLease? matchingOwner = null)
+        bool deferWhenBusy = false, HubMatchingPartitionLease? matchingOwner = null,
+        HubClaimOwnerFence? ownerFence = null)
     {
         using var span = HubTelemetry.Traces.StartActivity("hub.task.claim");
         var claimStarted = Stopwatch.GetTimestamp();
@@ -272,6 +276,9 @@ public sealed class HubTaskStore : IAsyncDisposable
             hubs.Count is < 1 or > 32 || capabilities.Count is < 1 or > 128 ||
             maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
             lease > TimeSpan.FromMinutes(5) ||
+            (ownerFence is not null && (hubs.Count != 1 || maxTasks != 1 ||
+                !matchingPartition.HasValue || string.IsNullOrWhiteSpace(ownerFence.OwnerId) ||
+                ownerFence.OwnerId.Length > 128 || ownerFence.Epoch < 1)) ||
             (matchingPartition.HasValue != matchingPartitionCount.HasValue) ||
             (matchingPartitionCount.HasValue &&
                 (matchingPartitionCount.Value is < 1 or > 64 ||
@@ -378,7 +385,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             // resource-constrained work (FIFO / capacity permits).
             var batchLeases = await ClaimUnconstrainedBatchAsync(db, workerId,
                 hubs, supported, pins, maxTasks, lease, matchPartition, matchCount, matchingBuckets, ct,
-                matchingOwner);
+                matchingOwner, ownerFence);
             results.AddRange(batchLeases);
             span?.SetTag("tasks.unconstrained_batch_claimed", batchLeases.Count);
         }
@@ -463,6 +470,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             foreach (var taskId in candidates)
             {
                 await using var tx = await db.BeginTransactionAsync(ct);
+                await CheckClaimOwnerAsync(db, tx, hubs[0], matchPartition, ownerFence, true, ct);
                 Guid id; string hub; string taskType; int version, partition, attempts;
                 int? workflowStep;
                 long sequence; Guid? workflow; string payload;
@@ -638,6 +646,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     log.Parameters.AddWithValue("epoch", found.Epoch);
                     await log.ExecuteNonQueryAsync(ct);
                 }
+                await CheckClaimOwnerAsync(db, tx, hubs[0], matchPartition, ownerFence, false, ct);
                 await tx.CommitAsync(ct);
                 break;
             }
@@ -775,7 +784,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         NpgsqlConnection db, string workerId, IReadOnlyList<string> hubs,
         string[] supported, string? pins, int maxTasks, TimeSpan lease,
         int matchingPartition, int matchingCount, int[]? matchingBuckets, CancellationToken ct,
-        HubMatchingPartitionLease? matchingOwner = null)
+        HubMatchingPartitionLease? matchingOwner = null, HubClaimOwnerFence? ownerFence = null)
     {
         var started = Stopwatch.GetTimestamp();
         await using var tx = await db.BeginTransactionAsync(ct);
@@ -783,6 +792,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             !await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
                 db, tx, matchingOwner, matchingCount, ct))
             throw new InvalidOperationException("Matching owner generation is no longer valid");
+        await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition, ownerFence, true, ct);
         var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
         var orderedMerge = _orderedCapabilityMergeEnabled && _splitBatchClaimCandidatesEnabled &&
             matchingCount == 4 && hubs.Count == 1 && supported.Distinct().Take(9).Count() <= 8;
@@ -908,6 +918,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             await journal.ExecuteNonQueryAsync(ct);
         }
 
+        await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition, ownerFence, false, ct);
         await tx.CommitAsync(ct);
         HubTelemetry.ClaimUnconstrainedBatchCount.Record(claimed.Count);
         HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
@@ -916,6 +927,26 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(item.Lease.HubId),
                 HubTelemetry.ActivityTag(item.Lease.TaskType));
         return claimed.Select(item => item.Lease).ToArray();
+    }
+
+    // The shared row lock serializes takeover against this transaction. Check
+    // the deadline again after task/history writes so a long claim cannot
+    // commit based solely on an already-expired owner lease.
+    private static async Task CheckClaimOwnerAsync(NpgsqlConnection db, NpgsqlTransaction tx,
+        string hub, int partition, HubClaimOwnerFence? fence, bool takeLock, CancellationToken ct)
+    {
+        if (fence is null) return;
+        await using var command = new NpgsqlCommand("""
+            SELECT 1 FROM wfc_scale.hub_matching_partition_owner
+            WHERE hub_id=@hub AND matching_partition=@partition AND owner_id=@owner
+              AND epoch=@epoch AND lease_until>clock_timestamp()
+            """ + (takeLock ? " FOR SHARE" : ""), db, tx);
+        command.Parameters.AddWithValue("hub", hub);
+        command.Parameters.AddWithValue("partition", partition);
+        command.Parameters.AddWithValue("owner", fence.OwnerId);
+        command.Parameters.AddWithValue("epoch", fence.Epoch);
+        if (await command.ExecuteScalarAsync(ct) is null)
+            throw new InvalidOperationException("Matching owner lease was lost during claim");
     }
 
     public async Task<bool> IsManagedWorkflowStepAsync(Guid id, CancellationToken ct)
@@ -1046,18 +1077,25 @@ public sealed class HubTaskStore : IAsyncDisposable
     /// The dispatcher deduplicates these before touching the claim store.
     /// </summary>
     public async Task<IReadOnlyList<(string Hub, string TaskType, int Version, int Partition)>> ReadyMatchingHintsAsync(
-        CancellationToken ct)
+        CancellationToken ct, (string Hub, string TaskType, int Version, int Partition)? after = null)
     {
         await using var cmd = _dataSource.CreateCommand("""
             SELECT hub_id,task_type,task_version,partition_id
             FROM wfc_scale.hub_task
             WHERE attempts < max_attempts AND
                   ((state=0 AND due_at<=now()) OR
-                   (state=1 AND lease_until<now()))
+                  (state=1 AND lease_until<now()))
+              AND (@start OR (hub_id,task_type,task_version,partition_id) >
+                  (@hub,@type,@version,@partition))
             GROUP BY hub_id,task_type,task_version,partition_id
             ORDER BY hub_id,task_type,task_version,partition_id
             LIMIT 512
             """);
+        cmd.Parameters.AddWithValue("start", after is null);
+        cmd.Parameters.AddWithValue("hub", after?.Hub ?? "");
+        cmd.Parameters.AddWithValue("type", after?.TaskType ?? "");
+        cmd.Parameters.AddWithValue("version", after?.Version ?? 0);
+        cmd.Parameters.AddWithValue("partition", after?.Partition ?? 0);
         var hints = new List<(string Hub, string TaskType, int Version, int Partition)>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

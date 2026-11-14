@@ -54,18 +54,21 @@ public sealed class HubEventGatedClaimDispatcher
     private readonly int _partitionCount;
     private readonly TimeSpan _pollTimeout;
     private int _waiters;
-    private const int MaxWaiters = 2048;
+    private readonly int _maxWaiters;
     private const int MaxCachedLanes = 4096;
+    private const int MaxHintsPerLane = 256;
     private long _lastCacheTrim;
 
     public HubEventGatedClaimDispatcher(
         Func<HubClaimRequest, CancellationToken, Task<IReadOnlyList<HubLeasedTask>>> claim,
         Func<HubClaimRequest, CancellationToken, Task<bool>> stillOwns,
         bool sharded, int partitionCount, TimeSpan? pollTimeout = null,
-        bool capabilityScopedClaims = false)
+        bool capabilityScopedClaims = false, int maxWaiters = 2048)
     {
         if (partitionCount is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(partitionCount));
         _claim = claim;
+        if (maxWaiters is < 1 or > 8192) throw new ArgumentOutOfRangeException(nameof(maxWaiters));
+        _maxWaiters = maxWaiters;
         _stillOwns = stillOwns;
         _sharded = sharded;
         _capabilityScopedClaims = capabilityScopedClaims;
@@ -113,13 +116,28 @@ public sealed class HubEventGatedClaimDispatcher
             _lanes[key] = lane = new Lane();
         }
         lane.LastTouched = now;
-        lane.Pending.Add(hint);
+        Remember(lane, hint);
         WakeOne(lane);
+    }
+
+    private static void Remember(Lane lane, Hint hint)
+    {
+        if (lane.Pending.Count >= MaxHintsPerLane && !lane.Pending.Contains(hint))
+        {
+            // A generic hint is enough to prompt a capability-filtered SQL
+            // claim. The bounded reconciliation scan recovers lost detail.
+            lane.Pending.Clear();
+            lane.Pending.Add(new Hint(null, 0));
+        }
+        else lane.Pending.Add(hint);
     }
 
     private void TrimIdle(long now)
     {
         _lastCacheTrim = now;
+        foreach (var entry in _lastCatchupProbe)
+            if (Stopwatch.GetElapsedTime(entry.Value, now).TotalSeconds > 30)
+                _lastCatchupProbe.TryRemove(entry.Key, out _);
         foreach (var (key, lane) in _lanes.ToArray())
             if (!lane.Claiming && lane.Waiters.Count == 0 &&
                 Stopwatch.GetElapsedTime(lane.LastTouched, now).TotalSeconds > 30)
@@ -156,6 +174,7 @@ public sealed class HubEventGatedClaimDispatcher
         {
             if (!_lastCatchupProbe.TryGetValue(key, out var previous))
             {
+                if (_lastCatchupProbe.Count >= 8192) return false;
                 if (_lastCatchupProbe.TryAdd(key, now)) return true;
                 continue;
             }
@@ -177,10 +196,15 @@ public sealed class HubEventGatedClaimDispatcher
         deadline.CancelAfter(_pollTimeout);
         lock (_gate)
         {
-            if (_waiters >= MaxWaiters)
+            if (_waiters >= _maxWaiters)
                 throw new InvalidOperationException("Matching waiter capacity exceeded");
             if (!_lanes.TryGetValue(waiter.Key, out var lane))
+            {
+                if (_lanes.Count >= MaxCachedLanes) TrimIdle(Stopwatch.GetTimestamp());
+                if (_lanes.Count >= MaxCachedLanes)
+                    throw new InvalidOperationException("Matching lane capacity exceeded");
                 _lanes[waiter.Key] = lane = new Lane();
+            }
             lane.LastTouched = Stopwatch.GetTimestamp();
             lane.Waiters.AddLast(waiter);
             _waiters++;
@@ -188,7 +212,7 @@ public sealed class HubEventGatedClaimDispatcher
             {
                 // Start-up / missed-NOTIFY recovery is capability-scoped.
                 foreach (var capability in request.Capabilities)
-                    lane.Pending.Add(new Hint(capability.TaskType, capability.Version));
+                    Remember(lane, new Hint(capability.TaskType, capability.Version));
             }
             WakeOne(lane);
         }
@@ -281,7 +305,7 @@ public sealed class HubEventGatedClaimDispatcher
                             // whether work was available. Do NOT discard the
                             // readiness hint or a stranded task might wait
                             // until the next catch-up probe.
-                            lane.Pending.Add(unconsumed);
+                            Remember(lane, unconsumed);
                         }
                         if (completed && leases.Count > 0)
                         {
@@ -289,7 +313,7 @@ public sealed class HubEventGatedClaimDispatcher
                             // SQL can stop after a bounded candidate window,
                             // so a partial return does not prove empty backlog.
                             foreach (var task in leases)
-                                lane.Pending.Add(new Hint(task.TaskType, task.Version));
+                                Remember(lane, new Hint(task.TaskType, task.Version));
                         }
                         // A completed empty claim consumes the current hint.
                         // A deferred/incomplete claim retains it for retry.
