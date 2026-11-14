@@ -1,6 +1,9 @@
 name: Hub Candidate Matching + SSE Failover
 
 on:
+  push:
+    branches:
+      - perf/hub-matcher-primary-failover
   pull_request:
     paths:
       - 'scaling/src/WorkflowCore.Hub/**'
