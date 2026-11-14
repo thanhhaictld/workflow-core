@@ -1,0 +1,8 @@
+# Experiment only: expose the native-commit history serialization boundary on both Hub replicas.
+services:
+  hub:
+    environment:
+      WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION: "${WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION:-false}"
+  hub-2:
+    environment:
+      WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION: "${WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION:-false}"
