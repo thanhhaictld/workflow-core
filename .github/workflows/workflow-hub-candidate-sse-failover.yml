@@ -1,9 +1,8 @@
 name: Hub Candidate Matching + SSE Failover
 
+# PR checks provide one candidate/SSE failover run per commit. Avoid
+# duplicate push and pull_request runs for the same feature branch.
 on:
-  push:
-    branches:
-      - perf/hub-matcher-primary-failover
   pull_request:
     paths:
       - 'scaling/src/WorkflowCore.Hub/**'
