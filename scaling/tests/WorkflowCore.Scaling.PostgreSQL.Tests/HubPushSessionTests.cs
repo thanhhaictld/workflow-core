@@ -17,7 +17,8 @@ public sealed class HubPushSessionTests
         if (database is null) return;
         var keys = new[] { "WFC_HUB_PUSH_ENABLED", "WFC_HUB_MATCHING_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL",
-            "WFC_HUB_MATCHING_PEERS", "WFC_HUB_MATCHING_PARTITIONS" };
+            "WFC_HUB_MATCHING_PEERS", "WFC_HUB_MATCHING_PARTITIONS",
+            "WFC_HUB_MATCHING_CANDIDATES_ENABLED" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         try
         {
@@ -27,6 +28,7 @@ public sealed class HubPushSessionTests
             Environment.SetEnvironmentVariable(keys[3], "http://localhost:5100");
             Environment.SetEnvironmentVariable(keys[4], "http://localhost:5100");
             Environment.SetEnvironmentVariable(keys[5], "1");
+            Environment.SetEnvironmentVariable(keys[6], "true");
             var hub = "push-" + Guid.NewGuid().ToString("N");
             await using var tasks = new HubTaskStore(database, 4);
             var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
@@ -41,7 +43,11 @@ public sealed class HubPushSessionTests
             var broadcaster = new HubReadinessBroadcaster(tasks,
                 new HubWorkflowStore(tasks, policies, new HubWorkflowRegistry()),
                 NullLogger<HubReadinessBroadcaster>.Instance);
-            var sessions = new HubPushSessions(tasks, ownership, broadcaster, NullLogger<HubPushSessions>.Instance);
+            var candidate = new HubCandidateAcquisition(tasks, ownership, broadcaster,
+                NullLogger<HubCandidateAcquisition>.Instance);
+            await candidate.StartAsync(default);
+            var sessions = new HubPushSessions(tasks, ownership, broadcaster,
+                NullLogger<HubPushSessions>.Instance, candidate);
             var (session, _) = await sessions.RegisterAsync(new("worker", hub, 0, 1,
                 [new(hub, "work", 1)], null), default);
             Assert.NotNull(session);
@@ -154,6 +160,7 @@ public sealed class HubPushSessionTests
             var batch = new List<HubPushAssignment>();
             for (var i = 0; i < 4; i++) batch.Add(await multiAssignments.Reader.ReadAsync(stop.Token));
             Assert.Equal(4, batch.Select(a => a.Task.Id).Distinct().Count());
+            Assert.Equal(4, batch.Count); // every committed lease in the four-credit batch was sent
             Assert.True(sessions.Update(multi, new(2, 4))); // stale local view cannot duplicate credit
             using (var wait = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await multiAssignments.Reader.ReadAsync(wait.Token));
@@ -170,6 +177,7 @@ public sealed class HubPushSessionTests
             await stop.CancelAsync();
             await Task.WhenAll(raceLoops);
             await multiLoop;
+            await candidate.StopAsync(default);
             await ownership.StopAsync(default);
             ownership.Dispose();
         }

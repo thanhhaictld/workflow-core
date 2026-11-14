@@ -193,12 +193,14 @@ public static class HubGatewayEndpoints
             return runtime is null ? Results.NotFound() : Results.Ok(runtime);
         });
         routes.MapPost("/workflows/{id:guid}/native-commits", async (Guid id, HubNativeCommit request,
-            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness,
+            HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             try
             {
                 var outcome = await native.CommitWithRoutingAsync(id,request,ct);
                 if(outcome is null)return Results.Conflict(new{error="Stale native lease or revision"});
+                candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
                 readiness.Publish(outcome.HubId);
                 return Results.Ok(outcome.Result);
             }
@@ -234,12 +236,13 @@ public static class HubGatewayEndpoints
         });
         routes.MapPost("/workflows/{id:guid}/transitions", async (Guid id,
             HubTransitionRequest request, HubRemoteWorkflowStore remote,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubReadinessBroadcaster readiness, HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             try
             {
                 var result=await remote.CommitAsync(id,request,ct);
                 if(result is null)return Results.Conflict(new{error="Stale task lease or workflow revision"});
+                candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
                 var runtime=await remote.GetRuntimeAsync(id,ct);
                 if(runtime is not null)readiness.Publish(runtime.HubId);
                 return Results.Ok(result);
@@ -620,7 +623,7 @@ public static class HubGatewayEndpoints
         routes.MapPost("/tasks/{id:guid}/complete", async (
             Guid id, HubTaskResultRequest request, HubTaskStore store,
             HubWorkflowStore workflows, HubRemoteWorkflowStore remote, HubNativeWorkflowStore native,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubReadinessBroadcaster readiness, HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
@@ -665,6 +668,7 @@ public static class HubGatewayEndpoints
             };
             if (done)
             {
+                candidate.ReleaseCompletedLease(id, request.Epoch);
                 if (fastPath) readiness.Publish(route.HubId);
                 else
                 {
@@ -678,7 +682,8 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/fail", async (
             Guid id, HubTaskFailureRequest request, HubTaskStore store,
-            HubWorkflowStore workflows, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubWorkflowStore workflows, HubReadinessBroadcaster readiness,
+            HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Error) ||
                 request.RetryDelaySeconds is < 0 or > 3600)
@@ -691,6 +696,7 @@ public static class HubGatewayEndpoints
                     request.Error, TimeSpan.FromSeconds(request.RetryDelaySeconds), ct);
             if (failed)
             {
+                candidate.ReleaseCompletedLease(id, request.Epoch);
                 var task = await store.GetAsync(id, ct);
                 if (task is not null) readiness.Publish(task.HubId);
             }

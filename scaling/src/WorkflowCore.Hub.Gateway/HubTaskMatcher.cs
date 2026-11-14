@@ -135,6 +135,9 @@ public sealed class HubTaskMatcher
             deadline.CancelAfter(TimeSpan.FromSeconds(4));
             try { return await _candidate.AcquireAsync(request,deadline.Token); }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return []; }
+            // Candidate memory is bounded. If this owner cannot reserve another
+            // credit, keep the worker moving through the existing fenced claim path.
+            catch (HubCandidateCapacityException) { }
         }
         if (_eventGated is not null)
             return await _eventGated.LongPollAsync(request, ct);

@@ -21,13 +21,13 @@ public sealed class HubPushSessions
         public bool Closed { get; set; }
         public bool Revoking { get; set; }
         public int FreeCredits { get; set; }
-        public bool Claiming { get; set; }
+        public int Claiming { get; set; }
         // false means the worker has not yet included this delivery in a
         // capacity snapshot, so its slot must still be deducted from that snapshot.
         public Dictionary<Guid, bool> Deliveries { get; } = new();
         public int Available => Math.Max(0, Math.Min(
-            FreeCredits - Deliveries.Count(d => !d.Value) - (Claiming ? 1 : 0),
-            Registration.MaxCredits - Deliveries.Count - (Claiming ? 1 : 0)));
+            FreeCredits - Deliveries.Count(d => !d.Value) - Claiming,
+            Registration.MaxCredits - Deliveries.Count - Claiming));
     }
 
     public const int TtlSeconds = 15;
@@ -71,6 +71,8 @@ public sealed class HubPushSessions
         if (!_requests.TryGetValue(request, out var session))
             throw new InvalidOperationException("Push session no longer exists");
         Interlocked.Increment(ref _claims);
+        // The legacy owner-fenced claim contract is single-task. Multi-task
+        // acquisition is available only through the candidate batch path.
         var result = await _tasks.ClaimAsync(request.WorkerId, request.Hubs, request.Capabilities, 1,
             TimeSpan.FromSeconds(45), ct, request.Workflows, request.MatchingPartition,
             request.MatchingPartitionCount, deferWhenBusy: true,
@@ -169,7 +171,7 @@ public sealed class HubPushSessions
         {
             session.FreeCredits = 0;
             session.Revoking = true;
-            if (session.Claiming || session.Deliveries.Count != 0) return false;
+            if (session.Claiming != 0 || session.Deliveries.Count != 0) return false;
             session.Closed = true;
             session.Wake.Writer.TryWrite(true);
             return true;
@@ -196,14 +198,16 @@ public sealed class HubPushSessions
         {
             while (!ct.IsCancellationRequested)
             {
-                bool claim;
+                int claimCount;
                 lock (session.Gate)
                 {
                     if (session.Closed || session.Expires <= DateTime.UtcNow) break;
-                    claim = session.Available > 0 && !session.Claiming;
-                    if (claim) session.Claiming = true;
+                    // Small batches reduce round trips while keeping committed
+                    // leases inside a bounded, explicit delivery reservation.
+                    claimCount = Math.Min(4, session.Available);
+                    if (claimCount > 0) session.Claiming += claimCount;
                 }
-                if (!claim)
+                if (claimCount == 0)
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     timeout.CancelAfter(TimeSpan.FromSeconds(1));
@@ -212,7 +216,7 @@ public sealed class HubPushSessions
                     continue;
                 }
                 var r = session.Registration;
-                var request = new HubClaimRequest(r.WorkerId, [r.HubId], r.Capabilities, 1,
+                var request = new HubClaimRequest(r.WorkerId, [r.HubId], r.Capabilities, claimCount,
                     r.Workflows, r.Partition, r.PartitionCount);
                 _requests[request] = session;
                 IReadOnlyList<HubLeasedTask> claimed;
@@ -224,27 +228,48 @@ public sealed class HubPushSessions
                 try { claimed = _candidate?.Enabled == true
                     ? await _candidate.AcquireAsync(request, claimDeadline.Token)
                     : await _matcher.LongPollAsync(request, claimDeadline.Token); }
+                catch (HubCandidateCapacityException ex)
+                {
+                    // Registry pressure must not kill the worker's push session.
+                    // Fall back to the same owner-fenced durable SQL claim; candidate
+                    // matching remains the normal path whenever its memory has room.
+                    _logger.LogDebug(ex,
+                        "Candidate credit unavailable for shard {Shard}; using bounded claim fallback",
+                        r.Partition);
+                    claimed = await _matcher.LongPollAsync(request, claimDeadline.Token);
+                }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 { claimed = Array.Empty<HubLeasedTask>(); }
                 finally { _requests.TryRemove(request, out _); }
-                HubPushAssignment? assignment = null;
+                var assignments = new List<HubPushAssignment>(claimed.Count);
                 lock (session.Gate)
                 {
-                    session.Claiming = false;
-                    if (claimed.Count != 0)
+                    session.Claiming -= claimCount;
+                    if (session.Claiming < 0) throw new InvalidOperationException("Push claim reservation underflow");
+                    foreach (var lease in claimed)
                     {
                         var delivery = Guid.NewGuid();
                         session.Deliveries.Add(delivery, false);
                         if (!session.Closed && session.Expires > DateTime.UtcNow)
-                            assignment = new(session.Id, delivery, r.WorkerId, claimed[0]);
+                            assignments.Add(new(session.Id, delivery, r.WorkerId, lease));
                     }
                 }
-                if (assignment is not null)
+                Exception? sendError = null;
+                foreach (var assignment in assignments)
                 {
-                    if (_testBeforeSendMs > 0) await Task.Delay(_testBeforeSendMs, ct);
-                    await send(assignment, ct); // failure is uncertain: leave the DB lease intact
-                    Interlocked.Increment(ref _deliveries);
+                    try
+                    {
+                        if (_testBeforeSendMs > 0) await Task.Delay(_testBeforeSendMs, ct);
+                        await send(assignment, ct); // failure is uncertain: leave the DB lease intact
+                        Interlocked.Increment(ref _deliveries);
+                    }
+                    catch (Exception ex)
+                    {
+                        sendError ??= ex;
+                        if (ct.IsCancellationRequested) break;
+                    }
                 }
+                if (sendError is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(sendError).Throw();
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
