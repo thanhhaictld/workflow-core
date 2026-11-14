@@ -28,6 +28,7 @@ make obs-owner-recovery-up
 make obs-owner-recovery-up-off-metric-sampler  # A/B run without Hub SQL metric sampling
 make obs-owner-recovery-test          # k6 smoke against the running stack
 make obs-owner-recovery-test-4k       # 4,000 workflows with 400 VUs
+make obs-test                         # 16,000 workflows with 200 VUs + durable audit
 make obs-owner-recovery-db-test       # optional isolated PostgreSQL test suite
 make obs-owner-recovery-stress-test K6_POLICY_MODE=keyed K6_POLICY_COUNT=1000 K6_POLICY_VUS=100
 make obs-owner-recovery-ps
@@ -49,6 +50,7 @@ Each DB-free processor has independent 8-slot workflow and activity lanes.
 | `obs-owner-recovery-up-off-metric-sampler` | Same build/start, with the SQL metrics sampler disabled on both Hubs |
 | `obs-owner-recovery-test` | Run k6 unordered/keyed cohorts of 40 each on the running stack |
 | `obs-owner-recovery-test-4k` | Run 4,000 workflows with 400 VUs using `K6_POLICY_MODE`, then durable audit |
+| `obs-test` | Run 16,000 workflows with 200 VUs, then durable audit (30-minute completion timeout) |
 | `obs-owner-recovery-stress-test` | Run existing `k6-policy` with selected mode/count/VUs, then durable audit |
 | `obs-owner-recovery-smoke-test` | k6 unordered/keyed cohorts only |
 | `obs-owner-recovery-db-test` | Database tests only, isolated from runtime data |
