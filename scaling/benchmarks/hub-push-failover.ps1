@@ -43,6 +43,7 @@ function Start-Hub([int]$Port, [string]$Node, [int]$Delay) {
         WFC_HUB_MATCHING_ADVERTISE_URL="http://127.0.0.1:$Port"
         WFC_HUB_MATCHING_PEERS='http://127.0.0.1:54110,http://127.0.0.1:54111'
         WFC_HUB_MATCHING_PARTITIONS='1'; WFC_HUB_PUSH_ENABLED='true'; WFC_HUB_DB_POOL='12'
+        WFC_HUB_MATCHING_CANDIDATES_ENABLED='true'; WFC_HUB_MATCHING_ADMISSION_CONCURRENCY='3'
         WFC_HUB_CLAIM_ADMISSION_ENABLED='true'; WFC_HUB_CLAIM_ADMISSION_LIMIT='3'
         WFC_HUB_PUSH_TEST_BEFORE_SEND_MS="$Delay"; Logging__LogLevel__Default='Warning'
     }
@@ -72,6 +73,9 @@ try {
         -RedirectStandardOutput (Join-Path $outDir "$run-worker.stdout.log") `
         -RedirectStandardError (Join-Path $outDir "$run-worker.stderr.log")
     Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 2 } 45 'two active push sessions on A'
+    $diagA = Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
+    if (-not $diagA.candidateEnabled) { throw 'Candidate-mode matching was not active on Hub A' }
+    $result.initialMatching = $diagA
     $hubB = Start-Hub 54111 'hub-b' 0
     Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/health/ready' -TimeoutSec 2).status -eq 'ready' } 30 'Hub B ready'
     Mark 'both-hubs-and-sessions-ready'
@@ -93,6 +97,7 @@ try {
     $owner = Query "SELECT owner_id FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0"
     if ($owner -ne 'hub-a') { throw "Unexpected initial matching owner: $owner" }
     Mark 'owner-killed'
+    $killTime = [DateTime]::UtcNow
     Stop-Process -Id $hubA.Id -Force
     if ($Scenario -eq 'before-claim') {
         for ($i=0; $i -lt 2; $i++) {
@@ -103,10 +108,21 @@ try {
     }
     Wait-Until { (Query "SELECT owner_id FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0") -eq 'hub-b' } 120 'Hub B ownership takeover'
     Mark 'owner-takeover'
-    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 2 } 45 'worker sessions reconnected'
+    $result.ownerTakeoverSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
+    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 2 } 60 'worker sessions reconnected'
     Mark 'sessions-reconnected'
+    $result.ownerToReconnectSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
+    if ($result.ownerToReconnectSeconds -ge 65) { throw 'SSE reconnection exceeded the failover latency budget' }
+    $diagB = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
+    if (-not $diagB.candidateEnabled) { throw 'Candidate-mode matching was not active on Hub B after takeover' }
+    $result.recoveredMatching = $diagB
     Wait-Until { [int](Query "SELECT count(*) FROM wfc_scale.hub_workflow WHERE run_id='$run' AND completed_at IS NOT NULL") -eq 2 } 180 'both workflows complete'
     Mark 'workflows-completed'
+    Wait-Until {
+        $d = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
+        $d.candidateCredits -eq 0 -and $d.candidateReservations -eq 0 -and $d.candidateUncertain -eq 0
+    } 10 'all matching credits returned after completion'
+    $result.finalMatching = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
     $result.taskSummary = Query "SELECT json_build_object('tasks',count(*),'complete',count(*) FILTER (WHERE t.state=2),'retries',sum(greatest(t.attempts-1,0))) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run'" | ConvertFrom-Json
     $result.fifoOverlaps = [int](Query "SELECT count(*) FROM wfc_scale.hub_task_attempt a JOIN wfc_scale.hub_task ta ON ta.id=a.task_id JOIN wfc_scale.hub_workflow wa ON wa.id=ta.workflow_id JOIN wfc_scale.hub_task_attempt b ON b.task_id<>a.task_id AND a.claimed_at < coalesce(b.finished_at,now()) AND b.claimed_at < coalesce(a.finished_at,now()) JOIN wfc_scale.hub_task tb ON tb.id=b.task_id JOIN wfc_scale.hub_workflow wb ON wb.id=tb.workflow_id WHERE wa.run_id='$run' AND wb.run_id='$run' AND ta.task_type='provision-tenant' AND tb.task_type='provision-tenant'")
     if ($result.taskSummary.tasks -ne $result.taskSummary.complete -or $result.fifoOverlaps -ne 0) { throw 'Incomplete tasks or overlapping FIFO activity attempts' }
