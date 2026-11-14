@@ -351,8 +351,14 @@ public static class HubGatewayEndpoints
             return task is null ? Results.NotFound() : Results.Ok(task);
         });
 
-        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions, HubReadinessBroadcaster readiness) =>
+        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions,
+            HubCandidateAcquisition candidates, HubReadinessBroadcaster readiness) =>
             Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
+                candidateEnabled = candidates.Enabled, candidateCredits = candidates.CandidateCredits,
+                candidateReservations = candidates.CandidateReservations,
+                candidateUncertain = candidates.CandidateUncertain,
+                candidateBuffered = candidates.CandidateBuffered,
+                candidateAdmissionsActive = candidates.AdmissionActive,
                 pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
                 pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
                 pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
