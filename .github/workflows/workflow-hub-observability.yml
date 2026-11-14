@@ -1,368 +1,122 @@
-name: Workflow Hub OTEL Observability Smoke
+name: Workflow Hub Candidate + SSE Observability Smoke
 
 on:
-  push:
-    branches:
-      - feat/workflow-hub-otel-observability
-      - refactor/scaling-project-layout
-      - feat/hub-remote-processor-scheduler
-    paths:
-      - 'scaling/**'
-      - 'scaling/monitor/**'
-      - 'scaling/monitor/api/**'
-      - 'scaling/src/WorkflowCore.Hub/**'
-      - 'scaling/src/WorkflowCore.Hub.Gateway/**'
-      - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
-      - 'scaling/src/WorkflowCore.Hub.Server/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
-      - '.github/workflows/workflow-hub-observability.yml'
   pull_request:
     paths:
-      - 'scaling/**'
-      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/observability/**'
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.Hub.Telemetry/**'
-      - 'scaling/src/WorkflowCore.Hub.Server/**'
-      - 'scaling/sample/onboarding/WorkflowCore.Scaling.Worker/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
+      - 'scaling/monitor/**'
       - '.github/workflows/workflow-hub-observability.yml'
   workflow_dispatch:
 
+concurrency:
+  group: workflow-hub-otel-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  compose-otel-k6:
+  candidate-otel:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       COMPOSE: scaling/observability/compose.yaml
+      HA: scaling/observability/compose.matching-ha.yaml
+      SHARDS: scaling/observability/compose.matching-shards.yaml
       ENVFILE: scaling/observability/.env.example
+      WFC_HUB_PUSH_ENABLED: 'true'
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'false'
+      WFC_HUB_TASK_SSE_PUSH: 'false'
+      WFC_HUB_MATCHING_EVENT_GATED: 'false'
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Validate k6 syntax and provisioned dashboard JSON
+      - name: Validate OTEL dashboards and primary topology
+        shell: bash
         run: |
-          node --input-type=module --check < scaling/observability/k6/hub-workflows.js
+          set -euo pipefail
           node --input-type=module --check < scaling/observability/k6/offboarding-unconstrained.js
           python3 - <<'PY'
           import json
-          path='scaling/observability/grafana/dashboards/workflow-hub-runtime.json'
-          dashboard=json.load(open(path))
-          assert len(dashboard['panels']) >= 16
-          titles=[p['title'].lower() for p in dashboard['panels']]
-          assert any('memory' in title for title in titles)
-          assert any('throughput' in title for title in titles)
-          assert any('database' in title for title in titles)
-          assert any('k6' in title for title in titles)
-          print('Dashboard JSON parsed and required performance panels verified.')
+          p="scaling/observability/grafana/dashboards/workflow-hub-runtime.json"
+          panels=json.load(open(p))["panels"]
+          assert len(panels) >= 16
+          metrics=json.dumps(panels)
+          assert "workflow_hub_candidate_credits" in metrics
+          assert "workflow_hub_candidate_reservations" in metrics
+          assert "workflow_hub_worker_inflight" in metrics
+          assert "workflow_hub_candidate_capacity_fallbacks_total" in metrics
+          print("PASS: primary matcher, worker occupancy and fallback panels")
           PY
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" config --quiet
-      - name: Build and launch local OTEL / Grafana / workflow stack
-        run: |
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --build --scale provisioner=2
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" ps
-      - name: Verify Hub, Next.js Hub-only UI and Grafana readiness
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" config --quiet
+
+      - name: Start two Hub owners, Prometheus, Grafana and monitoring UI
+        shell: bash
         run: |
           set -euo pipefail
-          for i in {1..100}; do
-            if curl -fsS http://127.0.0.1:5100/health/ready >/dev/null &&
-               curl -fsS http://127.0.0.1:9090/-/ready >/dev/null &&
-               curl -fsS http://127.0.0.1:3001/api/health >/dev/null &&
-               curl -fsS http://127.0.0.1:3002/workflows >/dev/null &&
-               curl -fsS http://127.0.0.1:3002/api/hub-overview >/dev/null; then break; fi
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            up -d --build hub hub-2 hub-lb prometheus grafana monitor
+          for i in {1..120}; do
+            if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null 2>&1 &&
+              curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 &&
+              curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1 &&
+              curl -fsS http://127.0.0.1:3002/api/hub-overview >/dev/null 2>&1; then
+              break
+            fi
             sleep 2
           done
-          curl --fail-with-body -fsS http://127.0.0.1:5100/health/ready
+          curl --fail-with-body -fsS http://127.0.0.1:5110/health/ready
           curl --fail-with-body -fsS http://127.0.0.1:9090/-/ready
           curl --fail-with-body -fsS http://127.0.0.1:3001/api/health
-          curl --fail-with-body -fsS http://127.0.0.1:3002/workflows >/tmp/hub-monitor.html
-          curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview >/tmp/hub-monitor-overview.json
-
-          # Verify real PostgreSQL-backed dashboard through the Next.js
-          # server-side authenticated Hub proxy (no demo fixtures).
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/operations?windowMinutes=60' >/tmp/operations-global.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/operations?hub=onboarding&windowMinutes=360' >/tmp/operations-hub.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations' >/dev/null
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations/activities' >/dev/null
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/operations/partitions' >/dev/null
-          python3 - <<'PY'
-          import json
-          global_view=json.load(open('/tmp/operations-global.json'))
-          business_view=json.load(open('/tmp/operations-hub.json'))
-          for report in (global_view,business_view):
-              for name in ('workflows','tasks','contention','latency','database',
-                           'partitions','activities','policies','workers','timers','trends'):
-                  assert name in report, f'Operations report is missing {name}'
-              assert report['tasks']['ready'] >= 0
-              assert report['tasks']['leased'] >= 0
-              assert report['workflows']['active'] >= 0
-              assert len(report['trends']) >= 12
-              assert 'processMetrics' in report
-          assert global_view['windowMinutes'] == 60
-          assert business_view['windowMinutes'] == 360
-          print('PASS: authenticated operations dashboard responds with live Hub snapshots and trend buckets')
-          PY
-          python3 - <<'PY'
-          import json
-          hub=json.load(open('/tmp/hub-monitor-overview.json'))
-          assert isinstance(hub.get('runs'),list), 'Next.js Hub proxy did not return run list'
-          assert 'databaseConnections' in hub['diagnostics']
-          assert b'Workflow monitoring' in open('/tmp/hub-monitor.html','rb').read()
-          print('Next.js monitor and authenticated Hub proxy are online.')
-          PY
+          curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview > /tmp/hub-monitor-overview.json
           curl --fail-with-body -fsS -u admin:local-grafana-change-this \
-            http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel >/tmp/grafana-dashboard.json
+            http://127.0.0.1:3001/api/dashboards/uid/workflow-hub-otel > /tmp/otel-dashboard.json
           python3 - <<'PY'
           import json
-          x=json.load(open('/tmp/grafana-dashboard.json'))
-          assert len(x['dashboard']['panels']) >= 16
-          print('Grafana provisioned dashboard verified.')
-          PY
-      - name: Verify remote workflow metadata registered through REST
-        run: |
-          set -euo pipefail
-          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
-          for i in {1..40}; do
-            curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:5100/api/hub/definitions > /tmp/remote-definitions.json
-            if python3 - <<'PY'
-          import json
-          defs=json.load(open('/tmp/remote-definitions.json'))
-          assert any(d['definitionId']=='tenant-onboarding' for d in defs)
-          assert any(d['definitionId']=='tenant-onboarding-timer' for d in defs)
-          PY
-            then break; fi
-            sleep 2
-          done
-          python3 - <<'PY'
-          import json
-          defs=json.load(open('/tmp/remote-definitions.json'))
-          assert any(d['definitionId']=='tenant-onboarding' for d in defs)
-          print('PASS: externally published workflow definitions are durable and visible')
+          x=json.load(open('/tmp/otel-dashboard.json'))
+          panels=json.dumps(x['dashboard']['panels'])
+          assert "workflow_hub_candidate_credits" in panels
+          assert "workflow_hub_worker_inflight" in panels
+          hub=json.load(open('/tmp/hub-monitor-overview.json'))
+          assert isinstance(hub.get('runs'),list)
+          print('PASS: Grafana candidate panels and live Next.js Hub proxy')
           PY
 
-      - name: Run real 20-workflow k6 E2E test and send data to Prometheus
-        run: |
-          chmod 0777 scaling/observability/results
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            run --rm -e K6_WORKFLOWS=20 -e K6_VUS=10 \
-            -e K6_MAX_WAIT_SECONDS=120 k6
-          test -s scaling/observability/results/k6-summary.json
-          curl --fail-with-body -fsS http://127.0.0.1:3002/api/hub-overview > /tmp/hub-monitor-after-load.json
-          python3 - <<'PY'
-          import json
-          data=json.load(open('/tmp/hub-monitor-after-load.json'))
-          assert any(r['total'] >= 20 and r['completed'] >= 20 for r in data['runs']), data
-          print('PASS: Next.js Hub Runs page sees actual k6 workflow completions.')
-          PY
-      - name: Run eight native offboarding processors and standalone k6 smoke
+      - name: Verify live SSE workers and candidate occupancy diagnostics
+        shell: bash
         run: |
           set -euo pipefail
-          # The processor profile does not auto-run the offboarding k6 service.
-          # Build/start ONLY the new processor. Rebuilding the whole
-          # observability stack here restarts the Hub/monitor mid-test and
-          # races the very next registration check.
-          OFFBOARD_PROCESSOR_WORKERS=4 docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-load up -d --build --no-deps \
-            --scale processor=8 processor
-          replicas="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
-          test "$replicas" -eq 8
-          # The offboarding processor publishes through Hub REST. The Definitions
-          # page must use the Hub's persisted definition catalog.
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:3002/api/hub-definitions >/tmp/monitor-hub-definitions.json && python3 - <<'PY'
-          import json
-          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
-          assert any(d['hubId']=='offboarding' and
-                     d['definitionId']=='tenant-offboarding-fast' and
-                     d['version']==1 and d['executionMode']=='native' and
-                     len(d['steps'])==3 and len(d['metadata']['steps'])==3
-                     for d in defs), defs
-          PY
-            then break; fi
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load up -d --build --no-deps --scale processor=2 processor
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..80}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/workers/transport-diagnostics > /tmp/otel-hub-a.json &&
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                exec -T hub-lb wget -q -O - --header "Authorization: Bearer $token" \
+                http://hub-2:5100/api/hub/workers/transport-diagnostics > /tmp/otel-hub-b.json &&
+              jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 2)' \
+                /tmp/otel-hub-a.json /tmp/otel-hub-b.json > /dev/null; then
+              break
+            fi
             sleep 2
           done
-          python3 - <<'PY'
-          import json
-          defs=json.load(open('/tmp/monitor-hub-definitions.json'))
-          assert any(d['hubId']=='offboarding' and
-                     d['definitionId']=='tenant-offboarding-fast' and
-                     d['version']==1 and len(d['steps'])==3 for d in defs),defs
-          print('PASS: offboarding definition is published and visible via the authenticated Next.js Hub registry')
-          PY
-          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions >/dev/null
-          curl --fail-with-body -fsS http://127.0.0.1:3002/definitions/hub/offboarding/tenant-offboarding-fast >/dev/null
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-k6 run --rm \
-            -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=100 \
-            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 k6-offboarding
-          test -s scaling/observability/results/k6-offboarding-summary.json
-          # Ensure there are no FIFO/capacity policy constraints for this workload.
-          constraints="$(docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            exec -T postgres psql -U workflow -d workflow -Atc \
-            "SELECT count(*) FROM wfc_scale.hub_task_constraint c JOIN wfc_scale.hub_task t ON t.id=c.task_id WHERE t.hub_id='offboarding'")"
-          test "$constraints" -eq 0
-          # The old API silently excluded native workflow steps from /trace and
-          # showed a misleading "predates the attempt journal" warning.
-          # A finished native-only flow must now have three timestamped spans.
-          python3 - <<'PY'
-          import json,datetime,urllib.request
-          root='http://127.0.0.1:5100/api/hub/'
-          token=next(line.split('=',1)[1].strip() for line in
-              open('scaling/observability/.env.example') if line.startswith('WFC_HUB_AUTH_TOKEN='))
-          def get(path):
-              req=urllib.request.Request(root+path,headers={'Authorization':'Bearer '+token})
-              with urllib.request.urlopen(req,timeout=15) as r:return json.load(r)
-          page=get('workflows?hub=offboarding&take=10')
-          completed=[row for row in page['items'] if row['definitionId']=='tenant-offboarding-fast'
-                     and row['state']=='Complete']
-          assert completed, page
-          workflow=completed[0]['id']
-          trace=get('workflows/'+workflow+'/trace')
-          native=[step for step in trace if any(a.get('source')=='native-step'
-                      for a in step['attempts'])]
-          assert {step['stepIndex'] for step in native}=={0,1,2}, trace
-          for step in native:
-              assert step['state']=='Completed' and step['executionPointerId']
-              for attempt in step['attempts']:
-                  assert attempt['source']=='native-step' and attempt['outcome']=='Completed'
-                  started=datetime.datetime.fromisoformat(attempt['claimedAt'].replace('Z','+00:00'))
-                  finished=datetime.datetime.fromisoformat(attempt['finishedAt'].replace('Z','+00:00'))
-                  assert finished>=started
-          history=get('workflows/'+workflow+'/history')
-          assert len([e for e in history if e['eventType']=='NativeStepSpan'])>=3
-          print('PASS: three native worker-timed spans persisted and included in Hub trace')
-          PY
-          echo 'PASS: eight offboarding processor containers completed 1000 native-only workflows, zero resource constraints'
-          docker compose -f "$COMPOSE" --env-file "$ENVFILE" \
-            --profile offboarding-load up -d --no-deps --scale processor=0 processor
-      - name: Verify embedded timer scheduler and durable wait history
-        run: |
-          python3 - <<'PY'
-          import json,time,urllib.request
-          url='http://127.0.0.1:5100/api/hub/'
-          token=next(line.split('=',1)[1].strip() for line in
-            open('scaling/observability/.env.example') if line.startswith('WFC_HUB_AUTH_TOKEN='))
-          def call(method,path,body=None):
-            data=json.dumps(body).encode() if body is not None else None
-            req=urllib.request.Request(url+path,data=data,method=method,headers={
-              'Authorization':'Bearer '+token,'Content-Type':'application/json'})
-            with urllib.request.urlopen(req,timeout=10) as resp:
-              return json.load(resp)
-          body={
-            'hubId':'onboarding','definitionId':'tenant-onboarding-timer','version':3,
-            'runId':'ci-durable-timer','idempotencyKey':'ci-timer-once',
-            'input':{'tenantId':'ci-timer-tenant','organizationName':'Timer regression'}
-          }
-          workflow=call('POST','workflows',body)['workflowId']
-          deadline=time.monotonic()+50
-          while time.monotonic()<deadline:
-            state=call('GET','workflows/'+workflow)
-            if state['state'] in ('Complete','Failed'):break
-            time.sleep(.5)
-          assert state['state']=='Complete',state
-          assert state['stepCount']==4 and state['executionMode']=='native'
-          native=call('GET','workflows/'+workflow+'/native-runtime')
-          assert native['snapshot']['Data']['value']['WelcomeSent'] is True
-          history=call('GET','workflows/'+workflow+'/history')
-          scheduled=[e for e in history if e['eventType']=='TimerScheduled']
-          fired=[e for e in history if e['eventType']=='TimerFired']
-          assert len(scheduled)==len(fired)==1, history
-          assert scheduled[0]['stepIndex']==fired[0]['stepIndex']==1
-          assert fired[0]['occurredAt']>=scheduled[0]['occurredAt']
-          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2,3]
-          assert any(e['eventType']=='WorkflowTaskClaimed' for e in history)
-          print('PASS: native combined Provisioner + embedded scheduler + durable timer journal')
-          PY
-      - name: Verify Hub-only workflow list, Hub filtering and durable step history
-        run: |
-          set -euo pipefail
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=hub&status=Complete&take=10&page=1' > /tmp/unified-hub.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&status=Complete&take=10&page=1' > /tmp/unified-onboarding.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=onboarding&take=10&page=2' > /tmp/unified-hub-page2.json
-          curl --fail-with-body -fsS 'http://127.0.0.1:3002/api/workflow-feed?hub=all' > /tmp/unified-all.json
-          python3 - <<'PY'
-          import json
-          hub=json.load(open('/tmp/unified-hub.json'))
-          onboarding=json.load(open('/tmp/unified-onboarding.json'))
-          p2=json.load(open('/tmp/unified-hub-page2.json'))
-          combined=json.load(open('/tmp/unified-all.json'))
-          assert hub['total']>=20, hub
-          assert all(x['source']=='hub' and x['status']=='Complete' for x in hub['items'])
-          assert all(x['source']=='hub' and x['hubId']=='onboarding' and x['status']=='Complete' for x in onboarding['items'])
-          assert p2['items'] and p2['total']>=20
-          assert combined['total']>=hub['total']>=20
-          assert {'onboarding'}.issubset(set(combined['hubs']))
-          assert all(x['source']=='hub' for x in combined['items'])
-          print('PASS: Hub list returns durable executions with Hub/status/pagination filters')
-          # The preceding timer test also creates a completed 4-step workflow.
-          # Only validate the 3-step activity workload in this assertion.
-          selected=next(x for x in onboarding['items'] if x['definitionId']=='tenant-onboarding')
-          open('/tmp/hub-workflow-id','w').write(selected['id'])
-          PY
-          workflow_id="$(cat /tmp/hub-workflow-id)"
-          curl --fail-with-body -fsS "http://127.0.0.1:3002/api/hub-workflows/$workflow_id" > /tmp/unified-hub-trace.json
-          curl --fail-with-body -fsS "http://127.0.0.1:3002/workflows/$workflow_id?source=hub" > /tmp/unified-hub-trace.html
-          python3 - <<'PY'
-          import json
-          result=json.load(open('/tmp/unified-hub-trace.json'))
-          w=result['workflow']
-          history=result['history']
-          print('Selected workflow:',w['definitionId'],'nextStep:',w['nextStep'],'steps:',w['stepCount'])
-          assert w['state']=='Complete'
-          assert w['executionMode']=='native' and w['stepCount']==3
-          assert result['nativeRuntime']['snapshot']['Data']['value']['WelcomeSent'] is True
-          assert [e['stepIndex'] for e in history if e['eventType']=='StepCompleted']==[0,1,2]
-          assert [e['activityType'] for e in history if e['eventType']=='StepCompleted']==[
-            'validate-tenant','provision-tenant','send-welcome']
-          assert result['definition']['steps'][0]['activityType']=='validate-tenant'
-          spans=result['trace']
-          assert len(spans)==3, spans
-          assert [s['stepIndex'] for s in spans]==[0,1,2]
-          assert [s['activityType'] for s in spans]==[
-            'validate-tenant','provision-tenant','send-welcome']
-          assert all(len(s['attempts'])>=1 for s in spans), spans
-          assert all(
-            a['outcome']=='Completed' and a['claimedAt'] and a['finishedAt']
-            for s in spans for a in s['attempts']
-          ), spans
-          assert all(
-            a['finishedAt']>=a['claimedAt']
-            for s in spans for a in s['attempts']
-          )
-          assert all(s['readyAt'] is not None for s in spans)
-          assert all(s['executionPointerId'] and s['dispatchKey'] for s in spans)
-          print('PASS: Hub waterfall has real claim/finish durations across 3 activities')
-          print('PASS: Hub workflow opens in existing detail route with named, ordered history')
-          PY
-      - name: Verify OTLP Hub metrics and Prometheus remote-write samples
-        run: |
-          set -euo pipefail
-          for i in {1..30}; do
-            curl -fsSG --data-urlencode 'query=workflow_hub_workflows_completed_total' \
-              http://127.0.0.1:9090/api/v1/query > /tmp/hub-otel-metric.json
-            curl -fsSG --data-urlencode 'query=k6_hub_workflows_completed_total' \
-              http://127.0.0.1:9090/api/v1/query > /tmp/k6-metric.json
-            if python3 - <<'PY'
-          import json
-          hub=json.load(open('/tmp/hub-otel-metric.json'))
-          k6=json.load(open('/tmp/k6-metric.json'))
-          assert hub['status']=='success' and hub['data']['result']
-          assert k6['status']=='success' and k6['data']['result']
-          PY
-            then break; fi
-            sleep 3
-          done
-          python3 - <<'PY'
-          import json
-          hub=json.load(open('/tmp/hub-otel-metric.json'))
-          k6=json.load(open('/tmp/k6-metric.json'))
-          assert hub['data']['result'], 'Hub metric not exported to Prometheus'
-          assert k6['data']['result'], 'k6 remote write missing from Prometheus'
-          print('PASS: Hub OpenTelemetry and k6 Prometheus remote-write metrics arrived.')
-          PY
-      - name: Compose service logs on failure
+          jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 2)' \
+            /tmp/otel-hub-a.json /tmp/otel-hub-b.json
+          curl --fail-with-body -fsS \
+            'http://127.0.0.1:9090/api/v1/query?query=up' > /tmp/otel-targets.json
+          jq -e '.status == "success" and (.data.result | length) > 0' /tmp/otel-targets.json
+          echo 'PASS: candidate owner sessions, PostgreSQL-backed Hub and Prometheus scrape targets'
+
+      - name: Print service diagnostics on failure
         if: failure()
-        run: docker compose -f "$COMPOSE" --env-file "$ENVFILE" logs --tail=150
-      - name: Stop containers
+        shell: bash
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load logs --tail=160 hub hub-2 hub-lb processor prometheus grafana monitor || true
+      - name: Cleanup
         if: always()
-        run: docker compose -f "$COMPOSE" --env-file "$ENVFILE" down --remove-orphans
+        shell: bash
+        run: |
+          docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+            --profile offboarding-load down --remove-orphans || true

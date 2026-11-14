@@ -176,8 +176,10 @@ The authenticated `GET /api/hub/workers/transport-diagnostics` reports
 `candidateEnabled`, `candidateCredits`, `candidateReservations`,
 `candidateUncertain`, `candidateBuffered`, `candidateAdmissionsActive`,
 connected push sessions and claim/delivery counters. An idle SSE session may
-hold **one pending candidate credit** while waiting for work; this is not a
-leaked committed lease.
+reserve **up to four pending candidate credits per acquisition turn**. A
+waiting credit is not a committed lease; confirmed grants should promptly
+retire matching credits, while outstanding SSE deliveries remain charged to
+their worker session. Failover tests verify bounded credits after completion.
 
 Track workflow/task backlog, schedule-to-start p95/p99, actual lease
 expiries, attempt exhaustion, owner epoch changes, admission wait, resource
