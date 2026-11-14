@@ -225,9 +225,9 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_NATIVE_EVENT_LANE_MODE := subscriptions
 $(OBS_GOLDEN_TARGETS): export HUB_SCHEDULER_ENABLED := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_ADAPTIVE_CLAIMS := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := 4
-$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := true
-$(OBS_GOLDEN_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := true
-$(OBS_GOLDEN_TARGETS): export WFC_HUB_TASK_SSE_PUSH := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_EVENT_GATED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_LONG_POLL_ENABLED := false
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_TASK_SSE_PUSH := false
 $(OBS_GOLDEN_TARGETS): export WORKFLOW_WORKERS := 8
 $(OBS_GOLDEN_TARGETS): export ACTIVITY_WORKERS := 8
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_SHARD_POLLS := 4
@@ -241,6 +241,7 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := http://hub:5100,http://hub-2:5100
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_CANDIDATES_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_ADMISSION_CONCURRENCY := 3
 obs-up: obs-owner-recovery-up
 # Start the default observability stack with 16 processor containers.
 ups-16: OBS_PROCESSORS := 16
@@ -255,3 +256,10 @@ obs-test: K6_POLICY_COUNT := 16000
 obs-test: K6_POLICY_VUS := 200
 obs-test: K6_POLICY_TIMEOUT_SECONDS := 1800
 obs-test: obs-owner-recovery-stress-test
+
+# Candidate matching + fenced SSE is the primary Hub transport. Run every
+# destructive failover window against isolated PostgreSQL databases.
+.PHONY: obs-matcher-failover
+obs-matcher-failover:
+	@dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
+	@$(PWSH) -NoProfile -File scaling/benchmarks/hub-matching-failover-suite.ps1
