@@ -3,7 +3,7 @@ using WorkflowCore.Hub;
 
 namespace WorkflowCore.Hub.Gateway;
 
-// Candidate mode is opt-in. One instance owns all generations and transports;
+// Primary Hub matching coordinator (rollback remains configuration-gated).
 // workers never receive direct access to discovery or to PostgreSQL.
 public sealed class HubCandidateAcquisition : BackgroundService
 {
