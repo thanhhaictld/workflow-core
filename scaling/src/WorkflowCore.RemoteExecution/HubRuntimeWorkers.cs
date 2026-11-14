@@ -797,34 +797,49 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 await Task.WhenAll(draining);
             }
             if (ct.IsCancellationRequested) break;
-            // On an uncertain disconnect, wait out both session and task TTLs,
-            // then require either an old-owner revocation barrier or a changed /
-            // expired database owner epoch before reusing this lane's credit.
+            // An uncertain disconnect does not require a fixed 75-second sleep:
+            // first ask the original owner for a revocation barrier. A 204/404
+            // proves its in-memory session is closed and no claim/send is active.
+            // Otherwise only a changed/expired database ownership epoch can
+            // safely free this lane's credit. Never reuse credits on a timeout.
             if (connected && !revoked && session is not null)
             {
-                await Task.Delay(TimeSpan.FromSeconds(75), ct);
+                var reconciliationStarted = Stopwatch.GetTimestamp();
+                var warned = false;
                 while (!ct.IsCancellationRequested)
                 {
+                    using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    probe.CancelAfter(TimeSpan.FromSeconds(3));
                     try
                     {
                         using var revoke = await client.Http.PostAsync(new Uri(target,
-                            $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, ct);
-                        if (revoke.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound) break;
+                            $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, probe.Token);
+                        if (revoke.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound)
+                        {
+                            revoked = true;
+                            break;
+                        }
                     }
                     catch (HttpRequestException) { }
                     catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
                     try
                     {
                         using var owner = await client.Http.GetAsync(
-                            $"api/hub/workers/push-owners/{Uri.EscapeDataString(hub)}/{partition}", ct);
+                            $"api/hub/workers/push-owners/{Uri.EscapeDataString(hub)}/{partition}", probe.Token);
                         if (owner.StatusCode == HttpStatusCode.NotFound) break;
                         owner.EnsureSuccessStatusCode();
-                        var current = await owner.Content.ReadFromJsonAsync<HubMatchingPartitionLease>(cancellationToken: ct);
+                        var current = await owner.Content.ReadFromJsonAsync<HubMatchingPartitionLease>(cancellationToken: probe.Token);
                         if (current is not null && (current.Epoch != session.OwnerEpoch || current.LeaseUntil <= DateTime.UtcNow)) break;
                     }
                     catch (HttpRequestException) { }
                     catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
-                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                    if (!warned && Stopwatch.GetElapsedTime(reconciliationStarted) > TimeSpan.FromSeconds(75))
+                    {
+                        warned = true;
+                        logger.LogWarning("Push session reconciliation exceeded 75s for partition {Partition}; credits remain fenced",
+                            partition);
+                    }
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
                 }
             }
             else if (!connected) await Task.Delay(TimeSpan.FromSeconds(1), ct);
