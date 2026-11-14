@@ -47,7 +47,7 @@ services:
       WorkflowHub__Scheduler__MaxConcurrentBatches: "2"
       WFC_HUB_MATCHING_ENABLED: "true"
       WFC_HUB_MATCHING_NODE_ID: hub-b
-      WFC_HUB_PUSH_ENABLED: "${WFC_HUB_PUSH_ENABLED:-false}"
+      WFC_HUB_PUSH_ENABLED: "${WFC_HUB_PUSH_ENABLED:-true}"
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: "${WFC_HUB_MATCHING_CANDIDATES_ENABLED:-true}"
       WFC_HUB_MATCHING_ADVERTISE_URL: http://hub-2:5100
       WFC_HUB_MATCHING_PEERS: http://hub:5100,http://hub-2:5100
@@ -88,7 +88,8 @@ services:
         condition: service_healthy
     environment:
       WFC_HUB_URL: http://hub-lb:5100
-      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
+      WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-false}"
+      WFC_HUB_PUSH_ENABLED: "${WFC_HUB_PUSH_ENABLED:-true}"
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: "${WFC_HUB_MATCHING_CANDIDATES_ENABLED:-true}"
       WFC_HUB_PUSH_TRUSTED_OWNERS: http://hub:5100,http://hub-2:5100
 
