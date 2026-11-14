@@ -3,8 +3,14 @@ using WorkflowCore.Hub;
 
 namespace WorkflowCore.Hub.Gateway;
 
+/// <summary>Transient in-memory demand saturation. No task lease or attempt was created.</summary>
+public sealed class HubCandidateBackpressureException : Exception
+{
+    public HubCandidateBackpressureException() : base("Candidate demand capacity exceeded") { }
+}
+
 // Primary Hub matching coordinator (rollback remains configuration-gated).
-// workers never receive direct access to discovery or to PostgreSQL.
+// Workers never receive direct access to discovery or to PostgreSQL.
 public sealed class HubCandidateAcquisition : BackgroundService
 {
     private sealed class Demand(HubClaimRequest request)
@@ -81,7 +87,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 if(!_registry.AddCredit(hub,partition,owner.Epoch,credit)) { _demands.TryRemove(id,out _); break; }
                 demand.Credits.Add(id);
             }
-            if(demand.Credits.Count==0) throw new InvalidOperationException("Candidate demand capacity exceeded");
+            if(demand.Credits.Count==0) throw new HubCandidateBackpressureException();
             using var cancellation=ct.Register(() =>
             {
                 lock(demand.Gate)
