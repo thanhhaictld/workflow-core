@@ -61,6 +61,24 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_tasks_completed", "{task}");
     public static readonly Counter<long> TasksFailed =
         Meter.CreateCounter<long>("workflow_hub_tasks_failed", "{task}");
+    private static long _candidateCredits, _candidateReservations, _candidateEntries, _candidateBytes;
+    private static readonly ObservableGauge<long> CandidateCredits = Meter.CreateObservableGauge(
+        "workflow_hub_candidate_credits", () => Volatile.Read(ref _candidateCredits), "{credit}");
+    private static readonly ObservableGauge<long> CandidateReservations = Meter.CreateObservableGauge(
+        "workflow_hub_candidate_reservations", () => Volatile.Read(ref _candidateReservations), "{reservation}");
+    private static readonly ObservableGauge<long> CandidateEntries = Meter.CreateObservableGauge(
+        "workflow_hub_candidate_entries", () => Volatile.Read(ref _candidateEntries), "{candidate}");
+    private static readonly ObservableGauge<long> CandidateBytes = Meter.CreateObservableGauge(
+        "workflow_hub_candidate_bytes", () => Volatile.Read(ref _candidateBytes), "By");
+    public static readonly Counter<long> CandidateCapacityFallbacks =
+        Meter.CreateCounter<long>("workflow_hub_candidate_capacity_fallbacks", "{fallback}");
+    public static void PublishCandidateSnapshot(int credits, int reservations, int entries, long bytes)
+    {
+        Interlocked.Exchange(ref _candidateCredits, credits);
+        Interlocked.Exchange(ref _candidateReservations, reservations);
+        Interlocked.Exchange(ref _candidateEntries, entries);
+        Interlocked.Exchange(ref _candidateBytes, bytes);
+    }
     // PostgreSQL hub-scoped advisory lock wait; tracks implicit native-runtime
     // coordination even if no activity-level FIFO/resource policy is configured.
     public static readonly Histogram<double> NativeEventLaneLockWait =
@@ -211,6 +229,7 @@ public static class HubTelemetry
         Volatile.Write(ref _databaseSnapshot, stats);
 
     public static KeyValuePair<string, object?> HubTag(string hub) => new("hub", hub);
+    public static KeyValuePair<string, object?> TaskKindTag(string kind) => new("task_kind", kind);
     public static KeyValuePair<string, object?> ActivityTag(string type) =>
         new("activity_type", type);
 }

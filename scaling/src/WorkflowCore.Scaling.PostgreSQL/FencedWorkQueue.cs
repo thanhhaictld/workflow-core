@@ -17,14 +17,16 @@ public sealed class FencedWorkQueue : IAsyncDisposable
     public NpgsqlDataSource DataSource => _dataSource;
 
     public async Task<IReadOnlyList<LeasedWork>> ClaimAsync(string queue, string owner, int count,
-        TimeSpan lease, int maxAttempts, CancellationToken ct)
+        TimeSpan lease, int maxAttempts, CancellationToken ct, Guid? itemId = null)
     {
         if (count < 1 || lease <= TimeSpan.Zero || maxAttempts < 1)
             throw new ArgumentOutOfRangeException(nameof(count));
-        await using var cmd = _dataSource.CreateCommand("""
+        var itemFilter = itemId.HasValue ? "AND item_id = @item_id" : string.Empty;
+        await using var cmd = _dataSource.CreateCommand($"""
             WITH candidates AS (
                 SELECT id FROM wfc_scale.work_item
                 WHERE queue_name = @queue AND attempts < @maximum
+                  {itemFilter}
                   AND ((state = 0 AND due_at <= now())
                     OR (state = 1 AND lease_until < now()))
                 ORDER BY due_at, id
@@ -41,6 +43,8 @@ public sealed class FencedWorkQueue : IAsyncDisposable
         cmd.Parameters.AddWithValue("queue", queue);
         cmd.Parameters.AddWithValue("owner", owner);
         cmd.Parameters.AddWithValue("maximum", maxAttempts);
+        if (itemId.HasValue)
+            cmd.Parameters.AddWithValue("item_id", NpgsqlDbType.Uuid, itemId.Value);
         cmd.Parameters.AddWithValue("count", count);
         cmd.Parameters.AddWithValue("lease", NpgsqlDbType.Interval, lease);
         var result = new List<LeasedWork>();

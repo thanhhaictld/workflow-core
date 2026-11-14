@@ -1,7 +1,11 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using WorkflowCore.Hub;
 
 namespace WorkflowCore.Hub.Gateway;
+
+internal sealed class HubCandidateCapacityException()
+    : InvalidOperationException("Candidate demand capacity exceeded");
 
 // Candidate mode is opt-in. One instance owns all generations and transports;
 // workers never receive direct access to discovery or to PostgreSQL.
@@ -24,6 +28,8 @@ public sealed class HubCandidateAcquisition : BackgroundService
     private readonly ILogger<HubCandidateAcquisition> _logger;
     private readonly ConcurrentDictionary<string,Demand> _demands = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(Guid Id,long Epoch),Retained> _retained = new();
+    private readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+        { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
     public bool Enabled => _ownership.CandidateTopology;
 
     public HubCandidateAcquisition(HubTaskStore tasks, HubMatchingOwnership ownership,
@@ -45,6 +51,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
         foreach(var owner in _registry.ActiveOwners())
             if(owner.HubId==hub && (taskPartition is null || taskPartition.Value % _ownership.PartitionCount == owner.Partition))
                 _registry.Notify(hub,owner.Partition,owner.Epoch);
+        _wake.Writer.TryWrite(true);
     }
     internal int GenerationCount => _registry.Snapshot().Partitions;
 
@@ -66,7 +73,12 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 if(!_registry.AddCredit(hub,partition,owner.Epoch,credit)) { _demands.TryRemove(id,out _); break; }
                 demand.Credits.Add(id);
             }
-            if(demand.Credits.Count==0) throw new InvalidOperationException("Candidate demand capacity exceeded");
+            if(demand.Credits.Count==0)
+            {
+                HubTelemetry.CandidateCapacityFallbacks.Add(1);
+                throw new HubCandidateCapacityException();
+            }
+            _wake.Writer.TryWrite(true);
             using var cancellation=ct.Register(() =>
             {
                 lock(demand.Gate)
@@ -91,16 +103,42 @@ public sealed class HubCandidateAcquisition : BackgroundService
     {
         if(!Enabled) return;
         using var timer=new PeriodicTimer(TimeSpan.FromMilliseconds(50));
+        var timerTick=timer.WaitForNextTickAsync(stoppingToken).AsTask();
+        var wake=_wake.Reader.ReadAsync(stoppingToken).AsTask();
         var reaper=0;
         try
         {
-            while(await timer.WaitForNextTickAsync(stoppingToken))
+            while(true)
             {
+                var signaled=await Task.WhenAny(timerTick,wake);
+                if(signaled==timerTick)
+                {
+                    if(!await timerTick) break;
+                    timerTick=timer.WaitForNextTickAsync(stoppingToken).AsTask();
+                }
+                else
+                {
+                    try { await wake; } catch(ChannelClosedException) { break; }
+                    while(_wake.Reader.TryRead(out _)) { }
+                    wake=_wake.Reader.ReadAsync(stoppingToken).AsTask();
+                }
                 try
                 {
-                    await _registry.RunOneTurnAsync(DateTimeOffset.UtcNow,stoppingToken);
-                    await DrainAsync(stoppingToken);
-                    if(++reaper%20==0) await ReapAsync(stoppingToken);
+                    // Keep each activation bounded; if it uses the whole budget,
+                    // queue one coalesced continuation so long sweeps do not wait
+                    // for a timer tick and partition rotation remains fair.
+                    var turns=0;
+                    for(;turns<16;turns++)
+                    {
+                        var progressed=await _registry.RunOneTurnAsync(DateTimeOffset.UtcNow,stoppingToken);
+                        await DrainAsync(stoppingToken);
+                        var snapshot=_registry.Snapshot();
+                        HubTelemetry.PublishCandidateSnapshot(snapshot.Credits,snapshot.Reservations,
+                            snapshot.Entries,snapshot.Bytes);
+                        if(++reaper%20==0) await ReapAsync(stoppingToken);
+                        if(!progressed) break;
+                    }
+                    if(turns==16) _wake.Writer.TryWrite(true);
                 }
                 catch(OperationCanceledException) when(stoppingToken.IsCancellationRequested) { break; }
                 catch(Exception ex)
@@ -116,6 +154,17 @@ public sealed class HubCandidateAcquisition : BackgroundService
             foreach(var demand in _demands.Values.Distinct()) demand.Result.TrySetCanceled(stoppingToken);
             _registry.Dispose();
         }
+    }
+
+    // Completion/failure acknowledgement is authoritative lease retirement.
+    // It can safely release candidate memory before the original lease deadline.
+    internal void ReleaseCompletedLease(Guid id,long epoch)
+    {
+        if(!_retained.TryRemove((id,epoch),out var item)) return;
+        if(item.Reservation is Guid reservation)
+            _registry.ResolveUncertain(reservation,HubCandidateUncertainResolution.LeaseConfirmed,DateTimeOffset.UtcNow);
+        _registry.ReleaseGrantedCredit(item.Credit);
+        _wake.Writer.TryWrite(true);
     }
     private async Task DrainAsync(CancellationToken ct)
     {

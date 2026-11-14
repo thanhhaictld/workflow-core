@@ -95,8 +95,7 @@ public sealed class DistributedRuntimeTests
         var engine = provider.GetRequiredService<DistributedWorkflowEngine>();
         var queue = provider.GetRequiredService<FencedWorkQueue>();
         var id = await engine.StartAsync("distributed-smoke");
-        var work = Assert.Single(await queue.ClaimAsync("workflow", "test-worker", 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var work = await ClaimSpecificAsync(queue, "workflow", "test-worker", id);
         Assert.Equal(id, work.ItemId);
         var fence = await queue.AcquireWorkflowAsync(id, "test-worker",
             TimeSpan.FromSeconds(30), CancellationToken.None);
@@ -135,8 +134,7 @@ public sealed class DistributedRuntimeTests
         Assert.Equal(new[] { "WorkflowStarted" },
             (await history.ReadAsync(id)).Select(x => x.Event.EventType));
 
-        var work = Assert.Single(await queue.ClaimAsync("workflow", "journal-test", 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var work = await ClaimSpecificAsync(queue, "workflow", "journal-test", id);
         var fence = await queue.AcquireWorkflowAsync(id, "journal-test",
             TimeSpan.FromSeconds(30), CancellationToken.None);
         Assert.NotNull(fence);
@@ -199,8 +197,8 @@ public sealed class DistributedRuntimeTests
         var history = provider.GetRequiredService<ExecutionHistoryStore>();
         var id = await engine.StartAsync("history-retry", new RetryData());
 
-        await RunWorkflowAsync(queue, engine, "retry-history-test");
-        await RunWorkflowAsync(queue, engine, "retry-history-test");
+        await RunWorkflowAsync(queue, engine, "retry-history-test", id);
+        await RunWorkflowAsync(queue, engine, "retry-history-test", id);
 
         var timeline = await history.ReadAsync(id);
         var started = timeline.Where(x => x.Event.EventType == "StepAttemptStarted").ToArray();
@@ -308,9 +306,8 @@ public sealed class DistributedRuntimeTests
 
         // Drain both queues so later tests do not observe work from this test.
         var queue = provider.GetRequiredService<FencedWorkQueue>();
-        await RunWorkflowAsync(queue, engine, "idempotency-worker");
-        var eventWork = Assert.Single(await queue.ClaimAsync("event", "idempotency-worker", 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        await RunWorkflowAsync(queue, engine, "idempotency-worker", a);
+        var eventWork = await ClaimSpecificAsync(queue, "event", "idempotency-worker", signalA);
         Assert.Equal(signalA, eventWork.ItemId);
         await engine.ExecuteEventAsync(eventWork, "idempotency-worker", CancellationToken.None);
     }
@@ -334,8 +331,7 @@ public sealed class DistributedRuntimeTests
 
         // There is no subscription yet: the initial event message is ACKed
         // but the durable event stays unprocessed for future WaitFor creation.
-        var eventWork = Assert.Single(await queue.ClaimAsync("event", "signal-test", 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var eventWork = await ClaimSpecificAsync(queue, "event", "signal-test", eventId);
         Assert.Equal(eventId, eventWork.ItemId);
         await engine.ExecuteEventAsync(eventWork, "signal-test", CancellationToken.None);
 
@@ -344,7 +340,7 @@ public sealed class DistributedRuntimeTests
         for (var iteration = 0; iteration < 12 && subscriptionCount == 0; iteration++)
         {
             // Workflow Core advances its execution pointer one step at a time.
-            await RunWorkflowAsync(queue, engine, "start-wait");
+            await RunWorkflowAsync(queue, engine, "start-wait", workflowId);
             await using var db = new PostgresContext(Connection, "wfc");
             subscriptionCount = await db.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedSubscription>()
                 .CountAsync(x => x.WorkflowId == workflowId.ToString());
@@ -353,14 +349,13 @@ public sealed class DistributedRuntimeTests
 
         // Persisting the subscription must enqueue a NEW event work item
         // for the previously received event, without a process restart.
-        var replay = Assert.Single(await queue.ClaimAsync("event", "signal-replay", 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var replay = await ClaimSpecificAsync(queue, "event", "signal-replay", eventId);
         Assert.Equal(eventId, replay.ItemId);
         await engine.ExecuteEventAsync(replay, "signal-replay", CancellationToken.None);
         WorkflowStatus? finalStatus = null;
         for (var iteration = 0; iteration < 12 && finalStatus != WorkflowStatus.Complete; iteration++)
         {
-            await RunWorkflowAsync(queue, engine, "resume-wait");
+            await RunWorkflowAsync(queue, engine, "resume-wait", workflowId);
             await using var verify = new PostgresContext(Connection, "wfc");
             finalStatus = await verify.Set<WorkflowCore.Persistence.EntityFramework.Models.PersistedWorkflow>()
                 .Where(x => x.InstanceId == workflowId).Select(x => x.Status).SingleAsync();
@@ -373,15 +368,28 @@ public sealed class DistributedRuntimeTests
     }
 
     private static async Task RunWorkflowAsync(
-        FencedWorkQueue queue, DistributedWorkflowEngine engine, string owner)
+        FencedWorkQueue queue, DistributedWorkflowEngine engine, string owner, Guid workflowId)
     {
-        var item = Assert.Single(await queue.ClaimAsync("workflow", owner, 1,
-            TimeSpan.FromSeconds(30), 5, CancellationToken.None));
+        var item = await ClaimSpecificAsync(queue, "workflow", owner, workflowId);
         var gate = await queue.AcquireWorkflowAsync(item.ItemId, owner,
             TimeSpan.FromSeconds(30), CancellationToken.None);
         Assert.NotNull(gate);
         try { await engine.ExecuteWorkflowAsync(item, gate!, owner, CancellationToken.None); }
         finally { await queue.ReleaseGateAsync(gate!, CancellationToken.None); }
+    }
+
+    private static async Task<LeasedWork> ClaimSpecificAsync(
+        FencedWorkQueue queue, string queueName, string owner, Guid itemId)
+    {
+        IReadOnlyList<LeasedWork> claimed = [];
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (claimed.Count == 0 && !timeout.IsCancellationRequested)
+        {
+            claimed = await queue.ClaimAsync(queueName, owner, 1,
+                TimeSpan.FromSeconds(30), 5, timeout.Token, itemId);
+            if (claimed.Count == 0) await Task.Delay(20, timeout.Token);
+        }
+        return Assert.Single(claimed);
     }
 
     public sealed class WaitData

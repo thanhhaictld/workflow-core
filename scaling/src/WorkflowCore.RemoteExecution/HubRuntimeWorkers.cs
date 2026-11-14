@@ -866,7 +866,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         span?.SetTag("task.id",task.Id.ToString());
         span?.SetTag("task.epoch",task.Epoch);
         var started=Stopwatch.GetTimestamp();var outcome="failure";
-        if(isActivity)HubTelemetry.WorkerInflight.Add(1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType));
+        HubTelemetry.WorkerInflight.Add(1,HubTelemetry.HubTag(task.HubId),
+            HubTelemetry.TaskKindTag(isActivity ? "activity" : "workflow"),
+            isActivity ? HubTelemetry.ActivityTag(task.TaskType) : new KeyValuePair<string, object?>("activity_type", "none"));
         using var execution=CancellationTokenSource.CreateLinkedTokenSource(shutdown);
         execution.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1,(task.LeaseUntil-DateTime.UtcNow).TotalMilliseconds)));
         using var heartbeatStop=CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -933,9 +935,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         finally
         {
             span?.SetTag("task.outcome",outcome);
+            HubTelemetry.WorkerInflight.Add(-1,HubTelemetry.HubTag(task.HubId),
+                HubTelemetry.TaskKindTag(isActivity ? "activity" : "workflow"),
+                isActivity ? HubTelemetry.ActivityTag(task.TaskType) : new KeyValuePair<string, object?>("activity_type", "none"));
             if(isActivity)
             {
-                HubTelemetry.WorkerInflight.Add(-1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType));
                 HubTelemetry.WorkerExecutions.Add(1,HubTelemetry.HubTag(task.HubId),HubTelemetry.ActivityTag(task.TaskType),
                     new KeyValuePair<string,object?>("outcome",outcome));
                 HubTelemetry.WorkerExecutionDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds,

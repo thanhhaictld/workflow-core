@@ -380,7 +380,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Started, completed and failed workflows/s",
+      "title": "Workflow starts/completions, row-lock and claim latency",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -412,21 +412,95 @@
           "legendFormat": "Failed/s",
           "range": true,
           "interval": ""
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "range": true,
+          "legendFormat": "Row lock p95 {{event_lane_mode}}"
+        },
+        {
+          "refId": "E",
+          "expr": "histogram_quantile(0.99,sum by(le,event_lane_mode)(rate(workflow_hub_native_workflow_row_lock_duration_seconds_bucket[2m])))",
+          "range": true,
+          "legendFormat": "Row lock p99 {{event_lane_mode}}"
+        },
+        {
+          "refId": "F",
+          "expr": "histogram_quantile(0.95,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "range": true,
+          "legendFormat": "P0 claim p95 {{history_mode}} {{outcome}}"
+        },
+        {
+          "refId": "G",
+          "expr": "histogram_quantile(0.99,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "range": true,
+          "legendFormat": "P0 claim p99 {{history_mode}} {{outcome}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": 13,
+          "unit": "s",
           "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 13,
+            "fillOpacity": 8,
+            "spanNulls": true,
             "showPoints": "never",
-            "spanNulls": true
+            "drawStyle": "line",
+            "axisPlacement": "left",
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ],
+            "matcher": {
+              "options": "Started/s",
+              "id": "byName"
+            }
+          },
+          {
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ],
+            "matcher": {
+              "options": "Completed/s",
+              "id": "byName"
+            }
+          },
+          {
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ],
+            "matcher": {
+              "options": "Failed/s",
+              "id": "byName"
+            }
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -440,7 +514,8 @@
           "mode": "multi",
           "sort": "none"
         }
-      }
+      },
+      "description": "Correlate workflow throughput with row-lock p95/p99 by event lane lock mode and P0 claim p95/p99 by history mode and outcome. Latency uses the left axis (seconds); workflow rates use the right axis (workflows/second). Percentiles are histogram estimates."
     },
     {
       "id": 9,
@@ -567,8 +642,9 @@
     },
     {
       "id": 11,
-      "type": "timeseries",
-      "title": "Remote worker inflight tasks",
+      "type": "state-timeline",
+      "title": "Worker in-flight task buckets by worker and kind",
+      "description": "Each row is a worker service instance and task kind (activity or workflow). The color and cell label show concurrent in-flight tasks over time (0, 1-2, 3-4, 5-8, 9-16, 17+). This is a live gauge, not a cumulative task count.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -582,37 +658,104 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_instance_id) (workflow_hub_worker_inflight)",
-          "legendFormat": "{{service_instance_id}}",
+          "expr": "sum by (service_instance_id, task_kind) (workflow_hub_worker_inflight)",
+          "legendFormat": "{{service_instance_id}} / {{task_kind}}",
           "range": true,
+          "instant": false,
           "interval": ""
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 13,
-            "showPoints": "never",
-            "spanNulls": true
-          }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "0 tasks",
+                  "color": "#5794F2"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 2,
+                "result": {
+                  "text": "1-2 tasks",
+                  "color": "#73BF69"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 3,
+                "to": 4,
+                "result": {
+                  "text": "3-4 tasks",
+                  "color": "#FADE2A"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 5,
+                "to": 8,
+                "result": {
+                  "text": "5-8 tasks",
+                  "color": "#FF9830"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 9,
+                "to": 16,
+                "result": {
+                  "text": "9-16 tasks",
+                  "color": "#F2495C"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 17,
+                "to": 1000000,
+                "result": {
+                  "text": "17+ tasks",
+                  "color": "#B877D9"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": false,
+        "rowHeight": 0.9,
         "tooltip": {
-          "mode": "multi",
+          "mode": "single",
           "sort": "none"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
         }
       }
     },
@@ -1898,6 +2041,44 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "Candidate registry occupancy",
+      "description": "Current in-process candidate credits, reservations and cached task metadata. These process-wide gauges are not task completion counts.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 157, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "workflow_hub_candidate_credits", "legendFormat": "credits", "range": true },
+        { "refId": "B", "expr": "workflow_hub_candidate_reservations", "legendFormat": "reservations", "range": true },
+        { "refId": "C", "expr": "workflow_hub_candidate_entries", "legendFormat": "cached entries", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] }
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "Candidate registry memory estimate",
+      "description": "Estimated managed bytes charged to candidate metadata, credits, and in-flight database pages.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 157, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "workflow_hub_candidate_bytes", "legendFormat": "estimated bytes", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] }
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Candidate credit capacity fallback rate",
+      "description": "Rate of candidate acquisitions that could not reserve one bounded credit and used the existing owner-fenced claim fallback.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 165, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(workflow_hub_candidate_capacity_fallbacks_total[5m]))", "legendFormat": "fallbacks/s", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] }
     }
   ],
   "description": "Process memory, workflow throughput, concurrency, PostgreSQL pressure, HTTP latency and k6 load-test metrics."
