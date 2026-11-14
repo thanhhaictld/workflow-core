@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using WorkflowCore.Hub;
 using WorkflowCore.Hub.Client;
 using WorkflowCore.Interface;
@@ -17,6 +18,10 @@ public sealed class HubRuntimeOptions
     public bool AllowInsecureHttp { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true";
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
+    // Logical lane replicas within one host, intended for controlled load tests.
+    public int LaneInstances { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_LANE_INSTANCES"), out var lanes) ? lanes : 1;
+    public string? WorkerHub { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_WORKER_HUB");
     // Opt-in processor-side cap. Applies independently to workflow and
     // activity lanes, including long-poll demand; 0 keeps legacy settings.
     public int WorkerConcurrencyCap { get; set; } =
@@ -27,6 +32,11 @@ public sealed class HubRuntimeOptions
     // Polls wait server-side; failed long-poll requests retry with backoff.
     public bool LongPollingEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_LONG_POLL_ENABLED") is "true" or "1" or "True";
+    public bool PushEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
+    public string[] PushTrustedOwners { get; set; } =
+        (Environment.GetEnvironmentVariable("WFC_HUB_PUSH_TRUSTED_OWNERS") ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     // Every processor and Hub replica must use the same count. The Hub also
     // enforces an immutable per-namespace count stored in PostgreSQL.
     public int MatchingPartitions { get; set; } =
@@ -167,6 +177,7 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
+           options.LaneInstances is <1 or >2000 ||
            options.WorkerConcurrencyCap is < 0 or > 256 ||
            options.PollInterval<TimeSpan.FromMilliseconds(10) ||
            options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
@@ -191,8 +202,11 @@ public static class HubWorkflowRuntimeExtensions
         services.AddHostedService<HubRuntimePublisher>();
         if(!options.RegisterOnly)
         {
-            services.AddHostedService<HubNativeWorkflowWorker>();
-            services.AddHostedService<HubNativeActivityWorker>();
+            for (var i = 0; i < options.LaneInstances; i++)
+            {
+                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeWorkflowWorker>(sp));
+                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeActivityWorker>(sp));
+            }
         }
         return new(services);
     }

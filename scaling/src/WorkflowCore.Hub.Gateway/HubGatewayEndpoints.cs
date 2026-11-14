@@ -12,6 +12,7 @@ namespace WorkflowCore.Hub.Gateway;
 /// </summary>
 public static class HubGatewayEndpoints
 {
+    private static long _pullClaims, _pullEmptyClaims, _pullFailedClaims;
     // Optional: the matcher verifies the current PostgreSQL ownership epoch
     // immediately before every SQL task claim. The Gateway has already read
     // the live partition owner to route the HTTP poll, so another gateway-side
@@ -30,8 +31,11 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubMatchingPartitionLeaseStore>();
         services.AddSingleton<HubMatchingOwnership>();
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
+        services.AddSingleton<HubCandidateAcquisition>();
+        services.AddHostedService(sp => sp.GetRequiredService<HubCandidateAcquisition>());
         services.AddSingleton<HubTaskMatcher>();
         services.AddSingleton<HubSseTaskDistributor>();
+        services.AddSingleton<HubPushSessions>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -189,12 +193,14 @@ public static class HubGatewayEndpoints
             return runtime is null ? Results.NotFound() : Results.Ok(runtime);
         });
         routes.MapPost("/workflows/{id:guid}/native-commits", async (Guid id, HubNativeCommit request,
-            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubNativeWorkflowStore native, HubReadinessBroadcaster readiness,
+            HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             try
             {
                 var outcome = await native.CommitWithRoutingAsync(id,request,ct);
                 if(outcome is null)return Results.Conflict(new{error="Stale native lease or revision"});
+                candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
                 readiness.Publish(outcome.HubId);
                 return Results.Ok(outcome.Result);
             }
@@ -230,12 +236,13 @@ public static class HubGatewayEndpoints
         });
         routes.MapPost("/workflows/{id:guid}/transitions", async (Guid id,
             HubTransitionRequest request, HubRemoteWorkflowStore remote,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubReadinessBroadcaster readiness, HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             try
             {
                 var result=await remote.CommitAsync(id,request,ct);
                 if(result is null)return Results.Conflict(new{error="Stale task lease or workflow revision"});
+                candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
                 var runtime=await remote.GetRuntimeAsync(id,ct);
                 if(runtime is not null)readiness.Publish(runtime.HubId);
                 return Results.Ok(result);
@@ -347,6 +354,107 @@ public static class HubGatewayEndpoints
             return task is null ? Results.NotFound() : Results.Ok(task);
         });
 
+        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions, HubReadinessBroadcaster readiness) =>
+            Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
+                pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
+                pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
+                pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
+                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions }));
+
+        routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
+            HubPushSessions sessions, CancellationToken ct) =>
+        {
+            if (!sessions.Enabled) return Results.NotFound();
+            try
+            {
+                var (session, owner) = await sessions.RegisterAsync(registration, ct);
+                return session is null
+                    ? Results.Conflict(new { ownerUrl = owner.OwnerUrl, ownerEpoch = owner.Epoch })
+                    : Results.Ok(new HubPushSession(session.Id, owner.OwnerUrl, owner.Epoch, HubPushSessions.TtlSeconds));
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException) { return Results.StatusCode(503); }
+        });
+
+        routes.MapPut("/workers/push-sessions/{id:guid}/capacity", (Guid id, HubPushCapacity capacity,
+            HubPushSessions sessions) =>
+        {
+            var session = sessions.Find(id);
+            return session is null ? Results.NotFound() : sessions.Update(session, capacity)
+                ? Results.NoContent() : Results.Conflict();
+        });
+
+        routes.MapPost("/workers/push-sessions/{id:guid}/revoke", (Guid id, HubPushSessions sessions) =>
+        {
+            var session = sessions.Find(id);
+            return session is null ? Results.NotFound() : sessions.Revoke(session)
+                ? Results.NoContent() : Results.Conflict();
+        });
+
+        routes.MapGet("/workers/push-owners/{hub}/{partition:int}", async (string hub, int partition,
+            HubMatchingOwnership ownership, CancellationToken ct) =>
+        {
+            if (!ownership.Enabled || partition < 0 || partition >= ownership.PartitionCount ||
+                string.IsNullOrWhiteSpace(hub) || hub.Length > 80) return Results.BadRequest();
+            var owner = await ownership.ReadPartitionAsync(hub, partition, ct);
+            return owner is null ? Results.NotFound() : Results.Ok(owner);
+        });
+
+        routes.MapGet("/workers/push-sessions/{id:guid}/events", async (Guid id, HttpContext context,
+            HubPushSessions sessions, CancellationToken ct) =>
+        {
+            var session = sessions.Find(id);
+            if (session is null) { context.Response.StatusCode = 404; return; }
+            if (!sessions.Connect(session)) { context.Response.StatusCode = 409; return; }
+            try
+            {
+                context.Response.ContentType = "text/event-stream";
+                context.Response.Headers.CacheControl = "no-cache";
+                context.Response.Headers["X-Accel-Buffering"] = "no";
+                await context.Response.WriteAsync(": connected\n\n", ct);
+                await context.Response.Body.FlushAsync(ct);
+                using var streamStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var writeGate = new SemaphoreSlim(1, 1);
+                async Task WriteFrame(string frame, CancellationToken token)
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    await writeGate.WaitAsync(deadline.Token);
+                    try
+                    {
+                        await context.Response.WriteAsync(frame, deadline.Token);
+                        await context.Response.Body.FlushAsync(deadline.Token);
+                    }
+                    finally { writeGate.Release(); }
+                }
+                async Task KeepAlive()
+                {
+                    try
+                    {
+                        while (true)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(10), streamStop.Token);
+                            await WriteFrame(": keepalive\n\n", streamStop.Token);
+                        }
+                    }
+                    catch (OperationCanceledException) when (streamStop.IsCancellationRequested) { }
+                    catch { await streamStop.CancelAsync(); throw; }
+                }
+                var keepAlive = KeepAlive();
+                try
+                {
+                    await sessions.RunAsync(session, (assignment, token) => WriteFrame(
+                        "event: task.assigned\ndata: " + JsonSerializer.Serialize(assignment) + "\n\n", token), streamStop.Token);
+                }
+                finally
+                {
+                    await streamStop.CancelAsync();
+                    await keepAlive;
+                }
+            }
+            finally { sessions.Close(session); }
+        });
+
         // Temporal-inspired demand-driven task matching. An incoming request
         // is routed to the active per-Hub owner, which parks the worker in memory
         // and only claims PostgreSQL tasks when demand and readiness intersect.
@@ -366,6 +474,8 @@ public static class HubGatewayEndpoints
                     string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
                     c.Version < 1))
                 return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            if (ownership.CandidateTopology && ownership.PartitionCount == 1 && request.MatchingPartitionCount is null && request.MatchingPartition is null)
+                request = request with { MatchingPartition = 0, MatchingPartitionCount = 1 };
             if (!ownership.Sharded &&
                 (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
                 return Results.Conflict(new { error = "Matching partition topology mismatch" });
@@ -489,11 +599,18 @@ public static class HubGatewayEndpoints
                 var items = await store.ClaimAsync(request.WorkerId,
                     request.Hubs, request.Capabilities, request.MaxTasks,
                     TimeSpan.FromSeconds(45), ct, request.Workflows);
+                Interlocked.Increment(ref _pullClaims);
+                if (items.Count == 0) Interlocked.Increment(ref _pullEmptyClaims);
                 return Results.Ok(items);
             }
             catch (ArgumentException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch
+            {
+                Interlocked.Increment(ref _pullFailedClaims);
+                throw;
             }
         });
 
@@ -506,7 +623,7 @@ public static class HubGatewayEndpoints
         routes.MapPost("/tasks/{id:guid}/complete", async (
             Guid id, HubTaskResultRequest request, HubTaskStore store,
             HubWorkflowStore workflows, HubRemoteWorkflowStore remote, HubNativeWorkflowStore native,
-            HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubReadinessBroadcaster readiness, HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             if (request.Result.ValueKind is JsonValueKind.Undefined or
                 JsonValueKind.Null || request.Result.GetRawText().Length > 65536)
@@ -551,6 +668,7 @@ public static class HubGatewayEndpoints
             };
             if (done)
             {
+                candidate.ReleaseCompletedLease(id, request.Epoch);
                 if (fastPath) readiness.Publish(route.HubId);
                 else
                 {
@@ -564,7 +682,8 @@ public static class HubGatewayEndpoints
 
         routes.MapPost("/tasks/{id:guid}/fail", async (
             Guid id, HubTaskFailureRequest request, HubTaskStore store,
-            HubWorkflowStore workflows, HubReadinessBroadcaster readiness, CancellationToken ct) =>
+            HubWorkflowStore workflows, HubReadinessBroadcaster readiness,
+            HubCandidateAcquisition candidate, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Error) ||
                 request.RetryDelaySeconds is < 0 or > 3600)
@@ -577,6 +696,7 @@ public static class HubGatewayEndpoints
                     request.Error, TimeSpan.FromSeconds(request.RetryDelaySeconds), ct);
             if (failed)
             {
+                candidate.ReleaseCompletedLease(id, request.Epoch);
                 var task = await store.GetAsync(id, ct);
                 if (task is not null) readiness.Publish(task.HubId);
             }
