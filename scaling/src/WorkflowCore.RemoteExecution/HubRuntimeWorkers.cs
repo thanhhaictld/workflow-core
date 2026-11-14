@@ -808,31 +808,40 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 var warned = false;
                 while (!ct.IsCancellationRequested)
                 {
-                    using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    probe.CancelAfter(TimeSpan.FromSeconds(3));
-                    try
+                    // Independent deadlines matter: an unreachable old owner
+                    // must not consume the timeout budget for the current owner
+                    // lookup through the load-balanced Gateway.
+                    using (var revokeProbe = CancellationTokenSource.CreateLinkedTokenSource(ct))
                     {
-                        using var revoke = await client.Http.PostAsync(new Uri(target,
-                            $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, probe.Token);
-                        if (revoke.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound)
+                        revokeProbe.CancelAfter(TimeSpan.FromSeconds(3));
+                        try
                         {
-                            revoked = true;
-                            break;
+                            using var revoke = await client.Http.PostAsync(new Uri(target,
+                                $"api/hub/workers/push-sessions/{session.SessionId}/revoke"), null, revokeProbe.Token);
+                            if (revoke.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound)
+                            {
+                                revoked = true;
+                                break;
+                            }
                         }
+                        catch (HttpRequestException) { }
+                        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
                     }
-                    catch (HttpRequestException) { }
-                    catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
-                    try
+                    using (var ownershipProbe = CancellationTokenSource.CreateLinkedTokenSource(ct))
                     {
-                        using var owner = await client.Http.GetAsync(
-                            $"api/hub/workers/push-owners/{Uri.EscapeDataString(hub)}/{partition}", probe.Token);
-                        if (owner.StatusCode == HttpStatusCode.NotFound) break;
-                        owner.EnsureSuccessStatusCode();
-                        var current = await owner.Content.ReadFromJsonAsync<HubMatchingPartitionLease>(cancellationToken: probe.Token);
-                        if (current is not null && (current.Epoch != session.OwnerEpoch || current.LeaseUntil <= DateTime.UtcNow)) break;
+                        ownershipProbe.CancelAfter(TimeSpan.FromSeconds(3));
+                        try
+                        {
+                            using var owner = await client.Http.GetAsync(
+                                $"api/hub/workers/push-owners/{Uri.EscapeDataString(hub)}/{partition}", ownershipProbe.Token);
+                            if (owner.StatusCode == HttpStatusCode.NotFound) break;
+                            owner.EnsureSuccessStatusCode();
+                            var current = await owner.Content.ReadFromJsonAsync<HubMatchingPartitionLease>(cancellationToken: ownershipProbe.Token);
+                            if (current is not null && (current.Epoch != session.OwnerEpoch || current.LeaseUntil <= DateTime.UtcNow)) break;
+                        }
+                        catch (HttpRequestException) { }
+                        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
                     }
-                    catch (HttpRequestException) { }
-                    catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
                     if (!warned && Stopwatch.GetElapsedTime(reconciliationStarted) > TimeSpan.FromSeconds(75))
                     {
                         warned = true;
