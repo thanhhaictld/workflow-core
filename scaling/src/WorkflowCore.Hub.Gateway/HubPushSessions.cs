@@ -229,6 +229,14 @@ public sealed class HubPushSessions
                     : await _matcher.LongPollAsync(request, claimDeadline.Token); }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 { claimed = Array.Empty<HubLeasedTask>(); }
+                catch (HubCandidateBackpressureException)
+                {
+                    // Keep the SSE session attached when a shard has more live
+                    // worker demand than its bounded candidate-credit budget.
+                    // No SQL claim occurred, so no lease or attempt can be lost.
+                    claimed = Array.Empty<HubLeasedTask>();
+                    await Task.Delay(TimeSpan.FromMilliseconds(Random.Shared.Next(100, 401)), ct);
+                }
                 finally { _requests.TryRemove(request, out _); }
                 HubPushAssignment? assignment = null;
                 lock (session.Gate)
