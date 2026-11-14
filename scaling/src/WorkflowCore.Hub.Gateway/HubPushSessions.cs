@@ -63,7 +63,10 @@ public sealed class HubPushSessions
         _logger = logger;
         _matcher = new HubEventGatedClaimDispatcher(ClaimAsync, (_, _) => Task.FromResult(true),
             ownership.PartitionCount > 1, ownership.PartitionCount, maxWaiters: MaxSessions);
-        if (Enabled) readiness.TaskReady += _matcher.NotifyReady;
+        // Candidate mode owns discovery/wakeups. Do not drive a second
+        // event-gated discovery path on the primary runtime.
+        if (Enabled && _candidate?.Enabled != true)
+            readiness.TaskReady += _matcher.NotifyReady;
     }
 
     private async Task<IReadOnlyList<HubLeasedTask>> ClaimAsync(HubClaimRequest request, CancellationToken ct)
