@@ -4,7 +4,7 @@ using WorkflowCore.Hub;
 namespace WorkflowCore.Hub.Gateway;
 
 /// <summary>Transient in-memory demand saturation. No task lease or attempt was created.</summary>
-public sealed class HubCandidateBackpressureException : Exception
+public sealed class HubCandidateBackpressureException : InvalidOperationException
 {
     public HubCandidateBackpressureException() : base("Candidate demand capacity exceeded") { }
 }
