@@ -31,6 +31,8 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubMatchingPartitionLeaseStore>();
         services.AddSingleton<HubMatchingOwnership>();
         services.AddHostedService(sp => sp.GetRequiredService<HubMatchingOwnership>());
+        services.AddSingleton<HubCandidateAcquisition>();
+        services.AddHostedService(sp => sp.GetRequiredService<HubCandidateAcquisition>());
         services.AddSingleton<HubTaskMatcher>();
         services.AddSingleton<HubSseTaskDistributor>();
         services.AddSingleton<HubPushSessions>();
@@ -405,16 +407,47 @@ public static class HubGatewayEndpoints
             {
                 context.Response.ContentType = "text/event-stream";
                 context.Response.Headers.CacheControl = "no-cache";
+                context.Response.Headers["X-Accel-Buffering"] = "no";
                 await context.Response.WriteAsync(": connected\n\n", ct);
                 await context.Response.Body.FlushAsync(ct);
-                await sessions.RunAsync(session, async (assignment, token) =>
+                using var streamStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var writeGate = new SemaphoreSlim(1, 1);
+                async Task WriteFrame(string frame, CancellationToken token)
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
                     deadline.CancelAfter(TimeSpan.FromSeconds(5));
-                    await context.Response.WriteAsync("event: task.assigned\ndata: " +
-                        JsonSerializer.Serialize(assignment) + "\n\n", deadline.Token);
-                    await context.Response.Body.FlushAsync(deadline.Token);
-                }, ct);
+                    await writeGate.WaitAsync(deadline.Token);
+                    try
+                    {
+                        await context.Response.WriteAsync(frame, deadline.Token);
+                        await context.Response.Body.FlushAsync(deadline.Token);
+                    }
+                    finally { writeGate.Release(); }
+                }
+                async Task KeepAlive()
+                {
+                    try
+                    {
+                        while (true)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(10), streamStop.Token);
+                            await WriteFrame(": keepalive\n\n", streamStop.Token);
+                        }
+                    }
+                    catch (OperationCanceledException) when (streamStop.IsCancellationRequested) { }
+                    catch { await streamStop.CancelAsync(); throw; }
+                }
+                var keepAlive = KeepAlive();
+                try
+                {
+                    await sessions.RunAsync(session, (assignment, token) => WriteFrame(
+                        "event: task.assigned\ndata: " + JsonSerializer.Serialize(assignment) + "\n\n", token), streamStop.Token);
+                }
+                finally
+                {
+                    await streamStop.CancelAsync();
+                    await keepAlive;
+                }
             }
             finally { sessions.Close(session); }
         });
@@ -438,6 +471,8 @@ public static class HubGatewayEndpoints
                     string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
                     c.Version < 1))
                 return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
+            if (ownership.CandidateTopology && ownership.PartitionCount == 1 && request.MatchingPartitionCount is null && request.MatchingPartition is null)
+                request = request with { MatchingPartition = 0, MatchingPartitionCount = 1 };
             if (!ownership.Sharded &&
                 (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
                 return Results.Conflict(new { error = "Matching partition topology mismatch" });

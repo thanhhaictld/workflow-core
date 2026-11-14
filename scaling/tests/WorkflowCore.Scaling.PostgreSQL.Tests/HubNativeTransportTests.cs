@@ -18,6 +18,19 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 public sealed class HubNativeTransportTests
 {
     [Fact]
+    public void PushOwnerRouteRequiresTrustedOriginAndSafeUri()
+    {
+        var options = new HubRuntimeOptions { AllowInsecureHttp = true,
+            PushTrustedOwners = ["http://hub:5100", "http://hub-2:5100"] };
+        var entry = new Uri("http://lb:5100/");
+        Assert.Equal(new Uri("http://hub-2:5100/"), HubPushOwnerRoute.Validate("http://hub-2:5100", entry, options));
+        Assert.Throws<InvalidOperationException>(() => HubPushOwnerRoute.Validate("http://evil:5100", entry, options));
+        Assert.Throws<InvalidOperationException>(() => HubPushOwnerRoute.Validate("http://user@hub:5100", entry, options));
+        Assert.Throws<InvalidOperationException>(() => HubPushOwnerRoute.Validate("http://hub:5100/path", entry, options));
+        Assert.Throws<InvalidOperationException>(() => HubPushOwnerRoute.Validate("http://hub:5100/?q=1", entry, options));
+    }
+
+    [Fact]
     public void DevelopmentTransportChecksTheHostInsteadOfALocalhostPrefix()
     {
         Assert.Throws<InvalidOperationException>(()=>new HubRestClient("http://localhost.example.invalid","a-token-with-at-least-24-characters"));

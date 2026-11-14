@@ -28,6 +28,7 @@ public sealed class HubTaskMatcher
     }
 
     private readonly HubTaskStore _tasks;
+    private readonly HubCandidateAcquisition? _candidate;
     private readonly HubMatchingOwnership _ownership;
     private readonly HubEventGatedClaimDispatcher? _eventGated;
     private readonly object _sync = new();
@@ -40,9 +41,10 @@ public sealed class HubTaskMatcher
     public const int WaitSeconds = 20;
 
     public HubTaskMatcher(HubTaskStore tasks, HubMatchingOwnership ownership,
-        HubReadinessBroadcaster readiness)
+        HubReadinessBroadcaster readiness, HubCandidateAcquisition? candidate = null)
     {
         _tasks = tasks;
+        _candidate = candidate;
         _ownership = ownership;
         if (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_EVENT_GATED") is "true" or "1" or "True")
         {
@@ -127,6 +129,13 @@ public sealed class HubTaskMatcher
     public async Task<IReadOnlyList<HubLeasedTask>> LongPollAsync(
         HubClaimRequest request, CancellationToken ct)
     {
+        if (_candidate?.Enabled == true)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(4));
+            try { return await _candidate.AcquireAsync(request,deadline.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return []; }
+        }
         if (_eventGated is not null)
             return await _eventGated.LongPollAsync(request, ct);
         var hub = request.Hubs[0];

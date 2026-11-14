@@ -12,6 +12,24 @@ using WorkflowCore.Hub.Client;
 
 namespace WorkflowCore.RemoteExecution;
 
+internal static class HubPushOwnerRoute
+{
+    public static Uri Validate(string? owner, Uri baseAddress, HubRuntimeOptions options)
+    {
+        if (!Uri.TryCreate(owner, UriKind.Absolute, out var next) ||
+            next.Scheme != Uri.UriSchemeHttps &&
+            !(next.Scheme == Uri.UriSchemeHttp && (next.IsLoopback || options.AllowInsecureHttp)) ||
+            !string.IsNullOrEmpty(next.UserInfo) || !string.IsNullOrEmpty(next.Query) ||
+            !string.IsNullOrEmpty(next.Fragment) || next.AbsolutePath != "/" ||
+            !options.PushTrustedOwners.Append(baseAddress.GetLeftPart(UriPartial.Authority))
+                .Any(allowed => Uri.TryCreate(allowed, UriKind.Absolute, out var trusted) &&
+                    trusted.GetLeftPart(UriPartial.Authority).Equals(
+                        next.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Unsafe matching owner URL");
+        return new Uri(next.GetLeftPart(UriPartial.Authority) + "/");
+    }
+}
+
 internal sealed class HubRuntimeStartup
 {
     private readonly TaskCompletionSource _published=new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -607,7 +625,6 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         var gate = new object();
         var running = new Dictionary<Guid, Task>();
         using var slots = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-        var everConnected = false;
         while (!ct.IsCancellationRequested)
         {
             Uri target = client.Http.BaseAddress!;
@@ -622,26 +639,20 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 {
                     using var response = await client.Http.PostAsJsonAsync(
                         new Uri(target, "api/hub/workers/push-sessions"), registration, ct);
-                    if (response.StatusCode == HttpStatusCode.NotFound && !everConnected) return false;
+                    // Earlier sessions have passed the revocation/expiry barrier
+                    // before entering a new registration attempt.
+                    if (response.StatusCode == HttpStatusCode.NotFound) return false;
                     if (response.StatusCode == HttpStatusCode.Conflict)
                     {
                         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
                         var owner = body.RootElement.GetProperty("ownerUrl").GetString();
-                        if (!Uri.TryCreate(owner, UriKind.Absolute, out var next) ||
-                            next.Scheme != Uri.UriSchemeHttps &&
-                            !(next.Scheme == Uri.UriSchemeHttp && (next.IsLoopback || options.AllowInsecureHttp)) ||
-                            !string.IsNullOrEmpty(next.UserInfo) ||
-                            !options.PushTrustedOwners.Append(client.Http.BaseAddress!.GetLeftPart(UriPartial.Authority))
-                                .Any(allowed => Uri.TryCreate(allowed, UriKind.Absolute, out var trusted) &&
-                                    trusted.GetLeftPart(UriPartial.Authority).Equals(
-                                        next.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase)))
-                            throw new InvalidOperationException("Unsafe matching owner URL");
-                        target = new Uri(next.AbsoluteUri.TrimEnd('/') + "/");
+                        target = HubPushOwnerRoute.Validate(owner, client.Http.BaseAddress!, options);
                         continue;
                     }
                     response.EnsureSuccessStatusCode();
                     session = await response.Content.ReadFromJsonAsync<HubPushSession>(cancellationToken: ct)
                         ?? throw new InvalidOperationException("Missing push session");
+                    target = HubPushOwnerRoute.Validate(session.OwnerUrl, client.Http.BaseAddress!, options);
                     break;
                 }
                 if (session is null) throw new InvalidOperationException("Push owner routing failed");
@@ -649,7 +660,6 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     new Uri(target, $"api/hub/workers/push-sessions/{session.SessionId}/events"));
                 using var streamResponse = await client.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
                 streamResponse.EnsureSuccessStatusCode();
-                everConnected = true;
                 connected = true;
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var capacityWake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
@@ -722,9 +732,15 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         var assignment = JsonSerializer.Deserialize<HubPushAssignment>(line[6..]);
                         if (assignment is null || assignment.SessionId != session.SessionId ||
                             assignment.WorkerId != _owner || assignment.Task.HubId != hub ||
-                            assignment.Task.LeaseUntil <= DateTime.UtcNow || assignment.Task.Epoch < 1 ||
+                            assignment.Task.Epoch < 1 ||
                             !capabilities.Any(c => c.TaskType == assignment.Task.TaskType &&
                                 c.Version == assignment.Task.Version)) continue;
+                        if (assignment.Task.LeaseUntil <= DateTime.UtcNow)
+                        {
+                            lock (gate) released.Add(assignment.DeliveryId);
+                            capacityWake.Writer.TryWrite(true);
+                            continue;
+                        }
                         lock (gate)
                         {
                             var key = (assignment.Task.Id, assignment.Task.Epoch);

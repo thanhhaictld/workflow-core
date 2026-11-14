@@ -40,6 +40,7 @@ public sealed class HubPushSessions
         new(ReferenceEqualityComparer.Instance);
     private readonly HubEventGatedClaimDispatcher _matcher;
     private readonly HubTaskStore _tasks;
+    private readonly HubCandidateAcquisition? _candidate;
     private readonly HubMatchingOwnership _ownership;
     private readonly ILogger<HubPushSessions> _logger;
     // Fault-injection hook for an isolated failover test; never enabled by default.
@@ -54,9 +55,10 @@ public sealed class HubPushSessions
     public bool Enabled { get; } = Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
 
     public HubPushSessions(HubTaskStore tasks, HubMatchingOwnership ownership,
-        HubReadinessBroadcaster readiness, ILogger<HubPushSessions> logger)
+        HubReadinessBroadcaster readiness, ILogger<HubPushSessions> logger, HubCandidateAcquisition? candidate = null)
     {
         _tasks = tasks;
+        _candidate = candidate;
         _ownership = ownership;
         _logger = logger;
         _matcher = new HubEventGatedClaimDispatcher(ClaimAsync, (_, _) => Task.FromResult(true),
@@ -219,7 +221,9 @@ public sealed class HubPushSessions
                 // must never cause early release of the task lease.
                 using var claimDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 claimDeadline.CancelAfter(TimeSpan.FromSeconds(10));
-                try { claimed = await _matcher.LongPollAsync(request, claimDeadline.Token); }
+                try { claimed = _candidate?.Enabled == true
+                    ? await _candidate.AcquireAsync(request, claimDeadline.Token)
+                    : await _matcher.LongPollAsync(request, claimDeadline.Token); }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 { claimed = Array.Empty<HubLeasedTask>(); }
                 finally { _requests.TryRemove(request, out _); }

@@ -40,7 +40,11 @@ public sealed class HubMatchingOwnership : BackgroundService
     public static readonly TimeSpan StreamHeaderTimeout = TimeSpan.FromSeconds(3);
 
     public bool Enabled { get; }
-    public bool Sharded => Enabled && PartitionCount > 1;
+    public bool CandidateTopology => Enabled &&
+        Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_CANDIDATES_ENABLED") is "true" or "1" or "True" && 64 % PartitionCount == 0;
+    public bool Sharded => Enabled && (PartitionCount > 1 || CandidateTopology);
+    internal event Action<HubMatchingPartitionLease>? PartitionAcquired;
+    internal event Action<HubMatchingPartitionLease>? PartitionLost;
     public int PartitionCount { get; }
     public string NodeId { get; }
     public string AdvertiseUrl { get; }
@@ -290,7 +294,8 @@ public sealed class HubMatchingOwnership : BackgroundService
     {
         if (lease.OwnerId == NodeId && lease.LeaseUntil > DateTime.UtcNow)
         {
-            if (!_partitionOwned.TryGetValue((hub, partition), out var prior) || prior.Epoch != lease.Epoch)
+            var changed = !_partitionOwned.TryGetValue((hub, partition), out var prior) || prior.Epoch != lease.Epoch;
+            if (changed)
             {
                 HubTelemetry.MatchingOwnershipChanges.Add(1,
                     new KeyValuePair<string, object?>("outcome", "acquired"));
@@ -298,6 +303,7 @@ public sealed class HubMatchingOwnership : BackgroundService
                     hub, partition, NodeId, lease.Epoch, lease.LeaseUntil);
             }
             _partitionOwned[(hub, partition)] = lease;
+            if (changed) PartitionAcquired?.Invoke(lease);
         }
         else ForgetPartition((hub, partition));
     }
@@ -316,6 +322,7 @@ public sealed class HubMatchingOwnership : BackgroundService
                 new KeyValuePair<string, object?>("outcome", "lost"));
             _logger.LogInformation("Matching owner lost {Hub}/{Partition} on {Node} epoch {Epoch}",
                 key.Hub, key.Partition, NodeId, lease!.Epoch);
+            PartitionLost?.Invoke(lease!);
         }
     }
 
