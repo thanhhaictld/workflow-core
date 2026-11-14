@@ -89,6 +89,8 @@ services:
     environment:
       WFC_HUB_URL: http://hub-lb:5100
       WFC_HUB_LONG_POLL_ENABLED: "${WFC_HUB_LONG_POLL_ENABLED:-true}"
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: "${WFC_HUB_MATCHING_CANDIDATES_ENABLED:-true}"
+      WFC_HUB_PUSH_TRUSTED_OWNERS: http://hub:5100,http://hub-2:5100
 
   monitor:
     depends_on:

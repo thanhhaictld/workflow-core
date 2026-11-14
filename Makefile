@@ -207,7 +207,7 @@ $(addprefix obs-owner-recovery-,$(OWNER_TARGETS)):
 
 # Default observability preset. Use one export per flag; command-line Make
 # assignments override these values. Private .env credentials are untouched.
-OBS_GOLDEN_TARGETS := obs-up obs-config obs-logs obs-ps obs-down obs-test-4k
+OBS_GOLDEN_TARGETS := obs-up obs-config obs-logs obs-ps obs-down obs-test-4k obs-test
 .PHONY: $(OBS_GOLDEN_TARGETS) obs-base-up ups-16
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_METRICS_SAMPLER_ENABLED := false
@@ -239,6 +239,7 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_SCOPED_CLAIMS := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_DEFER_OWNER_CHECK := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := http://hub:5100,http://hub-2:5100
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_CANDIDATES_ENABLED := true
 obs-up: obs-owner-recovery-up
 # Start the default observability stack with 16 processor containers.
@@ -249,3 +250,8 @@ obs-logs: obs-owner-recovery-logs
 obs-ps: obs-owner-recovery-ps
 obs-down: obs-owner-recovery-down
 obs-test-4k: obs-owner-recovery-test-4k
+# Large recovery workload; allow more time for the durable completion audit.
+obs-test: K6_POLICY_COUNT := 16000
+obs-test: K6_POLICY_VUS := 200
+obs-test: K6_POLICY_TIMEOUT_SECONDS := 1800
+obs-test: obs-owner-recovery-stress-test
