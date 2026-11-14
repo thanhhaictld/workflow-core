@@ -77,8 +77,10 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
    Current Hub deployments apply migrations 006 through
-   `scaling/sql/027_hub_ready_claim_indexes.sql` in numeric order, as
-   configured in Compose and `scripts/dev.ps1`. Migrations 015–019 add activity
+   `scaling/sql/027_hub_ready_claim_indexes.sql` and
+   `scaling/sql/029_hub_partition_candidate_indexes.sql` in numeric order, as
+   configured in Compose and `scripts/dev.ps1`. Migration 029 does not enable
+   candidate matching. Migrations 015–019 add activity
    ordering and matching ownership/hints; 020–027 add reconciliation and claim indexes.
    The experimental 028 index is installed only when
    `WFC_HUB_INSTALL_SHARD4_READY_INDEX=true`; existing indexes are retained.

@@ -239,7 +239,7 @@ $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_SCOPED_CLAIMS := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_DEFER_OWNER_CHECK := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
 $(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
-$(OBS_GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := true
+$(OBS_GOLDEN_TARGETS): export WFC_HUB_MATCHING_CANDIDATES_ENABLED := true
 obs-up: obs-owner-recovery-up
 # Start the default observability stack with 16 processor containers.
 ups-16: OBS_PROCESSORS := 16
