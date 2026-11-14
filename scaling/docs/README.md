@@ -15,6 +15,7 @@ This is one selected architecture, not a menu of recommended polling/streaming a
 | [Activity policy updates](activity-policy-update.md) | Controlled updates to concurrency and resource policy |
 | [Ordering](explicit-partition-ordering.md) | Business ordering and strict FIFO, independently of matching partition routing |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
+| [CI contract](ci-primary-architecture.md) | Current correctness gates, manual 16-processor stress, removed historical CI |
 | [Monitoring service](../monitor/README.md) | Next.js monitor and development API |
 | [Compose and local operation](../observability/README.md) | The two-Hub stack, observability pipeline and load generator |
 

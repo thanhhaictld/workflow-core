@@ -1,9 +1,7 @@
 name: Workflow Hub SSE Stress - 1000 Workflows 16 Processors
 
+# Expensive performance run: invoke manually after correctness gates pass.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/workflow-hub-sse-stress-1000-16.yml'
   workflow_dispatch:
 
 concurrency:
@@ -19,10 +17,12 @@ jobs:
       HA: scaling/observability/compose.matching-ha.yaml
       SHARDS: scaling/observability/compose.matching-shards.yaml
       ENVFILE: scaling/observability/.env.example
-      WFC_HUB_TASK_SSE_PUSH: 'true'
+      WFC_HUB_PUSH_ENABLED: 'true'
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
+      WFC_HUB_TASK_SSE_PUSH: 'false'
       WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
-      WFC_HUB_LONG_POLL_ENABLED: 'true'
-      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'false'
+      WFC_HUB_MATCHING_EVENT_GATED: 'false'
       WFC_HUB_MATCHING_PARTITIONS: '4'
       WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
       WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
@@ -70,17 +70,22 @@ jobs:
             --env-file "$ENVFILE" --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
           echo "Processor containers running: $count"
           test "$count" -eq 16
-          for i in {1..60}; do
-            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
-              --env-file "$ENVFILE" --profile offboarding-load logs --no-color \
-              processor > /tmp/sse-stress-processors.log 2>&1
-            registered="$(grep -c 'SSE task push enabled' /tmp/sse-stress-processors.log || true)"
-            if test "$registered" -ge 16; then break; fi
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for i in {1..90}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/workers/transport-diagnostics > /tmp/stress-hub-a.json &&
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                exec -T hub-lb wget -q -O - --header "Authorization: Bearer $token" \
+                http://hub-2:5100/api/hub/workers/transport-diagnostics > /tmp/stress-hub-b.json &&
+              jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+                /tmp/stress-hub-a.json /tmp/stress-hub-b.json > /dev/null; then
+              break
+            fi
             sleep 2
           done
-          grep -q 'SSE task push enabled' /tmp/sse-stress-processors.log
-          echo "SSE task push worker startup messages: $registered"
-          test "$registered" -ge 16
+          jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+            /tmp/stress-hub-a.json /tmp/stress-hub-b.json
+          echo 'PASS: 16 registered sessions with candidate matching and owner-fenced SSE push'
 
       - name: Run 1,000-workflow k6 stress while sampling PostgreSQL and CPU
         run: |
@@ -129,7 +134,7 @@ jobs:
           pressure=json.loads((root/"pressure.json").read_text())
           commits=(pressure.get("dbDelta") or {}).get("xact_commit")
           report={
-              "runId":run,"transport":"server-pushed-SSE",
+              "runId":run,"transport":"partition-candidate-matching+owner-fenced-SSE",
               "hubs":2,"matchingShards":4,"processorReplicas":16,
               "workflowSlotsPerProcessor":8,"k6VUs":200,"submitted":result["total"],
               "completed":result["completed"],"failed":result["failed"],
@@ -140,7 +145,7 @@ jobs:
               "pgCommitsPerWorkflow":None if commits is None else round(commits/1000,3),
               "postgresWaitSamples":pressure.get("sampledPgWaitBackendCounts"),
               "samplerErrors":pressure.get("errors"),
-              "limitations":"Shared GitHub runner CPU; no long-poll control; CPU includes Hub, PostgreSQL, k6 and processors"
+              "limitations":"Shared GitHub runner CPU; no separate matched-worker baseline; CPU includes Hub, PostgreSQL, k6 and processors"
           }
           (root/"report.json").write_text(json.dumps(report,indent=2)+"\n")
           print(json.dumps(report,indent=2))

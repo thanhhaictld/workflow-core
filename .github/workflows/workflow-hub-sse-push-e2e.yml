@@ -31,10 +31,15 @@ jobs:
       POLICY_BENCHMARK_ONLY: 'true'
       POLICY_BENCH_ACTIVITY_WORKERS: '8'
       OFFBOARD_PROCESSOR_WORKERS: '8'
-      WFC_HUB_TASK_SSE_PUSH: 'true'
+      # Primary runtime: partition-owned in-memory candidates + owner-fenced
+      # PostgreSQL admission and SSE push. The old WFC_HUB_TASK_SSE_PUSH
+      # transport, long polling and event-gated matcher are not used here.
+      WFC_HUB_PUSH_ENABLED: 'true'
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
+      WFC_HUB_TASK_SSE_PUSH: 'false'
       WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
-      WFC_HUB_LONG_POLL_ENABLED: 'true'
-      WFC_HUB_MATCHING_EVENT_GATED: 'true'
+      WFC_HUB_LONG_POLL_ENABLED: 'false'
+      WFC_HUB_MATCHING_EVENT_GATED: 'false'
       WFC_HUB_MATCHING_PARTITIONS: '4'
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
       WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: 'false'
@@ -67,20 +72,32 @@ jobs:
             sleep 2
           done
           curl -fsS http://127.0.0.1:5110/health/ready
-      - name: Start eight SSE task-push processors and verify registration
+      - name: Start eight primary SSE-push processors and verify owner registration
         run: |
           set -euo pipefail
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
             --profile offboarding-load up -d --build --no-deps --scale processor=8 processor
           test "$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
             --profile offboarding-load ps -q processor | wc -l | tr -d ' ')" -eq 8
-          for i in {1..40}; do
-            docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
-              --profile offboarding-load logs --no-color processor > /tmp/sse-processor.log 2>&1
-            if grep -q 'SSE task push enabled' /tmp/sse-processor.log; then break; fi
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          # A live session is authoritative. PR35/36 use Hub push sessions,
+          # not the legacy 'SSE task push enabled' startup log message.
+          for i in {1..60}; do
+            if curl -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5100/api/hub/workers/transport-diagnostics > /tmp/sse-hub-a.json &&
+              docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
+                exec -T hub-lb wget -q -O - --header "Authorization: Bearer $token" \
+                http://hub-2:5100/api/hub/workers/transport-diagnostics > /tmp/sse-hub-b.json &&
+              jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 8)' \
+                /tmp/sse-hub-a.json /tmp/sse-hub-b.json >/dev/null; then
+              break
+            fi
             sleep 2
           done
-          grep -q 'SSE task push enabled' /tmp/sse-processor.log
+          jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 8)' \
+            /tmp/sse-hub-a.json /tmp/sse-hub-b.json
+          echo 'PASS: candidate matching enabled and all eight worker SSE sessions registered'
+
       - name: Run real 100-workflow E2E for every ordering policy
         run: |
           set -euo pipefail
