@@ -73,6 +73,20 @@ name and existing volumes are shared with the owner-recovery commands.
 
 ~~~bash
 # From the repository root:
+cp scaling/observability/.env.example scaling/observability/.env
+# Edit scaling/observability/.env to set strong local token/password.
+
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env \
+  up -d --build --scale provisioner=4
+
+pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml \
+  --env-file scaling/observability/.env ps
+~~~
+
+GNU Make shortcuts are also available:
+
+~~~bash
 make obs-setup                      # create .env if it does not exist
 # Edit scaling/observability/.env to set a local token and password.
 make obs-up                         # build/start the validated configuration
@@ -148,7 +162,7 @@ Copy-Item scaling/observability/.env.example scaling/observability/.env
 pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability/compose.yaml --env-file scaling/observability/.env up -d --build --scale provisioner=4
 ~~~
 
-The migrate container applies SQL migrations 002–023, followed by the
+The migrate container applies SQL migrations 002–027 (and optional 028 when enabled), followed by the
 legacy Workflow Core EF migration in a separate one-shot monitor-api-migrate
 container. The Hub and legacy monitor API use the same local PostgreSQL
 instance but separate workflow state tables. The Next.js /backend rewrite targets the legacy API. The unified Workflow
