@@ -15,6 +15,26 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
     private const int HistoryBatchChunkSize = 256;
+    // A/B experiment: move history JSON serialization before opening the fenced DB transaction.
+    // The actual history INSERTs remain atomic with snapshot, inbox, dispatch and task ACK.
+    private static readonly bool PrepareHistoryBeforeTransaction =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
+    private static string SerializeHistoryChunk(HubNativeCommit request, int offset) =>
+        JsonSerializer.Serialize(request.History.Skip(offset).Take(HistoryBatchChunkSize)
+            .Select(history => new
+            {
+                step = history.StepId,
+                task = request.TaskId,
+                activity = history.ActivityType,
+                eventType = history.EventType,
+                pointer = history.PointerId,
+                parent = history.ParentId,
+                scope = history.Scope,
+                attempt = history.Attempt,
+                payload = history.Payload
+            }));
     private static KeyValuePair<string, object?> HistoryModeTag =>
         new("history_mode", BatchHistoryEnabled ? "batch" : "legacy");
 
@@ -113,6 +133,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
            request.Timer is { StepId: <0 } || request.Timer?.PointerId.Length>100)
             throw new ArgumentException("Invalid native commit");
         var canonical = JsonSerializer.Serialize(request);
+        // CPU-only preparation is safe before the transaction: the request is already
+        // validated and no database state is read. All writes are still fenced.
+        string[]? preparedHistory = null;
+        if (PrepareHistoryBeforeTransaction && BatchHistoryEnabled)
+        {
+            preparedHistory = Enumerable.Range(0, (request.History.Length + HistoryBatchChunkSize - 1) / HistoryBatchChunkSize)
+                .Select(index => SerializeHistoryChunk(request, index * HistoryBatchChunkSize))
+                .ToArray();
+        }
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         string hub;
@@ -280,19 +309,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             // All writes remain in the existing task-lease-fenced transaction.
             for (var offset = 0; offset < request.History.Length; offset += HistoryBatchChunkSize)
             {
-                var values = JsonSerializer.Serialize(request.History.Skip(offset).Take(HistoryBatchChunkSize)
-                    .Select(history => new
-                    {
-                        step = history.StepId,
-                        task = request.TaskId,
-                        activity = history.ActivityType,
-                        eventType = history.EventType,
-                        pointer = history.PointerId,
-                        parent = history.ParentId,
-                        scope = history.Scope,
-                        attempt = history.Attempt,
-                        payload = history.Payload
-                    }));
+                var values = preparedHistory is null
+                    ? SerializeHistoryChunk(request, offset)
+                    : preparedHistory[offset / HistoryBatchChunkSize];
                 await Execute(db, tx, """
                     INSERT INTO wfc_scale.hub_workflow_event
                         (workflow_id,step_index,task_id,activity_type,event_type,
