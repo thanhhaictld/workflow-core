@@ -1,5 +1,7 @@
-# Set by compose.ps1 from the worktree path; required for direct Compose use.
-name: ${WFC_OBSERVABILITY_PROJECT:?Use scaling/observability/compose.ps1 or set a unique WFC_OBSERVABILITY_PROJECT}
+# Local worktrees require an explicit unique project set by compose.ps1.
+# GitHub Actions assigns GITHUB_RUN_ID; use it as an isolated CI-only fallback.
+# A direct local Compose invocation without either value still fails fast.
+name: ${WFC_OBSERVABILITY_PROJECT:-wfc-ci-${GITHUB_RUN_ID:?Use scaling/observability/compose.ps1 or set a unique WFC_OBSERVABILITY_PROJECT}}
 services:
   postgres:
     image: postgres:17
