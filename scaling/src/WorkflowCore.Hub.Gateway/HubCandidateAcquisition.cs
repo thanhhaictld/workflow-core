@@ -193,7 +193,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 var id=Interlocked.Increment(ref _nextAdmission);
                 var running=ProcessReservationsAsync(picked,ct);
                 _activeAdmissions[id]=running;
-                _=running.ContinueWith(_=>_activeAdmissions.TryRemove(id,out _),
+                _=running.ContinueWith(done=>{ _activeAdmissions.TryRemove(id,out var ignored); },
                     CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
             }
         } while(progressed && !ct.IsCancellationRequested);
