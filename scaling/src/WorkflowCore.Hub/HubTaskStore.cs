@@ -1389,10 +1389,39 @@ public sealed class HubTaskStore : IAsyncDisposable
 
     public async Task<string[]> ReadyHubsAsync(CancellationToken ct)
     {
+        // Seek past each discovered hub instead of reading every eligible task
+        // before deduplicating. Keep the two states separate so each branch can
+        // use its existing partial index; UNION merges hubs ready in both states.
         await using var cmd = _dataSource.CreateCommand("""
-            SELECT DISTINCT hub_id FROM wfc_scale.hub_task
-            WHERE (state=0 AND due_at<=now()) OR
-                  (state=1 AND lease_until<now() AND attempts<max_attempts)
+            WITH RECURSIVE ready AS (
+                (SELECT hub_id FROM wfc_scale.hub_task
+                 WHERE state=0 AND due_at<=now()
+                 ORDER BY hub_id LIMIT 1)
+                UNION ALL
+                SELECT next.hub_id
+                FROM ready previous
+                CROSS JOIN LATERAL (
+                    SELECT hub_id FROM wfc_scale.hub_task
+                    WHERE hub_id>previous.hub_id AND state=0 AND due_at<=now()
+                    ORDER BY hub_id LIMIT 1
+                ) next
+            ), expired AS (
+                (SELECT hub_id FROM wfc_scale.hub_task
+                 WHERE state=1 AND lease_until<now() AND attempts<max_attempts
+                 ORDER BY hub_id LIMIT 1)
+                UNION ALL
+                SELECT next.hub_id
+                FROM expired previous
+                CROSS JOIN LATERAL (
+                    SELECT hub_id FROM wfc_scale.hub_task
+                    WHERE hub_id>previous.hub_id AND state=1
+                      AND lease_until<now() AND attempts<max_attempts
+                    ORDER BY hub_id LIMIT 1
+                ) next
+            )
+            SELECT hub_id FROM ready
+            UNION
+            SELECT hub_id FROM expired
             """);
         var hubs = new List<string>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);

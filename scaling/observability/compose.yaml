@@ -56,16 +56,14 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/020_hub_reconciliation_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/021_hub_active_task_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/023_hub_claim_hub_sequence.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_native_reconcile_tasks.sql
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/025_hub_claim_capability_sequence.sql
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/026_hub_matching_bucket_claim_index.sql
-        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/027_hub_ready_claim_indexes.sql
         if [ "$$WFC_HUB_INSTALL_SHARD4_READY_INDEX" = "true" ]; then
           PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/028_hub_claim_shard4_ready.sql
         fi
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/029_hub_partition_candidate_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/030_hub_notification_outbox.sql
+        # Retired index-only migrations 023 and 025-027 are skipped on replay.
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/031_hub_retire_compatibility_claim_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 

@@ -121,8 +121,10 @@ Cancellation cannot undo an external effect that already happened.
 
 ## Deploy without changing existing runs
 
-Apply migrations in order through `025_hub_claim_capability_sequence.sql`, matching
-the current Compose and development scripts. Migration 012 adds
+Apply migrations in order through `031_hub_retire_compatibility_claim_indexes.sql`, matching
+the current Compose and development scripts, which skip retired index-only
+migrations 023 and 025–027. Run 031 with autocommit, outside a transaction block;
+see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.
 Deploy the updated Hub code before starting native hosts or submitting native runs.

@@ -89,14 +89,16 @@ GNU Make remains an optional shortcut (`make up`). See the
    `scaling/sql/003_signal_delivery.sql`,
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
-   Current Hub deployments apply migrations 006 through
-   `scaling/sql/027_hub_ready_claim_indexes.sql` and
-   `scaling/sql/029_hub_partition_candidate_indexes.sql` in numeric order, as
-   configured in Compose and `scripts/dev.ps1`. Migration 029 does not enable
-   candidate matching. Migrations 015–019 add activity
-   ordering and matching ownership/hints; 020–027 add reconciliation and claim indexes.
+   Current Hub deployments apply migrations through
+   `scaling/sql/031_hub_retire_compatibility_claim_indexes.sql` in numeric order,
+   skipping retired index-only migrations 023 and 025–027, as configured in
+   Compose and `scripts/dev.ps1`. Migration 029 adds candidate discovery indexes;
+   030 adds the opt-in notification outbox; 031 concurrently drops five retired
+   compatibility claim indexes without changing task data. Run 031 with
+   autocommit, outside a transaction block. Migrations 015–019 add activity
+   ordering and matching ownership/hints; 020–024 add reconciliation and claim indexes.
    The experimental 028 index is installed only when
-   `WFC_HUB_INSTALL_SHARD4_READY_INDEX=true`; existing indexes are retained.
+   `WFC_HUB_INSTALL_SHARD4_READY_INDEX=true`; it is not removed by 031.
    See the [ordered merge experiment](docs/hub-ordered-capability-merge-experiment.md)
    and [snapshot contract reuse investigation](docs/snapshot-contract-reuse-throughput.md).
    Migration 014 enables transaction-committed cross-pod work-ready hints;

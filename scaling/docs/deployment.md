@@ -2,8 +2,10 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For current Hub deployments, apply migrations through `025_hub_claim_capability_sequence.sql`
-as configured in Compose and the development script. Start with the
+For current Hub deployments, apply migrations through `031_hub_retire_compatibility_claim_indexes.sql`
+as configured in Compose and the development script, skipping retired index-only
+migrations 023 and 025–027. Migration 031 requires autocommit, outside a transaction
+block; see [task index cleanup](current-runtime.md#task-index-cleanup). Start with the
 [current runtime guide](current-runtime.md) and
 follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012
 preserves existing sequential runs. The procedure below describes the direct
