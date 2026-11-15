@@ -74,8 +74,10 @@ public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long Activ
 public sealed class HubTaskStore : IAsyncDisposable
 {
     // Selected IDs are advisory, while the row lock below remains the authority.
-    // Keep the nested OFFSET 0 barriers: a plain LATERAL form was flattened by
-    // PostgreSQL and reverted to an active-queue scan in the measured plan.
+    // Selected IDs are advisory, while the row lock remains authoritative. Keep
+    // all eligibility checks inside the locking probe; express state/attempt
+    // eligibility as CASE so PostgreSQL cannot match the broad active partial
+    // index when that index's row estimate is stale or zero.
     internal const string CandidateBatchAdmissionSql = """
         WITH selected AS MATERIALIZED (
             SELECT * FROM jsonb_to_recordset(@selected)
@@ -100,7 +102,11 @@ public sealed class HubTaskStore : IAsyncDisposable
                   AND t.hub_id=@hub AND t.partition_id % @count=@partition
                   AND EXISTS (SELECT 1 FROM jsonb_to_recordset(o.capabilities) AS c(hub text,task_type text,version integer)
                       WHERE c.hub=t.hub_id AND c.task_type=t.task_type AND c.version=t.task_version)
-                  AND t.attempts<t.max_attempts AND ((t.state=0 AND t.due_at<=now()) OR (t.state=1 AND t.lease_until<now()))
+                  AND CASE t.state
+                      WHEN 0 THEN t.attempts<t.max_attempts AND t.due_at<=now()
+                      WHEN 1 THEN t.attempts<t.max_attempts AND t.lease_until<now()
+                      ELSE false
+                  END
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w WHERE w.id=t.workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                   AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR o.pins IS NULL OR o.pins = 'null'::jsonb OR EXISTS (

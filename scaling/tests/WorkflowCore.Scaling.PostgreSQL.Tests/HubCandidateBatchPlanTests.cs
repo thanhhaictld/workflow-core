@@ -50,10 +50,19 @@ public sealed class HubCandidateBatchPlanTests
                 $"Expected stable selected-ID primary-key probes in {mode}, batch {size}.");
             var probeLoops=primaryKeyProbes.Sum(node=>node.GetProperty("Actual Loops").GetInt32());
             Assert.InRange(probeLoops,size*2,size*3);
-            foreach(var scan in nodes.Where(node=>node.TryGetProperty("Relation Name",out var relation)&&relation.GetString()=="hub_task"&&
-                node.TryGetProperty("Node Type",out var type)&&type.GetString() is "Seq Scan" or "Index Scan" or "Index Only Scan" or "Bitmap Heap Scan"))
+            var taskScans=nodes.Where(node=>node.TryGetProperty("Relation Name",out var relation)&&relation.GetString()=="hub_task"&&
+                node.TryGetProperty("Node Type",out var type)&&type.GetString() is "Seq Scan" or "Index Scan" or "Index Only Scan" or "Bitmap Heap Scan").ToArray();
+            var observedTaskRows=0;
+            foreach(var scan in taskScans)
+            {
                 Assert.True(scan.TryGetProperty("Index Name",out var index)&&index.GetString()=="hub_task_pkey",
                     $"hub_task queue scan detected in {mode}, batch {size}: {scan.GetRawText()}");
+                var rows=scan.GetProperty("Actual Rows").GetInt32();
+                var loops=scan.GetProperty("Actual Loops").GetInt32();
+                var filtered=scan.TryGetProperty("Rows Removed by Filter",out var removed)?removed.GetInt32():0;
+                observedTaskRows+=(rows+filtered)*loops;
+            }
+            Assert.InRange(observedTaskRows,size*2,size*3);
             await tx.RollbackAsync();
         }
         }

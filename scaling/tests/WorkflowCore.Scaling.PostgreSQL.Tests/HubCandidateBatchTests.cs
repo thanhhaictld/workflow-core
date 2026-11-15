@@ -274,4 +274,53 @@ public sealed class HubCandidateBatchTests
             """,db))
         { verify.Parameters.AddWithValue("id",id); await using var rows=await verify.ExecuteReaderAsync(); Assert.True(await rows.ReadAsync()); Assert.Equal(2L,rows.GetInt64(0)); Assert.Equal(1L,rows.GetInt64(1)); Assert.Equal(1L,rows.GetInt64(2)); Assert.Equal(1L,rows.GetInt64(3)); }
     }
+
+    [Fact]
+    public async Task BatchKeepsSequenceOrderWhenSelectedIdsArriveInReverseOrder()
+    {
+        var hub="candidate-batch-sequence-"+Guid.NewGuid().ToString("N");
+        var ids=Enumerable.Range(0,4).Select(_=>Guid.NewGuid()).ToArray();
+        await using var db=new NpgsqlConnection(Database); await db.OpenAsync();
+        foreach(var id in ids)
+        {
+            await using var insert=new NpgsqlCommand("INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload) VALUES (@id,@hub,0,'activity',1,'{}')",db);
+            insert.Parameters.AddWithValue("id",id); insert.Parameters.AddWithValue("hub",hub); await insert.ExecuteNonQueryAsync();
+        }
+        await using var store=new HubTaskStore(Database);
+        var owner=await new HubMatchingPartitionLeaseStore(store).AcquireOrReadAsync(hub,0,4,
+            "owner","http://localhost:5100",TimeSpan.FromSeconds(60),default);
+        HubCapability[] capabilities=[new(hub,"activity",1)];
+        var reverse=ids.Reverse().Select(id=>new HubCandidateBatchItem(id,0,"worker",capabilities)).ToArray();
+        var result=await store.ClaimCandidateBatchAsync(new(reverse,"worker",hub,0,4,capabilities,null,owner,TimeSpan.FromSeconds(30)),default);
+        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status);
+        Assert.Equal(ids,result.Leases.Select(x=>x.Id));
+    }
+
+    [Fact]
+    public async Task BatchSkipsASelectedRowLockedByConcurrentStateTransition()
+    {
+        var hub="candidate-batch-row-lock-"+Guid.NewGuid().ToString("N"); var id=Guid.NewGuid();
+        await using var store=new HubTaskStore(Database); var owners=new HubMatchingPartitionLeaseStore(store);
+        var owner=await owners.AcquireOrReadAsync(hub,0,4,"owner","http://localhost:5100",TimeSpan.FromSeconds(60),default);
+        await using var writer=new NpgsqlConnection(Database); await writer.OpenAsync();
+        await using(var insert=new NpgsqlCommand("INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload) VALUES (@id,@hub,0,'activity',1,'{}')",writer))
+        { insert.Parameters.AddWithValue("id",id); insert.Parameters.AddWithValue("hub",hub); await insert.ExecuteNonQueryAsync(); }
+        await using var transition=await writer.BeginTransactionAsync();
+        await using(var lockRow=new NpgsqlCommand("SELECT id FROM wfc_scale.hub_task WHERE id=@id FOR UPDATE",writer,transition))
+        { lockRow.Parameters.AddWithValue("id",id); Assert.Equal(id,await lockRow.ExecuteScalarAsync()); }
+
+        HubCapability[] capabilities=[new(hub,"activity",1)];
+        var request=new HubCandidateBatchClaim([new(id,0,"worker",capabilities)],"worker",hub,0,4,capabilities,null,owner,TimeSpan.FromSeconds(30));
+        var result=await store.ClaimCandidateBatchAsync(request,default).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(HubCandidateClaimStatus.Unavailable,result.Status);
+        Assert.Empty(result.Leases);
+
+        await using(var completeTransition=new NpgsqlCommand("UPDATE wfc_scale.hub_task SET state=2 WHERE id=@id",writer,transition))
+        { completeTransition.Parameters.AddWithValue("id",id); Assert.Equal(1,await completeTransition.ExecuteNonQueryAsync()); }
+        await transition.CommitAsync();
+        await using var verify=new NpgsqlCommand("SELECT state,epoch,attempts,(SELECT count(*) FROM wfc_scale.hub_task_attempt WHERE task_id=@id),(SELECT count(*) FROM wfc_scale.hub_workflow_event WHERE task_id=@id AND event_type='WorkflowTaskClaimed') FROM wfc_scale.hub_task WHERE id=@id",writer);
+        verify.Parameters.AddWithValue("id",id); await using var row=await verify.ExecuteReaderAsync();
+        Assert.True(await row.ReadAsync()); Assert.Equal((short)2,row.GetInt16(0)); Assert.Equal(0L,row.GetInt64(1));
+        Assert.Equal(0,row.GetInt32(2)); Assert.Equal(0L,row.GetInt64(3)); Assert.Equal(0L,row.GetInt64(4));
+    }
 }
