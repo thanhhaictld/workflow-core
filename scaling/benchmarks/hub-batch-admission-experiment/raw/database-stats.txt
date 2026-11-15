@@ -1,0 +1,9 @@
+PostgreSQL 17.11; ordered migrations 002-027,029,030; migration 028 excluded.
+DATABASE hub_batch_no028
+total=139000;state0_runnable=47500;state1_leased=2500;state2_complete=89000
+{reltuples=139000;reloptions=,autovacuum_enabled=false}
+dead_tuple_estimate=9576;autovacuum_count=0
+DATABASE hub_batch_no028_stale_active
+total=164000;state0_runnable=72500;state1_leased=2500;state2_complete=89000
+{reltuples=139000;reloptions=,autovacuum_enabled=false}
+dead_tuple_estimate=9576;autovacuum_count=0

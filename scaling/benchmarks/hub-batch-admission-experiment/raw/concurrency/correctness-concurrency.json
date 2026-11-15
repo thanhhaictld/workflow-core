@@ -1,0 +1,12 @@
+{
+  "ids": 24,
+  "overlap": 8,
+  "first_input": "first 16 in sequence order",
+  "second_input": "16 IDs in reverse sequence order with 8 overlapping",
+  "first_claimed": 16,
+  "second_claimed": 8,
+  "final_leased": 24,
+  "unique_leased": 24,
+  "worker_owners": 24,
+  "outcome": "passed; stable sequence lock order and SKIP LOCKED prevented duplicate admission"
+}
