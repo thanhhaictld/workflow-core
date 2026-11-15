@@ -304,6 +304,30 @@
           }
         }
       ]
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Top queries by shared-buffer hits in selected range",
+      "description": "Cached block accesses can explain CPU work even when block reads are low. Hits count repeated accesses, not unique blocks or CPU time. Sampled every 15 seconds with the same reset and collection limits as statement execution time.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 72, "w": 24, "h": 12 },
+      "targets": [{
+        "refId": "A",
+        "expr": "topk(10, sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_hit_total[$__range])) > 0)",
+        "instant": true,
+        "range": false,
+        "format": "table"
+      }],
+      "options": { "showHeader": true, "cellHeight": "md" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true },
+          "renameByName": { "query_id": "Query ID", "query": "Query", "Value": "Shared-buffer hits" }
+        } },
+        { "id": "sortBy", "options": { "sort": [{ "field": "Shared-buffer hits", "desc": true }] } }
+      ]
     }
   ]
 }

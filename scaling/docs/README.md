@@ -27,6 +27,7 @@ For performance investigations, these are retained as reference evidence rather 
 
 - [Throughput investigation](throughput-investigation-report.md) and [claim/completion A/B](workflow-p95-claim-completion-ab.md)
 - [Claim SQL analysis](hub-claim-query-tuning.md) and [database CPU profiling](sql-cpu-statement-investigation.md)
+- [Local 4,000-workflow PostgreSQL review](postgresql-4k-review-2026-11-15.md): measured query costs, metric corrections and tuning priorities
 - [Processor scaling](linear-processor-scaling-pr22.md) and [offboarding benchmark](offboarding-unconstrained-benchmark.md)
 - [Historical matching owner HA experiments](hub-distributed-matching-ha.md) and [multiple matching partitions](hub-matching-multi-partition.md)
 - [Original push protocol design](hub-push-matching-design.md) and [candidate implementation plan](hub-partition-candidate-matching-plan.md)
