@@ -88,22 +88,4 @@ public sealed class HubIndexedMatchingBucketTests
             matchingPartitionCount: matchingCount);
         Assert.Empty(again);
     }
-
-    [Fact]
-    public async Task MigrationCreatesTheMatchingBucketIndex()
-    {
-        if (Database is null) return;
-        await using var db = new NpgsqlConnection(Database);
-        await db.OpenAsync();
-        await using var cmd = new NpgsqlCommand("""
-            SELECT EXISTS (
-              SELECT 1 FROM pg_indexes
-              WHERE schemaname='wfc_scale'
-                AND tablename='hub_task'
-                AND indexname='ix_hub_task_claim_capability_bucket_sequence'
-                AND indexdef LIKE '%partition_id % 64%'
-            )
-            """, db);
-        Assert.True((bool)(await cmd.ExecuteScalarAsync())!);
-    }
 }

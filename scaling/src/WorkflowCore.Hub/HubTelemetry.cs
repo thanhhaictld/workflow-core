@@ -72,6 +72,24 @@ public static class HubTelemetry
         "workflow_hub_candidate_bytes", () => Volatile.Read(ref _candidateBytes), "By");
     public static readonly Counter<long> CandidateCapacityFallbacks =
         Meter.CreateCounter<long>("workflow_hub_candidate_capacity_fallbacks", "{fallback}");
+    public static readonly Counter<long> NotificationOutboxRows =
+        Meter.CreateCounter<long>("workflow_hub_notification_outbox_rows", "{row}");
+    public static readonly Histogram<double> NotificationOutboxAge =
+        Meter.CreateHistogram<double>("workflow_hub_notification_outbox_oldest_age_seconds", "s");
+    public static readonly Counter<long> CandidateReconciliationQueries =
+        Meter.CreateCounter<long>("workflow_hub_candidate_reconciliation_queries", "{query}");
+    public static readonly Histogram<int> CandidateBatchFill =
+        Meter.CreateHistogram<int>("workflow_hub_candidate_batch_fill", "{task}");
+    public static readonly Histogram<double> CandidateAdmissionLatency =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_admission_seconds", "s");
+    public static readonly UpDownCounter<long> CandidateWaitingSessions =
+        Meter.CreateUpDownCounter<long>("workflow_hub_candidate_waiting_sessions", "{session}");
+    public static readonly Histogram<double> CandidateCapacityWait =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_capacity_wait_seconds", "s");
+    public static readonly Counter<long> CandidateDiscoveryRows =
+        Meter.CreateCounter<long>("workflow_hub_candidate_discovery_rows", "{row}");
+    public static readonly Counter<long> CandidateLeased =
+        Meter.CreateCounter<long>("workflow_hub_candidate_leased", "{task}");
     public static void PublishCandidateSnapshot(int credits, int reservations, int entries, long bytes)
     {
         Interlocked.Exchange(ref _candidateCredits, credits);

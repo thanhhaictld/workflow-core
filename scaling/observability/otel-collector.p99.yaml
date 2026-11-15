@@ -38,6 +38,8 @@ receivers:
       - sql: >-
           SELECT queryid::text AS query_id, left(query, 500) AS query,
                  sum(total_exec_time) AS total_exec_time_ms,
+                 sum(calls) AS calls, sum(rows) AS rows,
+                 sum(shared_blks_hit) AS shared_blocks_hit,
                  sum(shared_blks_read) AS shared_blocks_read,
                  sum(shared_blks_written) AS shared_blocks_written,
                  sum(temp_blks_read) AS temp_blocks_read,
@@ -50,6 +52,21 @@ receivers:
           - metric_name: workflow.postgres.statement.execution_time_ms
             value_column: total_exec_time_ms
             value_type: double
+            attribute_columns: [query_id, query]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.statement.calls
+            value_column: calls
+            attribute_columns: [query_id, query]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.statement.rows
+            value_column: rows
+            attribute_columns: [query_id, query]
+            data_type: sum
+            monotonic: true
+          - metric_name: workflow.postgres.statement.shared_blocks_hit
+            value_column: shared_blocks_hit
             attribute_columns: [query_id, query]
             data_type: sum
             monotonic: true

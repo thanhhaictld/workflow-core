@@ -67,6 +67,10 @@ public sealed class HubCandidateAcquisitionRuntimeTests
                     Assert.Equal(expected, leased.Id);
                     Assert.True(await tasks.CompleteAsync(leased.Id, "worker", leased.Epoch,
                         "{}", deadline.Token));
+                    // The HTTP completion routes call this only after their
+                    // durable completion succeeds; direct store completion
+                    // alone intentionally cannot release transport accounting.
+                    matcher.ReleaseCompletedLease(leased.Id, leased.Epoch);
 
                     // The transport has already received the lease. Candidate
                     // bookkeeping must not retain its 45-second matching credit.

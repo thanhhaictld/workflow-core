@@ -1,0 +1,11 @@
+{
+  "commit": "cf523d06561025287c13f507e995ed51553278bc",
+  "source": "scaling/src/WorkflowCore.Hub/HubTaskStore.cs",
+  "source_sha256": "632c6785b87371dcb72926e0a00e012142f49992d24eb2a977ba52e5acbb2b8d",
+  "method": "ClaimCandidateBatchAsync",
+  "sql_file": "baseline.sql",
+  "sql_sha256": "a66bfaa3f7debdf3f59ca836952178d5b171e2f5c2e38999b3d8921f34577fb3",
+  "source_raw_sql_normalized_sha256": "6619ed0547eaf13d80f48991fde2a23cdfeee24388a950f0eb2c674817e96f6c",
+  "baseline_normalized_sha256": "6619ed0547eaf13d80f48991fde2a23cdfeee24388a950f0eb2c674817e96f6c",
+  "normalized_extraction_match": true
+}

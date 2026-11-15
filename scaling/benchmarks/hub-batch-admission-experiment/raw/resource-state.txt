@@ -1,0 +1,8 @@
+container_name=wfc-pg17-batch-luna-20261115
+container_id=bb22714da74bba49380eb7d393c6669ec02b9f56e80c596e2790d067cee9acb9
+label=wfc.experiment=postgres-batch-admission-luna-20261115
+status=exited
+cpu_limit=2 CPUs
+memory_limit=2147483648 bytes
+memory_swap_limit=2147483648 bytes
+last_active_host_binding=127.0.0.1:57763 (inactive while stopped)

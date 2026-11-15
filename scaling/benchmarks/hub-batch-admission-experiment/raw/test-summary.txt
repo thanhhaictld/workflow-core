@@ -1,0 +1,6 @@
+Filtered PostgreSQL integration command:
+dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --filter "FullyQualifiedName~HubCandidateBatchTests|FullyQualifiedName~HubUnconstrainedBatchClaimTests"
+
+Target: isolated hub_batch_no028_tests database inside wfc-pg17-batch-luna-20261115.
+Result: exit 0; 17 passed; 0 failed.
+These tests exercised the unchanged production baseline store, not prototype owner fencing, history/attempt writes, rollback/commit ambiguity or integrated transaction ownership.

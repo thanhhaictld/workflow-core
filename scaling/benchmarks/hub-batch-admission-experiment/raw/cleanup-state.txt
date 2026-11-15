@@ -1,0 +1,5 @@
+Cleanup state: exited/stopped; the experiment container was retained, not removed, preserving its synthetic databases and files.
+Container: wfc-pg17-batch-luna-20261115 (ID bb22714da74bba49380eb7d393c6669ec02b9f56e80c596e2790d067cee9acb9), label wfc.experiment=postgres-batch-admission-luna-20261115.
+Corrected deployment-matching databases: hub_batch_no028, hub_batch_no028_stale_active, hub_batch_no028_tests.
+Earlier migration-028 nondeployment arm databases retained separately: hub_batch, hub_batch_stale_pair, hub_batch_tests.
+Host binding was 127.0.0.1:57763 while running; it is inactive while stopped. No unrelated resources were stopped or removed.

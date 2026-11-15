@@ -1,0 +1,1070 @@
+{
+  "live": {
+    "captured_at": "2026-11-15T11:57:12.798884+00:00",
+    "version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "database": "workflow",
+    "reset": {
+      "dealloc": 0,
+      "stats_reset": "2026-11-15T10:24:36.92162+00:00"
+    },
+    "statements": [
+      {
+        "rows": 96000,
+        "calls": 96000,
+        "query": "INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload)\r\nSELECT $1,$2,$3,$5,$6,$4,$7::jsonb\r\nFROM wfc_scale.hub_workflow WHERE id=$4 AND native_status=$8\r\nON CONFLICT DO NOTHING",
+        "queryid": 325984884542718125,
+        "wal_bytes": 233622989,
+        "stats_since": "2026-11-15T10:25:21.552914+00:00",
+        "max_exec_time": 48.734566,
+        "mean_exec_time": 0.3758901662291655,
+        "shared_blks_hit": 4428140,
+        "total_exec_time": 36085.455958000064,
+        "shared_blks_read": 81696,
+        "stddev_exec_time": 0.6072618356269626,
+        "temp_blks_written": 0,
+        "shared_blks_dirtied": 56508
+      },
+      {
+        "rows": 128000,
+        "calls": 128000,
+        "query": "UPDATE wfc_scale.hub_task SET state=$5,owner=$6,lease_until=$7,result_json=$1::jsonb,updated_at=now()\r\nWHERE id=$2 AND owner=$3 AND epoch=$4 AND state=$8 AND lease_until>clock_timestamp()",
+        "queryid": 702976769898827252,
+        "wal_bytes": 360417889,
+        "stats_since": "2026-11-15T10:25:22.463859+00:00",
+        "max_exec_time": 21.669732,
+        "mean_exec_time": 0.4484425414453086,
+        "shared_blks_hit": 12259617,
+        "total_exec_time": 57400.645304999714,
+        "shared_blks_read": 29330,
+        "stddev_exec_time": 0.33067372409045187,
+        "temp_blks_written": 0,
+        "shared_blks_dirtied": 48626
+      }
+    ],
+    "tables": [
+      {
+        "relname": "hub_task",
+        "n_tup_ins": 128000,
+        "n_tup_upd": 288000,
+        "n_dead_tup": 38137,
+        "n_live_tup": 463809,
+        "n_tup_hot_upd": 0,
+        "last_autovacuum": "2026-11-15T11:47:58.615573+00:00",
+        "last_autoanalyze": "2026-11-15T11:50:46.846844+00:00"
+      },
+      {
+        "relname": "hub_workflow",
+        "n_tup_ins": 32000,
+        "n_tup_upd": 96000,
+        "n_dead_tup": 12021,
+        "n_live_tup": 116005,
+        "n_tup_hot_upd": 861,
+        "last_autovacuum": "2026-11-15T11:48:05.624667+00:00",
+        "last_autoanalyze": "2026-11-15T11:50:48.2489+00:00"
+      }
+    ],
+    "indexes": [
+      {
+        "bytes": 18980864,
+        "relname": "hub_task_pkey",
+        "idx_scan": 1259708,
+        "definition": "CREATE UNIQUE INDEX hub_task_pkey ON wfc_scale.hub_task USING btree (id)",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 1533198,
+        "idx_tup_fetch": 947781
+      },
+      {
+        "bytes": 21094400,
+        "relname": "hub_task_sequence_key",
+        "idx_scan": 209855,
+        "definition": "CREATE UNIQUE INDEX hub_task_sequence_key ON wfc_scale.hub_task USING btree (sequence)",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 571385,
+        "idx_tup_fetch": 183089
+      },
+      {
+        "bytes": 1409024,
+        "relname": "ix_hub_task_active_workflow_lookup",
+        "idx_scan": 128000,
+        "definition": "CREATE INDEX ix_hub_task_active_workflow_lookup ON wfc_scale.hub_task USING btree (workflow_id) WHERE ((state = ANY (ARRAY[0, 1])) AND (workflow_id IS NOT NULL))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 354519,
+        "idx_tup_fetch": 96000
+      },
+      {
+        "bytes": 7749632,
+        "relname": "ix_hub_task_candidate_expired_bucket_deadline",
+        "idx_scan": 2199,
+        "definition": "CREATE INDEX ix_hub_task_candidate_expired_bucket_deadline ON wfc_scale.hub_task USING btree (hub_id, ((partition_id % 64)), lease_until, sequence) WHERE ((state = 1) AND (attempts < max_attempts))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 54165664,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 8290304,
+        "relname": "ix_hub_task_candidate_ready_bucket_due",
+        "idx_scan": 33998,
+        "definition": "CREATE INDEX ix_hub_task_candidate_ready_bucket_due ON wfc_scale.hub_task USING btree (hub_id, ((partition_id % 64)), due_at, sequence) WHERE ((state = 0) AND (attempts < max_attempts))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 352318,
+        "idx_tup_fetch": 170848
+      },
+      {
+        "bytes": 6316032,
+        "relname": "ix_hub_task_candidate_ready_bucket_sequence",
+        "idx_scan": 7297,
+        "definition": "CREATE INDEX ix_hub_task_candidate_ready_bucket_sequence ON wfc_scale.hub_task USING btree (hub_id, ((partition_id % 64)), sequence) WHERE ((state = 0) AND (attempts < max_attempts))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 188251,
+        "idx_tup_fetch": 77065
+      },
+      {
+        "bytes": 3047424,
+        "relname": "ix_hub_task_claim_sequence",
+        "idx_scan": 31267,
+        "definition": "CREATE INDEX ix_hub_task_claim_sequence ON wfc_scale.hub_task USING btree (sequence) WHERE ((state = ANY (ARRAY[0, 1])) AND (attempts < max_attempts))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 16444308,
+        "idx_tup_fetch": 13240397
+      },
+      {
+        "bytes": 8192,
+        "relname": "ix_hub_task_dead_workflow_step",
+        "idx_scan": 5290,
+        "definition": "CREATE INDEX ix_hub_task_dead_workflow_step ON wfc_scale.hub_task USING btree (workflow_id) WHERE ((state = 3) AND (workflow_step IS NOT NULL))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 0,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 3850240,
+        "relname": "ix_hub_task_expired",
+        "idx_scan": 113837,
+        "definition": "CREATE INDEX ix_hub_task_expired ON wfc_scale.hub_task USING btree (hub_id, lease_until, sequence) WHERE (state = 1)",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 4536676,
+        "idx_tup_fetch": 3824430
+      },
+      {
+        "bytes": 8192,
+        "relname": "ix_hub_task_native_reconcile",
+        "idx_scan": 21131,
+        "definition": "CREATE INDEX ix_hub_task_native_reconcile ON wfc_scale.hub_task USING btree (workflow_id) WHERE ((state = 3) AND (dispatch_key IS NOT NULL) AND (last_error IS DISTINCT FROM 'Native pointer cancelled'::text))",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 0,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 83025920,
+        "relname": "ix_hub_task_operations",
+        "idx_scan": 2,
+        "definition": "CREATE INDEX ix_hub_task_operations ON wfc_scale.hub_task USING btree (hub_id, partition_id, task_type, state, due_at)",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 5851,
+        "idx_tup_fetch": 1
+      },
+      {
+        "bytes": 5160960,
+        "relname": "ix_hub_task_ready",
+        "idx_scan": 5889,
+        "definition": "CREATE INDEX ix_hub_task_ready ON wfc_scale.hub_task USING btree (hub_id, due_at, sequence) WHERE (state = 0)",
+        "indisvalid": true,
+        "indisunique": false,
+        "idx_tup_read": 30549473,
+        "idx_tup_fetch": 165002
+      },
+      {
+        "bytes": 17563648,
+        "relname": "ux_hub_native_dispatch",
+        "idx_scan": 32000,
+        "definition": "CREATE UNIQUE INDEX ux_hub_native_dispatch ON wfc_scale.hub_task USING btree (workflow_id, dispatch_key) WHERE (dispatch_key IS NOT NULL)",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 0,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 1761280,
+        "relname": "ux_hub_native_work",
+        "idx_scan": 96000,
+        "definition": "CREATE UNIQUE INDEX ux_hub_native_work ON wfc_scale.hub_task USING btree (workflow_id) WHERE ((task_type = '__native_workflow__'::text) AND (state = ANY (ARRAY[0, 1])))",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 126917,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 8192,
+        "relname": "ux_hub_task_request",
+        "idx_scan": 0,
+        "definition": "CREATE UNIQUE INDEX ux_hub_task_request ON wfc_scale.hub_task USING btree (hub_id, request_key) WHERE (request_key IS NOT NULL)",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 0,
+        "idx_tup_fetch": 0
+      },
+      {
+        "bytes": 8192,
+        "relname": "ux_hub_task_workflow_step",
+        "idx_scan": 0,
+        "definition": "CREATE UNIQUE INDEX ux_hub_task_workflow_step ON wfc_scale.hub_task USING btree (workflow_id, workflow_step) WHERE ((workflow_id IS NOT NULL) AND (workflow_step IS NOT NULL))",
+        "indisvalid": true,
+        "indisunique": true,
+        "idx_tup_read": 0,
+        "idx_tup_fetch": 0
+      }
+    ],
+    "settings": {
+      "shared_buffers": "16384",
+      "track_io_timing": "off",
+      "synchronous_commit": "on",
+      "default_toast_compression": "pglz",
+      "pg_stat_statements.track_planning": "off"
+    },
+    "result_sizes": [
+      {
+        "count": 12000,
+        "task_type": "__native_workflow__",
+        "text_bytes": 3286.2176666666664,
+        "stored_bytes": 1841.41875,
+        "max_text_bytes": 4473
+      },
+      {
+        "count": 4000,
+        "task_type": "policy-unordered-step",
+        "text_bytes": 953.0,
+        "stored_bytes": 621.94025,
+        "max_text_bytes": 953
+      }
+    ],
+    "waits": [
+      {
+        "count": 13,
+        "state": "idle",
+        "wait_event": "ClientRead",
+        "wait_event_type": "Client"
+      }
+    ]
+  },
+  "completion_plans": [
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 0,
+      "variant": "baseline",
+      "ms": 1.615,
+      "rows_visited": 12160,
+      "blocks": 411,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 0,
+      "variant": "current",
+      "ms": 0.122,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 1,
+      "variant": "current",
+      "ms": 0.148,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 1,
+      "variant": "baseline",
+      "ms": 1.617,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 2,
+      "variant": "baseline",
+      "ms": 2.057,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 2,
+      "variant": "current",
+      "ms": 0.147,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 3,
+      "variant": "current",
+      "ms": 0.157,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 3,
+      "variant": "baseline",
+      "ms": 1.74,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 4,
+      "variant": "baseline",
+      "ms": 1.619,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_custom_plan",
+      "rep": 4,
+      "variant": "current",
+      "ms": 0.123,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 0,
+      "variant": "baseline",
+      "ms": 1.994,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 0,
+      "variant": "current",
+      "ms": 0.202,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 1,
+      "variant": "current",
+      "ms": 0.13,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 1,
+      "variant": "baseline",
+      "ms": 1.517,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 2,
+      "variant": "baseline",
+      "ms": 1.822,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 2,
+      "variant": "current",
+      "ms": 0.149,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 3,
+      "variant": "current",
+      "ms": 0.182,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 3,
+      "variant": "baseline",
+      "ms": 1.675,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 4,
+      "variant": "baseline",
+      "ms": 2.538,
+      "rows_visited": 12160,
+      "blocks": 410,
+      "index": "ix_hub_task_expired"
+    },
+    {
+      "state": "stale-empty-leased-stats",
+      "mode": "force_generic_plan",
+      "rep": 4,
+      "variant": "current",
+      "ms": 0.147,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 0,
+      "variant": "baseline",
+      "ms": 0.197,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 0,
+      "variant": "current",
+      "ms": 0.206,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 1,
+      "variant": "current",
+      "ms": 0.155,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 1,
+      "variant": "baseline",
+      "ms": 0.192,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 2,
+      "variant": "baseline",
+      "ms": 0.14,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 2,
+      "variant": "current",
+      "ms": 0.156,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 3,
+      "variant": "current",
+      "ms": 0.204,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 3,
+      "variant": "baseline",
+      "ms": 0.162,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 4,
+      "variant": "baseline",
+      "ms": 0.116,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_custom_plan",
+      "rep": 4,
+      "variant": "current",
+      "ms": 0.16,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 0,
+      "variant": "baseline",
+      "ms": 0.12,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 0,
+      "variant": "current",
+      "ms": 0.141,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 1,
+      "variant": "current",
+      "ms": 0.15,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 1,
+      "variant": "baseline",
+      "ms": 0.17,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 2,
+      "variant": "baseline",
+      "ms": 0.176,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 2,
+      "variant": "current",
+      "ms": 0.144,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 3,
+      "variant": "current",
+      "ms": 0.144,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 3,
+      "variant": "baseline",
+      "ms": 0.187,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 4,
+      "variant": "baseline",
+      "ms": 0.125,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    },
+    {
+      "state": "analyzed-backlog",
+      "mode": "force_generic_plan",
+      "rep": 4,
+      "variant": "current",
+      "ms": 0.166,
+      "rows_visited": 1,
+      "blocks": 18,
+      "index": "hub_task_pkey"
+    }
+  ],
+  "write_matrix": [
+    {
+      "rep": 0,
+      "arm": "baseline",
+      "query": "completion",
+      "mean_ms": 0.10303125,
+      "median_ms": 0.092,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.425,
+      "mean_trigger_ms": 0.0236375
+    },
+    {
+      "rep": 0,
+      "arm": "baseline",
+      "query": "wake",
+      "mean_ms": 0.08556875,
+      "median_ms": 0.0815,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.01635625
+    },
+    {
+      "rep": 0,
+      "arm": "without_operations_index",
+      "query": "completion",
+      "mean_ms": 0.11626875,
+      "median_ms": 0.0985,
+      "mean_shared_blocks": 12.99375,
+      "mean_wal_bytes": 882.2375,
+      "mean_trigger_ms": 0.0279125
+    },
+    {
+      "rep": 0,
+      "arm": "without_operations_index",
+      "query": "wake",
+      "mean_ms": 0.09804375,
+      "median_ms": 0.087,
+      "mean_shared_blocks": 22.69375,
+      "mean_wal_bytes": 847.35625,
+      "mean_trigger_ms": 0.019275
+    },
+    {
+      "rep": 0,
+      "arm": "without_notify_trigger",
+      "query": "completion",
+      "mean_ms": 0.07875,
+      "median_ms": 0.073,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.425,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 0,
+      "arm": "without_notify_trigger",
+      "query": "wake",
+      "mean_ms": 0.0701625,
+      "median_ms": 0.065,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 0,
+      "arm": "lz4_result",
+      "query": "completion",
+      "mean_ms": 0.1072875,
+      "median_ms": 0.0945,
+      "mean_shared_blocks": 15.00625,
+      "mean_wal_bytes": 1034.7625,
+      "mean_trigger_ms": 0.02548125
+    },
+    {
+      "rep": 0,
+      "arm": "lz4_result",
+      "query": "wake",
+      "mean_ms": 0.09945,
+      "median_ms": 0.092,
+      "mean_shared_blocks": 24.65625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.0187
+    },
+    {
+      "rep": 1,
+      "arm": "lz4_result",
+      "query": "completion",
+      "mean_ms": 0.10225,
+      "median_ms": 0.089,
+      "mean_shared_blocks": 15.00625,
+      "mean_wal_bytes": 1034.7625,
+      "mean_trigger_ms": 0.02425625
+    },
+    {
+      "rep": 1,
+      "arm": "lz4_result",
+      "query": "wake",
+      "mean_ms": 0.09599375,
+      "median_ms": 0.089,
+      "mean_shared_blocks": 24.65625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.01789375
+    },
+    {
+      "rep": 1,
+      "arm": "without_notify_trigger",
+      "query": "completion",
+      "mean_ms": 0.0774,
+      "median_ms": 0.072,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.425,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 1,
+      "arm": "without_notify_trigger",
+      "query": "wake",
+      "mean_ms": 0.06705625,
+      "median_ms": 0.063,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 1,
+      "arm": "without_operations_index",
+      "query": "completion",
+      "mean_ms": 0.0929375,
+      "median_ms": 0.0835,
+      "mean_shared_blocks": 12.99375,
+      "mean_wal_bytes": 882.2375,
+      "mean_trigger_ms": 0.02205
+    },
+    {
+      "rep": 1,
+      "arm": "without_operations_index",
+      "query": "wake",
+      "mean_ms": 0.07800625,
+      "median_ms": 0.0725,
+      "mean_shared_blocks": 22.69375,
+      "mean_wal_bytes": 847.35625,
+      "mean_trigger_ms": 0.014987499999999999
+    },
+    {
+      "rep": 1,
+      "arm": "baseline",
+      "query": "completion",
+      "mean_ms": 0.10395,
+      "median_ms": 0.0905,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.425,
+      "mean_trigger_ms": 0.023956250000000002
+    },
+    {
+      "rep": 1,
+      "arm": "baseline",
+      "query": "wake",
+      "mean_ms": 0.08733125,
+      "median_ms": 0.08,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.0168
+    },
+    {
+      "rep": 2,
+      "arm": "baseline",
+      "query": "completion",
+      "mean_ms": 0.1151125,
+      "median_ms": 0.101,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.425,
+      "mean_trigger_ms": 0.026525
+    },
+    {
+      "rep": 2,
+      "arm": "baseline",
+      "query": "wake",
+      "mean_ms": 0.09621249999999999,
+      "median_ms": 0.087,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.0181625
+    },
+    {
+      "rep": 2,
+      "arm": "without_operations_index",
+      "query": "completion",
+      "mean_ms": 0.092625,
+      "median_ms": 0.083,
+      "mean_shared_blocks": 12.99375,
+      "mean_wal_bytes": 882.2375,
+      "mean_trigger_ms": 0.02221875
+    },
+    {
+      "rep": 2,
+      "arm": "without_operations_index",
+      "query": "wake",
+      "mean_ms": 0.07993125,
+      "median_ms": 0.074,
+      "mean_shared_blocks": 22.69375,
+      "mean_wal_bytes": 847.35625,
+      "mean_trigger_ms": 0.0154125
+    },
+    {
+      "rep": 2,
+      "arm": "without_notify_trigger",
+      "query": "completion",
+      "mean_ms": 0.0783375,
+      "median_ms": 0.074,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.825,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 2,
+      "arm": "without_notify_trigger",
+      "query": "wake",
+      "mean_ms": 0.0698875,
+      "median_ms": 0.065,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 2,
+      "arm": "lz4_result",
+      "query": "completion",
+      "mean_ms": 0.145375,
+      "median_ms": 0.125,
+      "mean_shared_blocks": 15.00625,
+      "mean_wal_bytes": 1035.1625,
+      "mean_trigger_ms": 0.03548125
+    },
+    {
+      "rep": 2,
+      "arm": "lz4_result",
+      "query": "wake",
+      "mean_ms": 0.12985625,
+      "median_ms": 0.1165,
+      "mean_shared_blocks": 24.65625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.02535625
+    },
+    {
+      "rep": 3,
+      "arm": "lz4_result",
+      "query": "completion",
+      "mean_ms": 0.09855,
+      "median_ms": 0.085,
+      "mean_shared_blocks": 15.00625,
+      "mean_wal_bytes": 1035.1625,
+      "mean_trigger_ms": 0.0240875
+    },
+    {
+      "rep": 3,
+      "arm": "lz4_result",
+      "query": "wake",
+      "mean_ms": 0.0896875,
+      "median_ms": 0.082,
+      "mean_shared_blocks": 24.65625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.0166875
+    },
+    {
+      "rep": 3,
+      "arm": "without_notify_trigger",
+      "query": "completion",
+      "mean_ms": 0.0735,
+      "median_ms": 0.068,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.825,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 3,
+      "arm": "without_notify_trigger",
+      "query": "wake",
+      "mean_ms": 0.06541875,
+      "median_ms": 0.061,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 3,
+      "arm": "without_operations_index",
+      "query": "completion",
+      "mean_ms": 0.10056875,
+      "median_ms": 0.089,
+      "mean_shared_blocks": 12.99375,
+      "mean_wal_bytes": 882.6375,
+      "mean_trigger_ms": 0.0238625
+    },
+    {
+      "rep": 3,
+      "arm": "without_operations_index",
+      "query": "wake",
+      "mean_ms": 0.0845125,
+      "median_ms": 0.081,
+      "mean_shared_blocks": 22.69375,
+      "mean_wal_bytes": 847.35625,
+      "mean_trigger_ms": 0.016625
+    },
+    {
+      "rep": 3,
+      "arm": "baseline",
+      "query": "completion",
+      "mean_ms": 0.09705,
+      "median_ms": 0.0865,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.825,
+      "mean_trigger_ms": 0.02243125
+    },
+    {
+      "rep": 3,
+      "arm": "baseline",
+      "query": "wake",
+      "mean_ms": 0.0806875,
+      "median_ms": 0.076,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.0147875
+    },
+    {
+      "rep": 4,
+      "arm": "baseline",
+      "query": "completion",
+      "mean_ms": 0.109275,
+      "median_ms": 0.095,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.825,
+      "mean_trigger_ms": 0.02515
+    },
+    {
+      "rep": 4,
+      "arm": "baseline",
+      "query": "wake",
+      "mean_ms": 0.09104374999999999,
+      "median_ms": 0.081,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.01656875
+    },
+    {
+      "rep": 4,
+      "arm": "without_operations_index",
+      "query": "completion",
+      "mean_ms": 0.09354375,
+      "median_ms": 0.085,
+      "mean_shared_blocks": 12.99375,
+      "mean_wal_bytes": 882.6375,
+      "mean_trigger_ms": 0.02228125
+    },
+    {
+      "rep": 4,
+      "arm": "without_operations_index",
+      "query": "wake",
+      "mean_ms": 0.080175,
+      "median_ms": 0.075,
+      "mean_shared_blocks": 22.69375,
+      "mean_wal_bytes": 847.35625,
+      "mean_trigger_ms": 0.0156625
+    },
+    {
+      "rep": 4,
+      "arm": "without_notify_trigger",
+      "query": "completion",
+      "mean_ms": 0.09243125,
+      "median_ms": 0.0785,
+      "mean_shared_blocks": 14.99375,
+      "mean_wal_bytes": 987.825,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 4,
+      "arm": "without_notify_trigger",
+      "query": "wake",
+      "mean_ms": 0.0796375,
+      "median_ms": 0.072,
+      "mean_shared_blocks": 24.70625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0
+    },
+    {
+      "rep": 4,
+      "arm": "lz4_result",
+      "query": "completion",
+      "mean_ms": 0.09299375,
+      "median_ms": 0.081,
+      "mean_shared_blocks": 15.00625,
+      "mean_wal_bytes": 1035.1625,
+      "mean_trigger_ms": 0.0220375
+    },
+    {
+      "rep": 4,
+      "arm": "lz4_result",
+      "query": "wake",
+      "mean_ms": 0.0854375,
+      "median_ms": 0.078,
+      "mean_shared_blocks": 24.65625,
+      "mean_wal_bytes": 978.80625,
+      "mean_trigger_ms": 0.01585
+    }
+  ],
+  "notes": [
+    "Live access was read only; mutation trials used newly created isolated containers.",
+    "Completion plans: one unmeasured warmup per session; five alternating pairs per mode/statistics cell.",
+    "Write matrix preceded completion rewrite; synthetic fixture and fresh database clone per arm/repetition.",
+    "Full raw plans retained locally in ignored results directories."
+  ]
+}

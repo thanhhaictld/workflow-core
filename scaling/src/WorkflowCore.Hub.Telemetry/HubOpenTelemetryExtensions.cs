@@ -70,6 +70,12 @@ public static class HubOpenTelemetryExtensions
                 metrics.AddView("workflow_hub_claim_candidate_query_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_claim_unconstrained_batch_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_claim_legacy_fallback_duration_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_candidate_admission_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_candidate_capacity_wait_seconds", latencyBuckets);
+                metrics.AddView("workflow_hub_candidate_batch_fill", new ExplicitBucketHistogramConfiguration
+                {
+                    Boundaries = new double[] { 0, 1, 2, 4, 8, 16, 24, 32 }
+                });
                 metrics.AddView("workflow_hub_matching_dispatch_duration_seconds", latencyBuckets);
                 // Worker-side completion HTTP latency must not regress when
                 // admission gives non-claim DB work priority.

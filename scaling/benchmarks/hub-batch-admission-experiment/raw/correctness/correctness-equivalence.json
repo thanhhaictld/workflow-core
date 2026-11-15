@@ -1,0 +1,41 @@
+{
+  "baseline_path": "F:\\Project\\orca-workspaces\\feat-hub-remote-processor-scheduler\\hub-matching-scale-luna\\scaling\\benchmarks\\hub-batch-admission-experiment\\baseline.sql",
+  "baseline_sha256": "66a6b4d4b70e51c0cee55df59003014e4d58faf51fc8dd12173eaa7a3170e3dc",
+  "baseline_normalized_sha256": "6619ed0547eaf13d80f48991fde2a23cdfeee24388a950f0eb2c674817e96f6c",
+  "prototype_path": "F:\\Project\\orca-workspaces\\feat-hub-remote-processor-scheduler\\hub-matching-scale-luna\\scaling\\benchmarks\\hub-batch-admission-experiment\\prototype.sql",
+  "prototype_sha256": "cbe797d7bf777004577a35eb38ab4f2c74eaa1634ff902e1b18d2d0e88918215",
+  "prototype_normalized_sha256": "72a5c2d05e7fc22248667b3ce90045eff31f4294be69f713ee242e9c1b446ecb",
+  "sql_distinct": true,
+  "hub": "batch-equality-cb9788e85a0a4542a7fec9cb9d847163",
+  "selected_items": 13,
+  "expected_leases": 4,
+  "baseline_leases": 4,
+  "prototype_leases": 4,
+  "equality": true,
+  "lease_ids": [
+    "192e618f-dfce-4af8-b3d7-3dbf1efa2441",
+    "45250397-df1e-41e2-a644-6b89c1c64b2a",
+    "5406fe00-3750-40b9-b3a8-0f3d9b2502ab",
+    "e4461df9-32a8-45a8-ac0a-f651a0c85405"
+  ],
+  "owner_by_task": {
+    "192e618f-dfce-4af8-b3d7-3dbf1efa2441": "worker-ready",
+    "5406fe00-3750-40b9-b3a8-0f3d9b2502ab": "worker-expired",
+    "e4461df9-32a8-45a8-ac0a-f651a0c85405": "worker-capability-b",
+    "45250397-df1e-41e2-a644-6b89c1c64b2a": "worker-native-runnable"
+  },
+  "rejected_rows_unchanged": 9,
+  "covered": [
+    "per-item worker",
+    "per-item capability",
+    "workflow pins",
+    "observed epoch",
+    "due-ready",
+    "expired lease",
+    "live lease exclusion",
+    "future-ready exclusion",
+    "attempt exhaustion",
+    "native Runnable status",
+    "constrained exclusion"
+  ]
+}

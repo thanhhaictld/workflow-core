@@ -10,6 +10,14 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
 {
     private NpgsqlDataSource Source => tasks.DataSource;
     private static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
+    // Keep lease eligibility opaque to partial-index matching. After an empty
+    // queue is analyzed, state=1 can otherwise make PostgreSQL scan the entire
+    // expired-task index instead of probing this completion's primary key.
+    internal const string CompleteTaskSql = """
+        UPDATE wfc_scale.hub_task SET state=2,owner=NULL,lease_until=NULL,result_json=@result::jsonb,updated_at=now()
+        WHERE id=@task AND owner=@owner AND epoch=@epoch
+          AND CASE state WHEN 1 THEN lease_until>clock_timestamp() ELSE false END
+        """;
     // Fixed per Hub process; false selects the original per-event insert for A/B tests.
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
@@ -352,10 +360,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             """,ct,("snapshot",request.Snapshot.GetRawText()),("status",nextStatus),
             ("state",(short)(nextStatus=="Complete"?2:nextStatus=="Terminated"?3:1)),("id",id),
             ("waiting",nextStatus is "Runnable" or "Suspended" && !request.Runnable));
-        await using(var ack=Command(db,tx,"""
-            UPDATE wfc_scale.hub_task SET state=2,owner=NULL,lease_until=NULL,result_json=@result::jsonb,updated_at=now()
-            WHERE id=@task AND owner=@owner AND epoch=@epoch AND state=1 AND lease_until>clock_timestamp()
-            """,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
+        await using(var ack=Command(db,tx,CompleteTaskSql,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
             ("result",JsonSerializer.Serialize(new{commit=request,revision=revision+1,status=nextStatus}))))
             if(await ack.ExecuteNonQueryAsync(ct)!=1)return null;
         if(nextStatus=="Runnable")
@@ -553,10 +558,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 return !r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result);
         }
         if(status is "Complete" or "Terminated")return false;
-        await using(var cmd=Command(db,tx,"""
-            UPDATE wfc_scale.hub_task SET state=2,owner=NULL,lease_until=NULL,result_json=@result::jsonb,updated_at=now()
-            WHERE id=@task AND owner=@worker AND epoch=@epoch AND state=1 AND lease_until>clock_timestamp()
-            """,("result",result.GetRawText()),("task",task),("worker",worker),("epoch",epoch)))
+        await using(var cmd=Command(db,tx,CompleteTaskSql,
+            ("result",result.GetRawText()),("task",task),("owner",worker),("epoch",epoch)))
             if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
         await Execute(db,tx,"""
             UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()

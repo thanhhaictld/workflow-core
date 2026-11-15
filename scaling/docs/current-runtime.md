@@ -186,6 +186,31 @@ expiries, attempt exhaustion, owner epoch changes, admission wait, resource
 locks, active PostgreSQL connections and activity completion p95/p99. Avoid
 treating reduced HTTP calls alone as throughput proof.
 
+### Task index cleanup
+
+Migration `031_hub_retire_compatibility_claim_indexes.sql` drops these five
+non-unique compatibility claim indexes with `DROP INDEX CONCURRENTLY IF EXISTS`:
+
+- `ix_hub_task_claim_hub_sequence`
+- `ix_hub_task_claim_capability_sequence`
+- `ix_hub_task_claim_capability_bucket_sequence`
+- `ix_hub_task_ready_capability_sequence`
+- `ix_hub_task_ready_capability_bucket_sequence`
+
+Compose, `scripts/dev.ps1 db-schema` and current CI setup skip their original
+index-only migrations (023 and 025–027), then apply 031 after 030. Run 031 with
+autocommit, never inside a transaction block. Repeated application is safe.
+Task data, unique indexes, the three candidate discovery indexes, the global
+claim-sequence index, readiness/expiry, operations and reconciliation indexes
+are retained. Optional migration 028 is unchanged.
+
+Compatibility SQL claims and the capacity fallback remain available, but their
+performance without these indexes requires workload validation. To restore the
+previous index set for a compatibility rollback, explicitly reapply migrations
+023 and 025–027 after normal setup; their index builds can block writes. Use
+equivalent `CREATE INDEX CONCURRENTLY` statements outside a transaction for an
+online restore. Subsequent normal schema setup applies 031 and removes them again.
+
 ### Verification
 
 ```bash
