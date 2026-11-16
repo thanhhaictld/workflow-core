@@ -11,7 +11,7 @@ using WorkflowCore.RemoteExecution.Legacy;
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WFC_HUB_URL")))
 {
     var remote = Host.CreateApplicationBuilder(args);
-    remote.Services.AddWorkflowHubOpenTelemetry("workflow-hub-worker");
+    remote.Services.AddWorkflowHubOpenTelemetry("workflow-hub-worker", enableProcessCpuSampling: true);
     remote.Services.AddSingleton<IHubActivityHandler, ValidateTenantHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, ProvisionTenantHandler>();
     remote.Services.AddSingleton<IHubActivityHandler, SendWelcomeHandler>();
@@ -26,7 +26,7 @@ var connectionString = Environment.GetEnvironmentVariable("WFC_PG")
     ?? throw new InvalidOperationException("WFC_PG connection string is required.");
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddWorkflowHubOpenTelemetry("workflow-core-legacy-worker");
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-core-legacy-worker", enableProcessCpuSampling: true);
 builder.Services.AddDistributedWorkflowCore(connectionString, options =>
 {
     options.Concurrency = int.TryParse(Environment.GetEnvironmentVariable("WORKERS"), out var workers)

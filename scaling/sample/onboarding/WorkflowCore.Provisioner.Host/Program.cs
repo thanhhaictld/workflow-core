@@ -5,7 +5,7 @@ using WorkflowCore.Provisioner.Host;
 using WorkflowCore.RemoteExecution;
 
 var builder=Host.CreateApplicationBuilder(args);
-builder.Services.AddWorkflowHubOpenTelemetry("workflow-provisioner");
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-provisioner", enableProcessCpuSampling: true);
 var registerOnly=args.Contains("--register-only",StringComparer.Ordinal);
 builder.Services.AddHubWorkflowRuntime(options=>
 {

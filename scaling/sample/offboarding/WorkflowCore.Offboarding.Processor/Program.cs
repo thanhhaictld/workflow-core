@@ -8,7 +8,7 @@ using WorkflowCore.RemoteExecution;
 // Offboarding remains native-only. Optional policy benchmarks register routed
 // activities without affecting the original throughput workload.
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddWorkflowHubOpenTelemetry("workflow-offboarding-processor");
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-offboarding-processor", enableProcessCpuSampling: true);
 
 var registerOnly = args.Contains("--register-only", StringComparer.Ordinal);
 var registrations = builder.Services.AddHubWorkflowRuntime(options =>

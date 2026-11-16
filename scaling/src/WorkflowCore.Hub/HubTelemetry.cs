@@ -229,6 +229,24 @@ public static class HubTelemetry
     private static readonly ObservableGauge<long> ThreadPoolPending =
         ProcessMeter.CreateObservableGauge("workflow_hub_threadpool_pending",
             () => ThreadPool.PendingWorkItemCount, "{work_item}");
+    // A process-local gauge. OpenTelemetry service.name and service.instance.id
+    // identify each Hub/worker in Prometheus; no custom identity labels needed.
+    private const long NoCpuSample = long.MinValue;
+    private static long _processCpuPercentBits = NoCpuSample;
+    private static readonly ObservableGauge<double> ProcessCpuPercent =
+        ProcessMeter.CreateObservableGauge("workflow_hub_process_cpu_percent",
+            ProcessCpuPercentMeasurements, "%",
+            "Process CPU as a percentage of the CPU capacity visible to this container.");
+
+    public static void PublishProcessCpuPercent(double value) =>
+        Interlocked.Exchange(ref _processCpuPercentBits, BitConverter.DoubleToInt64Bits(value));
+
+    private static IEnumerable<Measurement<double>> ProcessCpuPercentMeasurements()
+    {
+        var bits = Interlocked.Read(ref _processCpuPercentBits);
+        if (bits != NoCpuSample)
+            yield return new Measurement<double>(BitConverter.Int64BitsToDouble(bits));
+    }
 
     // No measurements until the first sample succeeds. Disabling the sampler
     // must leave these series absent rather than report fabricated zero values.
