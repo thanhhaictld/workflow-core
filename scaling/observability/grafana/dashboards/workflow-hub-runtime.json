@@ -19,7 +19,34 @@
     "to": "now"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "service",
+        "label": "Service name",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(dotnet_process_cpu_count, service_name)",
+        "query": { "query": "label_values(dotnet_process_cpu_count, service_name)", "refId": "StandardVariableQuery" },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "refresh": 1,
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      },
+      {
+        "name": "instance",
+        "label": "Service instance ID",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(dotnet_process_cpu_count{service_name=~\"$service\"}, service_instance_id)",
+        "query": { "query": "label_values(dotnet_process_cpu_count{service_name=~\"$service\"}, service_instance_id)", "refId": "StandardVariableQuery" },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "refresh": 1,
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      }
+    ]
   },
   "annotations": {
     "list": []
@@ -651,8 +678,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 29,
-        "w": 12,
+        "y": 173,
+        "w": 24,
         "h": 8
       },
       "targets": [
@@ -769,7 +796,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 29,
+        "y": 165,
         "w": 12,
         "h": 8
       },
@@ -2079,7 +2106,49 @@
         { "refId": "A", "expr": "sum(rate(workflow_hub_candidate_capacity_fallbacks_total[5m]))", "legendFormat": "fallbacks/s", "range": true }
       ],
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] }
+    },
+    {
+      "id": 44,
+      "type": "state-timeline",
+      "title": "CPU utilization by service instance",
+      "description": "X is time; each row is a service.name / service.instance.id pair; block color represents the one-minute average process CPU percentage of the processor count visible to .NET. Select Service name and Service instance ID above to focus one Hub or worker process.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 181, "w": 24, "h": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (service_name, service_instance_id) (rate(dotnet_process_cpu_time_seconds_total{service_name=~\"$service\",service_instance_id=~\"$instance\"}[1m])) / on (service_name, service_instance_id) max by (service_name, service_instance_id) (dotnet_process_cpu_count{service_name=~\"$service\",service_instance_id=~\"$instance\"})",
+          "legendFormat": "{{service_name}} / {{service_instance_id}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "orange", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "alignValue": "center",
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "mergeValues": false,
+        "rowHeight": 0.9,
+        "showValue": "never",
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
     }
   ],
-  "description": "Process memory, workflow throughput, concurrency, PostgreSQL pressure, HTTP latency and k6 load-test metrics."
+  "description": "Process CPU and memory, workflow throughput, concurrency, PostgreSQL pressure, HTTP latency and k6 load-test metrics."
 }

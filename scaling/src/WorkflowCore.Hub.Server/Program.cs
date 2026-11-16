@@ -9,7 +9,7 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Workflow")
     ?? Environment.GetEnvironmentVariable("WFC_PG")
     ?? throw new InvalidOperationException("Standalone Hub requires WFC_PG");
-builder.Services.AddWorkflowHubOpenTelemetry("workflow-hub", httpServer: true);
+builder.Services.AddWorkflowHubOpenTelemetry("workflow-hub", httpServer: true, enableProcessCpuSampling: true);
 builder.Services.AddHubGateway(connectionString);
 builder.Services.AddHubScheduling(builder.Configuration.GetSection("WorkflowHub:Scheduler"));
 var app = builder.Build();

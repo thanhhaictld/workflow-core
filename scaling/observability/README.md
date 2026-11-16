@@ -82,11 +82,14 @@ make obs-test-4k                    # 4,000 workflows / 100 VUs + durable audit
 make obs-test                       # 16,000 workflows / 200 VUs / 1,800 seconds
 make obs-matcher-failover
 make obs-down                       # stop containers; retain named volumes
+make obs-clean                      # stop the same stack and delete its volumes
 ~~~
 
-The only Make targets are `help`, `ups-16`, `obs-setup`, `obs-config`,
-`obs-ps`, `obs-logs`, `obs-down`, `obs-test-4k`, `obs-test`, and
-`obs-matcher-failover`. Use `pwsh -NoProfile -File scripts/dev.ps1 ...` for
+The Make targets include `help`, `ups-16`, `obs-setup`, `obs-config`,
+`obs-ps`, `obs-logs`, `obs-down`, `obs-clean`, `obs-test-4k`, `obs-test`, and
+`obs-matcher-failover`. `obs-clean` removes the Compose volumes for both the
+runtime project and its owner-test project, including persisted PostgreSQL data.
+Use `pwsh -NoProfile -File scripts/dev.ps1 ...` for
 the separate local development stack, and `scripts/owner-recovery.ps1` directly
 for other owner-recovery actions.
 
@@ -288,12 +291,35 @@ The provisioned Workflow Hub Stress Test & Runtime dashboard contains:
 - Ready, leased and dead tasks; PostgreSQL total/active sessions
 - Hub claim latency and HTTP server request rates
 - SSE subscriber count
+- Per-process CPU utilization timeline, with one color-bucket row per service instance
 
 Built-in .NET runtime, ASP.NET Core, HttpClient and Npgsql telemetry is
 also available in Explore. Metrics use low-cardinality labels only:
 hub, activity_type, outcome, service_name and service_instance_id.
 No tenant ID, workflow ID, task ID, auth header or payload is used in
 Prometheus labels.
+
+### Per-process CPU heatmap
+
+The chart uses the .NET runtime `dotnet_process_cpu_time_seconds_total` counter
+and `dotnet_process_cpu_count` gauge. It divides the one-minute CPU time rate
+by the processor count visible to .NET, so 100% means the process used the
+equivalent of all visible processors over that interval.
+The OpenTelemetry resource attributes `service.name` and
+`service.instance.id` are converted by the Collector to Prometheus labels
+`service_name` and `service_instance_id`. The service name identifies the role
+(for example, `workflow-hub` or `workflow-provisioner`); the instance ID
+identifies a specific process. `service.instance.id` uses
+`OTEL_SERVICE_INSTANCE_ID` when configured; otherwise the exporter creates a
+process-unique ID from the machine name.
+
+In Grafana, open **CPU utilization by service instance** on the Workflow Hub
+runtime dashboard. The X axis is time. Each Y row is a
+`service_name / service_instance_id` pair, and each block's color shows that
+process's CPU utilization bucket (green below 50%, yellow from 50%, orange
+from 75%, and red from 90%). Select a service name and instance ID to focus one
+Hub or worker. The one-minute rate smooths short spikes and needs at least two
+counter samples. It does not identify the methods consuming CPU.
 
 ### Traces and logs
 
@@ -333,8 +359,8 @@ pwsh -NoProfile -File scaling/observability/compose.ps1 -f scaling/observability
   --env-file scaling/observability/.env down
 ~~~
 
-This keeps all named data volumes. Run `make obs-clean` (or add `--volumes`
-to `down`) only when you intend to erase the Compose project’s named volumes,
+This keeps all named data volumes. Run `make obs-clean` only when you intend to
+erase the owner-recovery runtime and owner-test Compose projects' volumes,
 including local workflow, PostgreSQL, Prometheus and Grafana state.
 
 ## Caveats

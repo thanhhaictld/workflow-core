@@ -16,7 +16,8 @@ namespace WorkflowCore.Hub.Telemetry;
 public static class HubOpenTelemetryExtensions
 {
     public static IServiceCollection AddWorkflowHubOpenTelemetry(
-        this IServiceCollection services, string serviceName, bool httpServer = false)
+        this IServiceCollection services, string serviceName, bool httpServer = false,
+        bool enableProcessCpuSampling = false)
     {
         var endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
         if (string.IsNullOrWhiteSpace(endpoint))
@@ -86,7 +87,6 @@ public static class HubOpenTelemetryExtensions
                 metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_workflow_row_lock_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_history_write_duration_seconds", latencyBuckets);
-
                 metrics.AddOtlpExporter(options =>
                 {
                     options.Protocol = OtlpExportProtocol.HttpProtobuf;
@@ -118,6 +118,9 @@ public static class HubOpenTelemetryExtensions
                     options.Endpoint = new Uri(baseEndpoint + "/v1/traces");
                 });
             });
+
+        if (enableProcessCpuSampling)
+            services.AddHostedService<ProcessCpuSampler>();
 
         // Logs are exported only when explicitly opted in. Do not log workflow
         // input/output payloads, auth headers or tenant identifiers.

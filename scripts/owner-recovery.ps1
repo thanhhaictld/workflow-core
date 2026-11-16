@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('help','setup','config','build','up','ps','logs','down','db-test','smoke-test','stress-test','test','test-4k','fault-test')]
+    [ValidateSet('help','setup','config','build','up','ps','logs','down','clean','db-test','smoke-test','stress-test','test','test-4k','fault-test')]
     [string]$Task = 'help',
     [string]$Project = '',
     [string]$ComposeFile = 'scaling/observability/compose.yaml',
@@ -28,6 +28,7 @@ Owner recovery on the existing observability stack:
   make ups-16                         Build/start the primary 16-processor stack
   make obs-config                     Inspect the resolved Compose configuration
   make obs-ps / obs-logs / obs-down   Inspect, log or stop the same stack (keep data)
+  make obs-clean                     Stop the stack and delete its Compose volumes
   make obs-test-4k                    Run 4,000 workflows / 100 VUs + durable audit
   make obs-test                       Run the 16,000-workflow durable audit
   make obs-matcher-failover            Run candidate/SSE owner-failure windows
@@ -190,6 +191,7 @@ switch ($Task) {
     ps { Invoke-Compose ps -a; Invoke-TestCompose ps -a }
     logs { Invoke-Compose logs --tail=100 hub hub-2 processor hub-lb postgres otel-collector grafana prometheus }
     down { Invoke-Compose down; Invoke-TestCompose down }
+    clean { Invoke-Compose down --volumes --remove-orphans; Invoke-TestCompose down --volumes --remove-orphans }
     db-test { Test-Database }
     smoke-test { Wait-LabReady; Test-K6 unordered 40; Test-K6 keyed 40 }
     stress-test { Wait-LabReady; Test-K6 $StressMode $Count }
