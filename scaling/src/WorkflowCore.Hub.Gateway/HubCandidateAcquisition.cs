@@ -59,11 +59,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
         _backpressure = backpressure ?? _backpressure;
         var configuredConcurrency = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY");
         var concurrencySetting = "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY";
-        if (configuredConcurrency is null)
-        {
-            configuredConcurrency = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_ADMISSION_CONCURRENCY");
-            concurrencySetting = "WFC_HUB_MATCHING_ADMISSION_CONCURRENCY";
-        }
         if (configuredConcurrency is not null && (!int.TryParse(configuredConcurrency, out var parsed) || parsed is < 1 or > 32))
             throw new ArgumentException($"{concurrencySetting} must be 1..32");
         _admissionSlots = new(configuredConcurrency is null ? 2 : int.Parse(configuredConcurrency));

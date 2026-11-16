@@ -40,8 +40,7 @@ public sealed class HubClaimCandidateTests
         var first = await InsertTask(db, hub, "activity", mode: null, workflowReference: false);
         var second = await InsertTask(db, secondHub, "activity", mode: null, workflowReference: false);
         var third = await InsertTask(db, hub, "activity", mode: null, workflowReference: false);
-        await using var store = new HubTaskStore(database,
-            enableUnconstrainedBatchClaims: false, enableFifoHeadPrefilter: false);
+        await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: false);
         var claimed = await store.ClaimAsync("worker", multipleHubs ? [hub, secondHub] : [hub],
             [new(hub, "activity", 1), new(secondHub, "activity", 1)],
             3, TimeSpan.FromSeconds(30), default,
@@ -50,10 +49,8 @@ public sealed class HubClaimCandidateTests
         Assert.Equal(expected, claimed.Select(task => task.Id));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task WorkflowFiltersRunBeforeCandidateLimit(bool fifoHeadFilter)
+    [Fact]
+    public async Task WorkflowFiltersRunBeforeCandidateLimit()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
@@ -79,8 +76,7 @@ public sealed class HubClaimCandidateTests
             await backlog.ExecuteNonQueryAsync();
         }
         var expected = await InsertTask(db, hub, "__native_workflow__");
-        await using var store = new HubTaskStore(database,
-            enableUnconstrainedBatchClaims: false, enableFifoHeadPrefilter: fifoHeadFilter);
+        await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: false);
         var claimed = await store.ClaimAsync("worker", [hub], [new(hub, "__native_workflow__", 1)],
             1, TimeSpan.FromSeconds(30), default, [new(hub, "candidate", 1)]);
         Assert.Equal(expected, Assert.Single(claimed).Id);
@@ -109,8 +105,7 @@ public sealed class HubClaimCandidateTests
         if (!usePins) expected.Add(orphan);
         expected.Add(await InsertTask(db, hub, "activity", mode: null));
 
-        await using var store = new HubTaskStore(database,
-            enableUnconstrainedBatchClaims: false, enableFifoHeadPrefilter: false);
+        await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: false);
         HubWorkflowCapability[]? pins = usePins ? [new(hub, "candidate", 1)] : null;
         var claimed = await store.ClaimAsync("worker", [hub],
             [new(hub, "__native_workflow__", 1), new(hub, "__workflow__", 1), new(hub, "activity", 1)],
@@ -119,7 +114,7 @@ public sealed class HubClaimCandidateTests
     }
 
     [Fact]
-    public async Task OrderedCapabilityMerge_RespectsWorkflowPinsAndNativeStatus()
+    public async Task SplitBatchClaims_RespectWorkflowPinsAndNativeStatus()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
@@ -132,7 +127,7 @@ public sealed class HubClaimCandidateTests
         await InsertTask(db, hub, "activity", status: "Complete");
         var activity = await InsertTask(db, hub, "activity", definitionVersion: 2);
         await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: true,
-            enableOrderedCapabilityMerge: true);
+            enableSplitBatchClaimCandidates: true);
         var claimed = await store.ClaimAsync("worker", [hub],
             [new(hub, "__native_workflow__", 1), new(hub, "activity", 1)],
             8, TimeSpan.FromSeconds(30), default, [new(hub, "candidate", 1)],

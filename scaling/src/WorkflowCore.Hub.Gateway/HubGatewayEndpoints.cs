@@ -13,13 +13,6 @@ namespace WorkflowCore.Hub.Gateway;
 public static class HubGatewayEndpoints
 {
     private static long _pullClaims, _pullEmptyClaims, _pullFailedClaims;
-    // Optional: the matcher verifies the current PostgreSQL ownership epoch
-    // immediately before every SQL task claim. The Gateway has already read
-    // the live partition owner to route the HTTP poll, so another gateway-side
-    // OwnsAsync query is redundant when the dispatcher enforces the check.
-    // Default OFF until same-runner and crash-recovery A/B validation.
-    private static readonly bool DeferInitialMatchingOwnerCheck =
-        Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_DEFER_OWNER_CHECK") is "true" or "1" or "True";
 
     public static IServiceCollection AddHubGateway(
         this IServiceCollection services, string connectionString)
@@ -531,8 +524,7 @@ public static class HubGatewayEndpoints
                     // Valid local lease was observed in ResolvePartitionAsync.
                     // HubTaskMatcher still verifies DB ownership immediately
                     // before claiming, including after a long-poll wait.
-                    if (!DeferInitialMatchingOwnerCheck &&
-                        !await ownership.StillOwnsPartitionAsync(hub, partition, ct))
+                    if (!await ownership.StillOwnsPartitionAsync(hub, partition, ct))
                         return Results.StatusCode(503);
                     return Results.Ok(await matcher.LongPollAsync(request, ct));
                 }
@@ -548,8 +540,7 @@ public static class HubGatewayEndpoints
                         context.Request.Headers.Authorization.ToString(), ct);
                     return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
                 }
-                if (!DeferInitialMatchingOwnerCheck &&
-                    !await ownership.StillOwnsAsync(request.Hubs[0], ct))
+                if (!await ownership.StillOwnsAsync(request.Hubs[0], ct))
                     return Results.StatusCode(503);
                 return Results.Ok(await matcher.LongPollAsync(request, ct));
             }

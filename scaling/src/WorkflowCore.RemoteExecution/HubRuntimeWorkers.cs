@@ -133,36 +133,32 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             capabilities.Select(c => c.HubId).Distinct().Count() == 1 &&
             await Push(effectiveConcurrency,ct)) return;
         var running=new List<Task>();
-        // A matching poll requires one Hub namespace. Multi-hub workers retain
-        // the proven PR #18 SSE/adaptive path until per-Hub fan-out is added.
-        var matchingPoll=options.LongPollingEnabled &&
-            capabilities.Select(c => c.HubId).Distinct().Count() == 1;
-        var listener=matchingPoll ? Task.CompletedTask : Listen(ct);
+        var singleHub = capabilities.Select(c => c.HubId).Distinct().Count() == 1;
+        var taskSsePushEnabled = singleHub && options.MatchingPartitions > 1 &&
+            effectiveConcurrency > 0 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_TASK_SSE_PUSH") is
+                ("true" or "1" or "True");
+        var capacityFanoutEnabled = singleHub && options.MatchingPartitions > 1 &&
+            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_CAPACITY_FANOUT") is
+                ("true" or "1" or "True");
+        var listener = taskSsePushEnabled || capacityFanoutEnabled
+            ? Task.CompletedTask
+            : Listen(ct);
         // True Hub-to-worker SSE distribution: server acquires a fenced
         // lease on readiness and pushes it over a persistent stream. A separate
         // REST credit frame replenishes capacity after execution completes.
-        if (matchingPoll && options.MatchingPartitions > 1 &&
-            effectiveConcurrency > 0 &&
-            Environment.GetEnvironmentVariable("WFC_HUB_TASK_SSE_PUSH") is
-                ("true" or "1" or "True"))
+        if (taskSsePushEnabled)
         {
             await RunSseTaskPushAsync(effectiveConcurrency, ct);
             return;
         }
-        // Experimental: reserve one actual execution slot for each outstanding
-        // shard poll. The current single rotating poll stays the default.
-        // Do not enable for multi-Hub lanes, which still use SSE/REST fallback.
-        if (matchingPoll && options.MatchingPartitions > 1 &&
-            Environment.GetEnvironmentVariable("WFC_HUB_WORKER_CAPACITY_FANOUT") is
-                ("true" or "1" or "True"))
+        // Reserve one actual execution slot for each outstanding shard poll.
+        // Do not enable for multi-Hub lanes, which retain fenced REST claims.
+        if (capacityFanoutEnabled)
         {
             await RunCapacityAwarePollsAsync(effectiveConcurrency, ct);
             return;
         }
-        // Rotating one outstanding long poll per worker lane avoids racing
-        // multiple matching partitions into leasing more tasks than slots.
-        // A 4-second server hold bounds discovery when a shard has no pollers.
-        var matchingPartition = Random.Shared.Next(options.MatchingPartitions);
         var emptyClaims=0;
         long nextClaimAt=0;
         var hintPreempted=false;
@@ -172,14 +168,11 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
             {
                 running.RemoveAll(t=>t.IsCompleted);
                 if(running.Count<effectiveConcurrency &&
-                    (matchingPoll || !options.AdaptiveClaimsEnabled ||
-                     Stopwatch.GetTimestamp()>=nextClaimAt))
+                    (!options.AdaptiveClaimsEnabled || Stopwatch.GetTimestamp()>=nextClaimAt))
                 {
                     try
                     {
-                        var endpoint = matchingPoll
-                            ? "api/hub/workers/tasks:poll"
-                            : "api/hub/workers/tasks:claim";
+                        var endpoint = "api/hub/workers/tasks:claim";
                         var claimHttpStarted = Stopwatch.GetTimestamp();
                         var claimHttpOutcome = "error";
                         HubLeasedTask[] leases;
@@ -187,9 +180,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         {
                             leases = await ClaimRequestAsync(endpoint,
                                 new HubClaimRequest(_owner,capabilities.Select(c=>c.HubId).Distinct().ToArray(),capabilities,
-                                    Math.Min(16,effectiveConcurrency-running.Count),workflows,
-                                    matchingPoll && options.MatchingPartitions>1 ? matchingPartition : null,
-                                    matchingPoll && options.MatchingPartitions>1 ? options.MatchingPartitions : null), ct);
+                                    Math.Min(16,effectiveConcurrency-running.Count),workflows), ct);
                             claimHttpOutcome = leases.Length > 0 ? "claimed" : "empty";
                         }
                         finally
@@ -197,8 +188,6 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             HubTelemetry.WorkerClaimHttpDuration.Record(Stopwatch.GetElapsedTime(claimHttpStarted).TotalSeconds,
                                 _lane, new KeyValuePair<string, object?>("outcome", claimHttpOutcome));
                         }
-                        if (matchingPoll && options.MatchingPartitions > 1)
-                            matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
                             new KeyValuePair<string,object?>("outcome",leases.Length>0?"claimed":"empty"));
                         foreach(var lease in leases)running.Add(Run(lease,ct));
@@ -209,7 +198,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                             hintPreempted=false;
                             continue;
                         }
-                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
+                        if(options.AdaptiveClaimsEnabled)
                         {
                             emptyClaims=Math.Min(emptyClaims+1,8);
                             // Back off only after empty claims; successful work is claimed immediately.
@@ -228,19 +217,12 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         HubTelemetry.WorkerClaimRequests.Add(1,_lane,
                             new KeyValuePair<string,object?>("outcome","error"));
                         logger.LogWarning(ex,"Hub claim failed; retrying");
-                        if(options.AdaptiveClaimsEnabled && !matchingPoll)
+                        if(options.AdaptiveClaimsEnabled)
                             nextClaimAt=Stopwatch.GetTimestamp()+
                                 (long)(Math.Max(1,options.PollInterval.TotalSeconds)*Stopwatch.Frequency);
-                        if(matchingPoll)
-                        {
-                            if (options.MatchingPartitions > 1)
-                                matchingPartition = (matchingPartition + 1) % options.MatchingPartitions;
-                            await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                        }
+                        await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     }
                 }
-                if (matchingPoll && running.Count < concurrency)
-                    continue; // next server-held poll; no local jitter/backoff
                 using var wait=CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var pollDelay=options.PollInterval;
                 if(options.AdaptiveClaimsEnabled && running.Count<effectiveConcurrency)

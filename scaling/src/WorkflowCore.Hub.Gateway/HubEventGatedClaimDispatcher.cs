@@ -50,7 +50,6 @@ public sealed class HubEventGatedClaimDispatcher
     private readonly Dictionary<Key, Lane> _lanes = new();
     private readonly ConcurrentDictionary<string, long> _lastCatchupProbe = new();
     private readonly bool _sharded;
-    private readonly bool _capabilityScopedClaims;
     private readonly int _partitionCount;
     private readonly TimeSpan _pollTimeout;
     private int _waiters;
@@ -63,7 +62,7 @@ public sealed class HubEventGatedClaimDispatcher
         Func<HubClaimRequest, CancellationToken, Task<IReadOnlyList<HubLeasedTask>>> claim,
         Func<HubClaimRequest, CancellationToken, Task<bool>> stillOwns,
         bool sharded, int partitionCount, TimeSpan? pollTimeout = null,
-        bool capabilityScopedClaims = false, int maxWaiters = 2048)
+        int maxWaiters = 2048)
     {
         if (partitionCount is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(partitionCount));
         _claim = claim;
@@ -71,7 +70,6 @@ public sealed class HubEventGatedClaimDispatcher
         _maxWaiters = maxWaiters;
         _stillOwns = stillOwns;
         _sharded = sharded;
-        _capabilityScopedClaims = capabilityScopedClaims;
         _partitionCount = sharded ? partitionCount : 1;
         _pollTimeout = pollTimeout ?? TimeSpan.FromSeconds(sharded ? 4 : 20);
         if (_pollTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(pollTimeout));
@@ -259,15 +257,7 @@ public sealed class HubEventGatedClaimDispatcher
                     span?.SetTag("matching.partition_count", _partitionCount);
                     span?.SetTag("matching.capability_count", request.Capabilities.Length);
                     var started = Stopwatch.GetTimestamp();
-                    // A typed committed hint must not trigger scans for unrelated
-                    // capabilities registered on the same worker lane. A generic
-                    // recovery/permit-release hint still probes the full set.
-                    var targeted = _capabilityScopedClaims && work is Hint typed && typed.Type is not null
-                        ? request with { Capabilities = request.Capabilities
-                            .Where(c => c.TaskType == typed.Type && c.Version == typed.Version)
-                            .ToArray() }
-                        : request;
-                    leases = await _claim(targeted, ct);
+                    leases = await _claim(request, ct);
                     var seconds = Stopwatch.GetElapsedTime(started).TotalSeconds;
                     span?.SetTag("tasks.claimed", leases.Count);
                     HubTelemetry.MatchingDispatchDuration.Record(seconds,

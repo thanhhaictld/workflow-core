@@ -18,63 +18,32 @@ use the existing `Dockerfile.app`; database tests use `benchmark/OwnerTests.Dock
 
 ## Start, test and stress
 
-Run from repository root with Docker Compose, PowerShell 7 and GNU Make. Python
-3 is used for durable SQL audits and fault tracing; .NET 10 runs inside the
-test image. k6 runs in the existing Compose container.
+Run from the repository root with Docker Compose, PowerShell 7, Python 3, .NET 10, and k6 available. The primary startup entry point uses the owner-recovery Compose stack:
 
 ```powershell
 make obs-setup                        # preserve an existing .env
-make obs-owner-recovery-up
-make obs-owner-recovery-up-off-metric-sampler  # A/B run without Hub SQL metric sampling
-make obs-owner-recovery-test          # k6 smoke against the running stack
-make obs-owner-recovery-test-4k       # 4,000 workflows with 400 VUs
-make obs-test                         # 16,000 workflows with 200 VUs + durable audit
-make obs-owner-recovery-db-test       # optional isolated PostgreSQL test suite
-make obs-owner-recovery-stress-test K6_POLICY_MODE=keyed K6_POLICY_COUNT=1000 K6_POLICY_VUS=100
-make obs-owner-recovery-ps
-make obs-owner-recovery-logs
-make obs-owner-recovery-down          # keep all runtime/telemetry/test volumes
+make ups-16                           # build and start 16 processors
+make obs-config                       # inspect resolved Compose settings
+make obs-ps
+make obs-logs
+make obs-test-4k                      # 4,000 workflows / 100 VUs + durable audit
+make obs-test                         # 16,000 workflows / 200 VUs + durable audit
+make obs-matcher-failover
+make obs-down                         # stop containers; retain volumes
 ```
 
-`obs-owner-recovery-setup` is also an alias for creating the same env file.
-Configure `scaling/observability/.env` as with other suites. `OBS_ENV_FILE` and
-`OBS_COMPOSE_FILE` overrides are supported. The launcher keeps the existing
-PostgreSQL credentials and applies ordered forward migrations with
-`ON_ERROR_STOP`; no schema reset occurs. Both Hubs become healthy before four
-processors start. k6 begins only after benchmark definitions are registered.
-Each DB-free processor has independent 8-slot workflow and activity lanes.
-
-| Target | Action |
-| --- | --- |
-| `obs-owner-recovery-up` | Build/start observability, monitor and the recovery runtime profile |
-| `obs-owner-recovery-up-off-metric-sampler` | Same build/start, with the SQL metrics sampler disabled on both Hubs |
-| `obs-owner-recovery-test` | Run k6 unordered/keyed cohorts of 40 each on the running stack |
-| `obs-owner-recovery-test-4k` | Run 4,000 workflows with 400 VUs using `K6_POLICY_MODE`, then durable audit |
-| `obs-test` | Run 16,000 workflows with 200 VUs, then durable audit (30-minute completion timeout) |
-| `obs-owner-recovery-stress-test` | Run existing `k6-policy` with selected mode/count/VUs, then durable audit |
-| `obs-owner-recovery-smoke-test` | k6 unordered/keyed cohorts only |
-| `obs-owner-recovery-db-test` | Database tests only, isolated from runtime data |
-| `obs-owner-recovery-fault-test` | Deliberate owner failures with continuous SQL/SSE/log tracing |
-| `obs-owner-recovery-build` / `config` | Build images / show resolved Compose config |
-| `obs-owner-recovery-ps` / `logs` | Inspect this worktree's observability and test projects |
-| `obs-owner-recovery-down` | Stop/remove both projects' containers/networks; keep named volumes |
-
+Other owner-recovery actions remain available directly through `scripts/owner-recovery.ps1`, for example `db-test`, `smoke-test`, `stress-test`, and `fault-test`. Use `-Processors`, `-ComposeFile`, `-EnvFile`, and other script parameters to customize them. `OBS_ENV_FILE` and `OBS_COMPOSE_FILE` overrides are supported. The launcher applies ordered forward migrations with `ON_ERROR_STOP`; it never resets the runtime schema. The 16 processor containers each run independent 8-slot workflow and activity lanes.
 The workload supports `K6_POLICY_MODE=unordered`, `partition`, or `keyed`.
-Run `obs-owner-recovery-up` after changing application code to rebuild and start
+Run `make ups-16` after changing application code to rebuild and start
 the runtime before running the test, test-4k, smoke-test or stress-test target. These
-k6 targets do not rebuild or start the runtime. Run `obs-owner-recovery-db-test`
+k6 targets do not rebuild or start the runtime. Run `pwsh -NoProfile -File scripts/owner-recovery.ps1 db-test`
 separately for the isolated PostgreSQL suite.
 Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
 `K6_POLICY_TIMEOUT_SECONDS=600`. Keyed mode uses eight capacity-one resource
 keys; partition mode uses the sample's partition-ordering policy. These are
 synthetic 75 ms activities, not production capacity measurements.
 
-For a sampler-cost comparison, run `make obs-owner-recovery-up-off-metric-sampler`
-and then the same `test` or `stress-test` command used for the baseline. This is
-an alias for normal `up` with `WFC_HUB_METRICS_SAMPLER_ENABLED=false` exported to
-both Hubs. The flag defaults to `true`; `0` and case-insensitive `false` disable it.
-It is read at process startup. Run `make obs-owner-recovery-up` to restore the
-sampler, provided your shell and `.env` do not explicitly disable it.
+The `make ups-16` golden preset always sets `WFC_HUB_METRICS_SAMPLER_ENABLED=false`. For an A/B with the sampler enabled, set `$env:WFC_HUB_METRICS_SAMPLER_ENABLED='true'` and start directly with `pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 16`, then run the same `test` or `stress-test` command. The flag defaults to `true`; `0` and case-insensitive `false` disable it, and it is read at process startup. To return to the golden disabled setting, clear the shell override with `Remove-Item Env:WFC_HUB_METRICS_SAMPLER_ENABLED` and run `make ups-16`.
 
 The switch removes `HubMetricsSampler` entirely: no five-second database/queue
 diagnostics, minute-level operations-history samples, or sampler-triggered
@@ -85,9 +54,6 @@ request/execution timings, process metrics, timer/recovery loops, OTEL export,
 and the collector's PostgreSQL receivers remain active. Monitor requests and
 collector SQL can still add database load, so this compares the Hub sampler's
 cost rather than measuring a runtime with all observability disabled.
-
-Without Make, set `$env:WFC_HUB_METRICS_SAMPLER_ENABLED='false'` before running
-`pwsh -NoProfile -File scripts/owner-recovery.ps1 up`, or put the flag in `.env`.
 
 SSE workers offer one credit per free execution slot. The Hub can combine
 workflow credits already queued on the same session into one claim of up to 32 tasks;
@@ -166,9 +132,9 @@ Compose-base labels are checked before any fault operation. This target can
 interrupt other work you submit to this same observability stack.
 
 ```powershell
-make obs-owner-recovery-fault-test
-make obs-owner-recovery-fault-test OWNER_FAULT_REPEAT=2
-make obs-owner-recovery-fault-test OWNER_FAULT_VICTIM=hub-2 OWNER_FAULT_MODE=busy
+pwsh -NoProfile -File scripts/owner-recovery.ps1 fault-test
+pwsh -NoProfile -File scripts/owner-recovery.ps1 fault-test -Repeat 2
+pwsh -NoProfile -File scripts/owner-recovery.ps1 fault-test -Victim hub-2 -Mode busy
 ```
 
 `OWNER_RECOVERY_NOTIFY=false` disables Hub listeners for a missed-hint experiment;

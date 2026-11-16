@@ -1,10 +1,12 @@
 # Hub matching and claim flow
 
-This guide describes the **current experimental Hub runtime** and then shows a
-**proposed, not implemented** in-memory candidate cache. Diagrams use plain text.
-The main path is sharded, event-gated long polling; direct claims, ordinary SSE
-readiness, and the opt-in SSE task distributor are alternatives described below.
-Configuration and deployment determine which path is active.
+The current runtime is described in [current-runtime.md](current-runtime.md):
+partition-owned candidate matching with fenced SSE delivery. This document
+retains older claim-flow analysis for implementation context. The former
+single rotating long-poll worker mode and its `WFC_HUB_LONG_POLL_ENABLED`
+option have been removed. The `/workers/tasks:poll` route and matcher remain
+for the retained SSE distributor, capacity-fanout workers, and fenced pull
+recovery.
 
 Legend: `[MEM]` Hub process memory; `[DB]` PostgreSQL; `[NET]` REST/SSE or
 PostgreSQL notification; `[I/O]` database work, which may hit memory or disk.
@@ -16,8 +18,8 @@ PostgreSQL notification; `[I/O]` database work, which may hit memory or disk.
 [Open the editable Excalidraw diagram](images/hub-matching-architecture.excalidraw).
 The shard assignments shown are examples. A task's matching shard is its
 partition ID modulo the configured matching shard count; database leases govern
-ownership and can move after failover. The diagram illustrates the opt-in
-sharded, event-gated matching path; other delivery modes are described below.
+ownership and can move after failover. The diagram illustrates shard ownership
+and durable task authority.
 
 ## Current flow: from creation to execution
 
@@ -54,8 +56,8 @@ sharded, event-gated matching path; other delivery modes are described below.
        |
        v
  [MEM] Owner parks the worker request in a bounded waiter queue.
-       Event-gated dispatcher coalesces demand and readiness; it can perform
-       a throttled catch-up probe when a worker arrives without a fresh hint.
+       Matching parks the request in a bounded waiter queue and checks the
+       owner before trying a fenced pull claim.
        |
        v
  [DB 3] Verify owner before claim; apply optional claim admission gate.
@@ -78,8 +80,8 @@ sharded, event-gated matching path; other delivery modes are described below.
 ```
 
 Notifications are wakeup hints, not the source of truth. The safety sweep runs
-on each Hub roughly every two seconds; event-gated matching's typed recovery
-scan is additionally throttled to roughly ten seconds. A listener reconnect
+on each Hub roughly every two seconds; matching recovery hints are throttled
+to avoid claim storms. A listener reconnect
 also requests reconciliation. Timers, lost notifications, retry and lease
 expiry can all require rediscovery. Sweeps also do other maintenance, including
 dead-letter/reconciliation work. See [HubReadinessBroadcaster.cs](../src/WorkflowCore.Hub.Gateway/HubReadinessBroadcaster.cs),
@@ -108,8 +110,6 @@ and [HubEventGatedClaimDispatcher.cs](../src/WorkflowCore.Hub.Gateway/HubEventGa
      |        in separate bounded locking branches;      |
      |        merge by sequence and select batch.        |
      |   no:  original combined candidate query.         |
-     |   opt-in ordered-capability variant: per-type     |
-     |        ready scans, under restricted conditions.   |
      |                                                   |
      | Eligibility includes hub, shard, capability,      |
      | due/expiry, attempts, absence of constraints,     |
@@ -128,8 +128,7 @@ and [HubEventGatedClaimDispatcher.cs](../src/WorkflowCore.Hub.Gateway/HubEventGa
           v                                         v
  [DB, I/O] Fallback candidate query         No fallback needed /
    ordered by sequence, LIMIT 96;           permitted for this request
-   workflow and optional FIFO-head
-   filtering occurs before that limit.
+   workflow eligibility and pins are checked before admission.
           |
           v
  [DB, I/O] For candidates, transactions recheck and lock task rows;

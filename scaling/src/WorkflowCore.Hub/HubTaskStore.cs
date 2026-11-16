@@ -138,22 +138,16 @@ public sealed class HubTaskStore : IAsyncDisposable
     // Opt-in: atomically lease batches of tasks without any resource constraints.
     // Constrained tasks retain the original task -> resource row lock path.
     private readonly bool _unconstrainedBatchClaimsEnabled;
-    // Optional SQL prefilter keeps blocked strict-FIFO successors out of the
-    // bounded claim candidate window. Admission is still rechecked under locks.
-    private readonly bool _fifoHeadPrefilterEnabled;
     // Index-backed filter for matching shard counts dividing 64; explicit opt-out
     // retains the legacy modulo expression for comparison.
     private readonly bool _indexedMatchingBucketClaimsEnabled;
     private readonly bool _splitBatchClaimCandidatesEnabled;
-    private readonly bool _orderedCapabilityMergeEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
         bool? enableUnconstrainedBatchClaims = null,
-        bool? enableFifoHeadPrefilter = null,
         bool? enableIndexedMatchingBucketClaims = null,
-        bool? enableSplitBatchClaimCandidates = null,
-        bool? enableOrderedCapabilityMerge = null)
+        bool? enableSplitBatchClaimCandidates = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -189,8 +183,6 @@ public sealed class HubTaskStore : IAsyncDisposable
             Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_ENABLED") is "true" or "1" or "True";
         _unconstrainedBatchClaimsEnabled = enableUnconstrainedBatchClaims ??
             (Environment.GetEnvironmentVariable("WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS") is "true" or "1" or "True");
-        _fifoHeadPrefilterEnabled = enableFifoHeadPrefilter ??
-            (Environment.GetEnvironmentVariable("WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED") is "true" or "1" or "True");
         var indexedBucketMode = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS");
         _indexedMatchingBucketClaimsEnabled = enableIndexedMatchingBucketClaims ??
             (!string.Equals(indexedBucketMode, "false", StringComparison.OrdinalIgnoreCase) &&
@@ -198,8 +190,6 @@ public sealed class HubTaskStore : IAsyncDisposable
         var splitBatchMode = Environment.GetEnvironmentVariable("WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES");
         _splitBatchClaimCandidatesEnabled = enableSplitBatchClaimCandidates ??
             (!string.Equals(splitBatchMode, "false", StringComparison.OrdinalIgnoreCase) && splitBatchMode != "0");
-        _orderedCapabilityMergeEnabled = enableOrderedCapabilityMerge ??
-            (Environment.GetEnvironmentVariable("WFC_HUB_ORDERED_CAPABILITY_MERGE") is "true" or "1" or "True");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -377,7 +367,6 @@ public sealed class HubTaskStore : IAsyncDisposable
             : null;
         span?.SetTag("matching.partition", matchingPartition);
         span?.SetTag("matching.partition_count", matchCount);
-        span?.SetTag("claim.fifo_head_prefilter", _fifoHeadPrefilterEnabled);
         span?.SetTag("claim.indexed_matching_buckets", matchingBuckets is not null);
 
         var gateAcquired = false;
@@ -502,16 +491,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                     SELECT 1 FROM jsonb_to_recordset(@pins) AS p(hub text,definition text,version integer)
                     WHERE w.hub_id=p.hub
                       AND w.definition_id=p.definition AND w.definition_version=p.version))
-                  AND (NOT @fifoHeadFilter OR NOT EXISTS (
-                    SELECT 1 FROM wfc_scale.hub_task_constraint c
-                    JOIN wfc_scale.hub_resource r
-                      ON r.resource_key = c.resource_key AND r.strict_fifo
-                    JOIN wfc_scale.hub_task_constraint previous
-                      ON previous.resource_key = c.resource_key
-                    JOIN wfc_scale.hub_task earlier ON earlier.id = previous.task_id
-                    WHERE c.task_id = t.id AND earlier.sequence < t.sequence
-                      AND earlier.state IN (0, 1)
-                  ))
                 ORDER BY t.sequence LIMIT 96
                 """.Replace("/*hub_filter*/", hubs.Count == 1
                     ? "hub_id = @hub" : "hub_id = ANY(@hubs)")
@@ -525,7 +504,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                 candidateQuery.Parameters.AddWithValue("matchCount", matchCount);
                 candidateQuery.Parameters.AddWithValue("matchPartition", matchPartition);
                 candidateQuery.Parameters.AddWithValue("matchingBuckets", matchingBuckets ?? Array.Empty<int>());
-                candidateQuery.Parameters.AddWithValue("fifoHeadFilter", _fifoHeadPrefilterEnabled);
                 candidateQuery.Parameters.AddWithValue("types", supported);
                 candidateQuery.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
                 await using var reader = await candidateQuery.ExecuteReaderAsync(ct);
@@ -567,8 +545,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             _unconstrainedBatchClaimsEnabled ? "batch" : "legacy");
         HubTelemetry.ClaimDuration.Record(Stopwatch.GetElapsedTime(claimStarted).TotalSeconds,
             outcomeTag, modeTag, claimStrategyTag);
-        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag,
-            new KeyValuePair<string, object?>("fifo_head_prefilter", _fifoHeadPrefilterEnabled));
+        HubTelemetry.ClaimCandidateCount.Record(scannedCandidates, outcomeTag, modeTag, claimStrategyTag);
         HubTelemetry.ClaimReturnedCount.Record(results.Count, outcomeTag, modeTag, claimStrategyTag);
         span?.SetTag("tasks.claimed", results.Count);
         span?.SetTag("tasks.candidates_scanned", scannedCandidates);
@@ -1023,40 +1000,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                        AND w.definition_id=p.definition AND w.definition_version=p.version))
             """;
 
-    // Opt-in four-shard experiment. Each capability locks up to @limit ready
-    // rows in sequence order, then the merge chooses the globally oldest rows.
-    // Bound capability count at the call site: rows not selected by the merge
-    // remain locked until commit and can temporarily be skipped by competitors.
-    private static readonly string OrderedCapabilityMergeSql = """
-        WITH ready AS MATERIALIZED (
-            SELECT candidate.id,candidate.sequence
-            FROM (SELECT DISTINCT unnest(@types) AS capability) caps
-            CROSS JOIN LATERAL (
-                SELECT t.id,t.sequence FROM wfc_scale.hub_task t
-                WHERE t.state=0 AND t.due_at<=now() AND /*ready_eligibility*/
-                ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
-            ) candidate
-        ), expired AS MATERIALIZED (
-            SELECT t.id,t.sequence FROM wfc_scale.hub_task t
-            WHERE t.state=1 AND t.lease_until<now() AND /*eligibility*/
-            ORDER BY t.sequence LIMIT @limit FOR UPDATE OF t SKIP LOCKED
-        ), candidates AS MATERIALIZED (
-            SELECT id FROM (SELECT id,sequence FROM ready UNION ALL
-                            SELECT id,sequence FROM expired) eligible
-            ORDER BY sequence LIMIT @limit
-        )
-        UPDATE wfc_scale.hub_task t
-        SET state=1, owner=@owner, last_owner=@owner, epoch=t.epoch+1,
-            attempts=t.attempts+1, lease_until=now()+@lease, updated_at=now()
-        FROM candidates c WHERE t.id=c.id
-        RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,
-                  t.workflow_id,t.payload::text,t.epoch,t.attempts,t.lease_until,
-                  COALESCE(t.workflow_step,t.native_step_id)
-        """.Replace("/*ready_eligibility*/", BatchEligibility
-            .Replace("/*indexed_partition_filter*/", "t.partition_id % 4 = @matchPartition")
-            .Replace("= ANY(@types)", "= caps.capability"))
-           .Replace("/*eligibility*/", BatchEligibility);
-
     /// <summary>
     /// Single-round-trip row selection and lease update for tasks with NO
     /// hub_task_constraint rows. The SQL must exclude constrained tasks before
@@ -1077,9 +1020,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             throw new InvalidOperationException("Matching owner generation is no longer valid");
         await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition, ownerFence, true, ct);
         var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
-        var orderedMerge = _orderedCapabilityMergeEnabled && _splitBatchClaimCandidatesEnabled &&
-            matchingCount == 4 && hubs.Count == 1 && supported.Distinct().Take(9).Count() <= 8;
-        await using (var command = new NpgsqlCommand((orderedMerge ? OrderedCapabilityMergeSql : _splitBatchClaimCandidatesEnabled ? SplitBatchClaimSql : """
+        await using (var command = new NpgsqlCommand((_splitBatchClaimCandidatesEnabled ? SplitBatchClaimSql : """
             WITH candidates AS MATERIALIZED (
                 SELECT t.id
                 FROM wfc_scale.hub_task t

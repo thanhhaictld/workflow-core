@@ -1,4 +1,8 @@
-# Four-shard ordered capability merge experiment
+# Retired: four-shard ordered capability merge experiment
+
+This is historical investigation evidence. The implementation flag and the
+optional migration-028 installation path have been removed; existing database
+indexes and data are preserved.
 
 Status: **opt-in experiment; one local A/B pair, not a production recommendation**.
 This is a SQL candidate-selection experiment, not the proposed in-memory cache.

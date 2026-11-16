@@ -73,28 +73,29 @@ For the existing bottleneck evidence and scope limitations see [throughput inves
 
 **Next gate:** Re-run the experiment on dedicated Hub/PostgreSQL/processor compute with 4/8/16 worker replicas and repeat each treatment. Monitor resource head handoff latency, ready-to-claim p95/p99, Hub waiter counts, empty SQL claims, PostgreSQL transactions/WAL per completed activity and CPU headroom. If throughput advantage disappears after CPU isolation, keep existing single-poll mode. No gRPC push or durable worker credits are warranted solely from this benchmark.
 
-## Local PowerShell / Make commands
+## Current local mode controls
 
-The root `Makefile` uses **PowerShell 7 (`pwsh`) as its recipe shell** on Windows, macOS and Linux. GNU Make and Docker Compose v2 are also required. Commands below work from the repository root and automatically combine the base Compose file, the two-Hub matching HA overlay and the four-shard overlay. They preserve the PostgreSQL migrations and database flags already configured in `scaling/observability/.env`.
+The old `obs-offboarding-fanout-*` Make targets and benchmark command sequence
+are retired. Capacity fanout remains available behind
+`WFC_HUB_WORKER_CAPACITY_FANOUT=true`; it is independent of the task SSE
+switch, and task SSE takes precedence if both are enabled. The removed
+`WFC_HUB_LONG_POLL_ENABLED` flag selected only the retired single rotating
+long-poll worker mode and is not required for capacity fanout.
+
+To start the retained mode directly with the owner-recovery stack, configure
+`scaling/observability/.env`, then run from the repository root:
 
 ```powershell
-# One-time setup; edit the local .env token and DB password before starting.
 make obs-setup
-
-# 2 Hubs, 4 matching shards, 8 native-only processor replicas, fanout ON.
-make obs-offboarding-fanout-up
-
-# Inspect services and confirm "Capacity-aware shard polling enabled" in logs.
-make obs-offboarding-fanout-ps
-make obs-offboarding-fanout-logs
-
-# Run the native offboarding k6 workload with the same HA topology.
-make obs-offboarding-fanout-test K6_OFFBOARD_COUNT=1000 K6_OFFBOARD_VUS=200
-
-# Stop services without removing PostgreSQL or Grafana volumes.
-make obs-offboarding-fanout-down
+$env:WFC_HUB_WORKER_CAPACITY_FANOUT='true'
+$env:WFC_HUB_TASK_SSE_PUSH='false'
+$env:WFC_HUB_PUSH_ENABLED='false' # isolate capacity fanout from push sessions
+pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 8
+pwsh -NoProfile -File scripts/owner-recovery.ps1 ps
+pwsh -NoProfile -File scripts/owner-recovery.ps1 logs
 ```
 
-Optional overrides: `OFFBOARD_PROCESSORS=16`, `FANOUT_MATCHING_SHARDS=4`, `FANOUT_MAX_SHARD_POLLS=4`, and `OBS_ENV_FILE=scaling/observability/.env`. The `obs-offboarding-fanout-*` commands set `WFC_HUB_WORKER_CAPACITY_FANOUT=true`, `WFC_HUB_LONG_POLL_ENABLED=true`, and `WFC_HUB_MATCHING_EVENT_GATED=true` only for those targets. The existing `obs-offboarding-*` commands continue to use their normal Compose configuration.
+The golden `make ups-16` preset leaves both task SSE and capacity fanout off.
+Clear the direct-run overrides and use `make ups-16` to return to that preset.
 
-**Note:** `obs-offboarding-fanout-test` measures the three-step native offboarding workload; it is not the keyed-FIFO benchmark from CI. For a controlled OFF/ON comparison, use the dedicated `workflow-hub-worker-capacity-ab.yml` benchmark.
+**Historical benchmark note:** the old fanout target measured the three-step native offboarding workload; it was not the keyed-FIFO benchmark from CI. For a controlled OFF/ON comparison, use the dedicated `workflow-hub-worker-capacity-ab.yml` workflow if it remains available in the current branch.

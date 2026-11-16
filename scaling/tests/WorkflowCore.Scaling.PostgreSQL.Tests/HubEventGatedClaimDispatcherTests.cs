@@ -223,7 +223,7 @@ public sealed class HubEventGatedClaimDispatcherTests
 
 
     [Fact]
-    public async Task TypedHintScopesMultiCapabilityClaim_WithoutRestrictingGenericRecovery()
+    public async Task TypedAndGenericHintsKeepTheFullCapabilitySet()
     {
         static HubClaimRequest MultiCapabilityRequest() =>
             new("multi-cap-worker", ["test-hub"],
@@ -239,15 +239,14 @@ public sealed class HubEventGatedClaimDispatcherTests
                 },
                 (_, _) => Task.FromResult(true),
                 sharded: true, partitionCount: 4,
-                pollTimeout: TimeSpan.FromMilliseconds(100),
-                capabilityScopedClaims: true);
+                pollTimeout: TimeSpan.FromMilliseconds(100));
 
         var typed = new ConcurrentQueue<string[]>();
         var typedDispatcher = Create(typed);
         typedDispatcher.NotifyReady("test-hub", "beta", 1, 0);
         await typedDispatcher.LongPollAsync(MultiCapabilityRequest(), CancellationToken.None);
         Assert.True(typed.TryPeek(out var typedCapabilities));
-        Assert.Equal(new[] { "beta" }, typedCapabilities);
+        Assert.Equal(new[] { "alpha", "beta" }, typedCapabilities);
 
         var generic = new ConcurrentQueue<string[]>();
         var genericDispatcher = Create(generic);

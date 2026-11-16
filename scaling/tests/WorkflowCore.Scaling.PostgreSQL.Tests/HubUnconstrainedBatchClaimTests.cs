@@ -32,14 +32,14 @@ public sealed class HubUnconstrainedBatchClaimTests
             max, Lease, CancellationToken.None);
 
     [Fact]
-    public async Task OrderedCapabilityMerge_MergesTypesAndExpiredRows_AndSkipsLockedHead()
+    public async Task SplitBatchClaims_MergeTypesAndExpiredRows_AndSkipLockedHead()
     {
         if (Database is null) return;
         var hub = Hub();
         var registry = new HubPolicyRegistry().Register(hub, "a", 1, 1, _ => { })
             .Register(hub, "b", 1, 1, _ => { }).Register(hub, "c", 1, 1, _ => { });
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
-            enableOrderedCapabilityMerge: true);
+            enableSplitBatchClaimCandidates: true);
         var a = await Enqueue(store, registry, hub, "a", "a");
         var b = await Enqueue(store, registry, hub, "b", "b");
         var expired = await Enqueue(store, registry, hub, "c", "expired");
@@ -76,14 +76,14 @@ public sealed class HubUnconstrainedBatchClaimTests
     }
 
     [Fact]
-    public async Task OrderedCapabilityMerge_ConcurrentClaimsRemainUniqueAndDrain()
+    public async Task SplitBatchClaims_ConcurrentClaimsRemainUniqueAndDrain()
     {
         if (Database is null) return;
         var hub = Hub();
         var registry = new HubPolicyRegistry().Register(hub, "a", 1, 1, _ => { })
             .Register(hub, "b", 1, 1, _ => { }).Register(hub, "c", 1, 1, _ => { });
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
-            enableOrderedCapabilityMerge: true);
+            enableSplitBatchClaimCandidates: true);
         var types = new[] { "a", "b", "c" };
         var expected = new HashSet<Guid>();
         for (var i = 0; i < 48; i++) expected.Add(await Enqueue(store, registry, hub, types[i % 3], i.ToString()));
@@ -101,7 +101,7 @@ public sealed class HubUnconstrainedBatchClaimTests
     }
 
     [Fact]
-    public async Task OrderedCapabilityMerge_LeavesConstrainedTasksToPermitAdmission()
+    public async Task SplitBatchClaims_LeaveConstrainedTasksToPermitAdmission()
     {
         if (Database is null) return;
         var hub = Hub();
@@ -110,7 +110,7 @@ public sealed class HubUnconstrainedBatchClaimTests
             .Register(hub, "serial", 1, 1,
                 p => p.SequentialBy("resource", x => x.GetProperty("resourceId").GetString()));
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
-            enableOrderedCapabilityMerge: true);
+            enableSplitBatchClaimCandidates: true);
         var first = await Enqueue(store, registry, hub, "serial", "key");
         var second = await Enqueue(store, registry, hub, "serial", "key");
         var free = await Enqueue(store, registry, hub, "free", "free");
@@ -273,7 +273,7 @@ public sealed class HubUnconstrainedBatchClaimTests
             .Register(hub, "work", 1, 1, _ => { })
             .Register(hub, "other", 1, 1, _ => { });
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
-            enableSplitBatchClaimCandidates: true, enableOrderedCapabilityMerge: true);
+            enableSplitBatchClaimCandidates: true);
         var matching = await Enqueue(store, registry, hub, "work", "matching");
         var otherPartition = await Enqueue(store, registry, hub, "work", "partition");
         await Enqueue(store, registry, hub, "other", "capability");
