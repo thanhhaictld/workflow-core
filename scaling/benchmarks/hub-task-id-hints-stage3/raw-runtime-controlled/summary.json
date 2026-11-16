@@ -1,0 +1,725 @@
+{
+  "sourceRecords": "records.json",
+  "groups": [
+    {
+      "arm": "baseline",
+      "scenario": "burst",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 1000,
+      "throughputTasksPerSecondMedian": 1.8862725907655156,
+      "durationSecondsMedian": 106.02921390000847,
+      "durationSecondsRange": [
+        19.271739899995737,
+        142.42926780000562
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 4038.0348499966203,
+        "p95": 37467.20769999956,
+        "p99": 38475.19250000187,
+        "samples": 100
+      },
+      "databaseTotals": {
+        "statements": 271775,
+        "executionMs": 6623.688941999994,
+        "sharedHit": 1145006,
+        "sharedRead": 0,
+        "sharedDirtied": 1522,
+        "sharedWritten": 1026,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 36.665901999999996,
+        "walRecords": 76647,
+        "walBytes": 15187503
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 271.775,
+        "executionMs": 6.623688941999994,
+        "sharedHit": 1145.006,
+        "sharedRead": 0.0,
+        "sharedDirtied": 1.522,
+        "sharedWritten": 1.026,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.03666590199999999,
+        "walRecords": 76.647,
+        "walBytes": 15187.503
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 85843,
+          "rows": 2248,
+          "executionMs": 1055.5780580000005,
+          "sharedHit": 322111,
+          "sharedRead": 0,
+          "walBytes": 26606
+        },
+        "notification-notify-producer": {
+          "calls": 9554,
+          "rows": 2000,
+          "executionMs": 214.62033199999988,
+          "sharedHit": 38484,
+          "sharedRead": 0,
+          "walBytes": 218834
+        },
+        "notification-outbox-producer": {
+          "calls": 2000,
+          "rows": 2000,
+          "executionMs": 35.93907999999998,
+          "sharedHit": 6495,
+          "sharedRead": 0,
+          "walBytes": 417688
+        },
+        "other": {
+          "calls": 157980,
+          "rows": 20834,
+          "executionMs": 2742.9818439999954,
+          "sharedHit": 120146,
+          "sharedRead": 0,
+          "walBytes": 5048336
+        },
+        "task-other": {
+          "calls": 16403,
+          "rows": 12030,
+          "executionMs": 2576.135102,
+          "sharedHit": 657775,
+          "sharedRead": 0,
+          "walBytes": 9476039
+        }
+      }
+    },
+    {
+      "arm": "baseline",
+      "scenario": "fifo",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 400,
+      "throughputTasksPerSecondMedian": 6.507588555961381,
+      "durationSecondsMedian": 12.29334019999078,
+      "durationSecondsRange": [
+        10.804496500000823,
+        68.068929999994
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 4819.00169999426,
+        "p95": 34963.07860000525,
+        "p99": 36039.97779999918,
+        "samples": 40
+      },
+      "databaseTotals": {
+        "statements": 114887,
+        "executionMs": 3029.190049000002,
+        "sharedHit": 534886,
+        "sharedRead": 0,
+        "sharedDirtied": 908,
+        "sharedWritten": 372,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 13.823927000000001,
+        "walRecords": 30585,
+        "walBytes": 8177582
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 287.2175,
+        "executionMs": 7.572975122500005,
+        "sharedHit": 1337.215,
+        "sharedRead": 0.0,
+        "sharedDirtied": 2.27,
+        "sharedWritten": 0.93,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.034559817500000006,
+        "walRecords": 76.4625,
+        "walBytes": 20443.955
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 38327,
+          "rows": 854,
+          "executionMs": 478.87515300000007,
+          "sharedHit": 129689,
+          "sharedRead": 0,
+          "walBytes": 9938
+        },
+        "notification-notify-producer": {
+          "calls": 3520,
+          "rows": 800,
+          "executionMs": 81.69780100000003,
+          "sharedHit": 6967,
+          "sharedRead": 0,
+          "walBytes": 88196
+        },
+        "notification-outbox-producer": {
+          "calls": 800,
+          "rows": 800,
+          "executionMs": 14.538104,
+          "sharedHit": 2780,
+          "sharedRead": 0,
+          "walBytes": 167164
+        },
+        "other": {
+          "calls": 65635,
+          "rows": 8128,
+          "executionMs": 1169.5939200000018,
+          "sharedHit": 48556,
+          "sharedRead": 0,
+          "walBytes": 2513041
+        },
+        "task-other": {
+          "calls": 6610,
+          "rows": 4993,
+          "executionMs": 1285.9455520000001,
+          "sharedHit": 346899,
+          "sharedRead": 0,
+          "walBytes": 5399243
+        }
+      }
+    },
+    {
+      "arm": "baseline",
+      "scenario": "sparse",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 400,
+      "throughputTasksPerSecondMedian": 3.209066163873762,
+      "durationSecondsMedian": 24.929370699988795,
+      "durationSecondsRange": [
+        23.81976109999232,
+        25.898612699995283
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 3041.257700002461,
+        "p95": 3540.9769999969285,
+        "p99": 3559.801099996548,
+        "samples": 40
+      },
+      "databaseTotals": {
+        "statements": 160503,
+        "executionMs": 3207.6736489999994,
+        "sharedHit": 450382,
+        "sharedRead": 0,
+        "sharedDirtied": 860,
+        "sharedWritten": 364,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 12.656080000000001,
+        "walRecords": 30503,
+        "walBytes": 6479723
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 401.2575,
+        "executionMs": 8.019184122499999,
+        "sharedHit": 1125.955,
+        "sharedRead": 0.0,
+        "sharedDirtied": 2.15,
+        "sharedWritten": 0.91,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.0316402,
+        "walRecords": 76.2575,
+        "walBytes": 16199.3075
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 61948,
+          "rows": 400,
+          "executionMs": 561.6486359999999,
+          "sharedHit": 94592,
+          "sharedRead": 0,
+          "walBytes": 7408
+        },
+        "notification-notify-producer": {
+          "calls": 3444,
+          "rows": 800,
+          "executionMs": 81.41823099999999,
+          "sharedHit": 9067,
+          "sharedRead": 0,
+          "walBytes": 88154
+        },
+        "notification-outbox-producer": {
+          "calls": 800,
+          "rows": 800,
+          "executionMs": 14.210608999999998,
+          "sharedHit": 2846,
+          "sharedRead": 0,
+          "walBytes": 167850
+        },
+        "other": {
+          "calls": 87599,
+          "rows": 7363,
+          "executionMs": 1344.8710079999987,
+          "sharedHit": 46746,
+          "sharedRead": 0,
+          "walBytes": 2029019
+        },
+        "task-other": {
+          "calls": 6717,
+          "rows": 5026,
+          "executionMs": 1206.8712959999998,
+          "sharedHit": 297136,
+          "sharedRead": 0,
+          "walBytes": 4187292
+        }
+      }
+    },
+    {
+      "arm": "baseline",
+      "scenario": "steady",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 1000,
+      "throughputTasksPerSecondMedian": 9.707300665232989,
+      "durationSecondsMedian": 20.603049899989855,
+      "durationSecondsRange": [
+        19.601181699996232,
+        27.674194699997315
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 3552.49389999517,
+        "p95": 5561.758700001519,
+        "p99": 10663.680799989379,
+        "samples": 100
+      },
+      "databaseTotals": {
+        "statements": 161526,
+        "executionMs": 5370.390628,
+        "sharedHit": 961888,
+        "sharedRead": 0,
+        "sharedDirtied": 1957,
+        "sharedWritten": 930,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 32.97944,
+        "walRecords": 75940,
+        "walBytes": 17817728
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 161.526,
+        "executionMs": 5.370390628,
+        "sharedHit": 961.888,
+        "sharedRead": 0.0,
+        "sharedDirtied": 1.957,
+        "sharedWritten": 0.93,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.03297944,
+        "walRecords": 75.94,
+        "walBytes": 17817.728
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 48410,
+          "rows": 1022,
+          "executionMs": 621.0691929999995,
+          "sharedHit": 141580,
+          "sharedRead": 0,
+          "walBytes": 28434
+        },
+        "notification-notify-producer": {
+          "calls": 3940,
+          "rows": 2000,
+          "executionMs": 139.29435100000006,
+          "sharedHit": 23914,
+          "sharedRead": 0,
+          "walBytes": 220240
+        },
+        "notification-outbox-producer": {
+          "calls": 2000,
+          "rows": 2000,
+          "executionMs": 34.28263899999999,
+          "sharedHit": 6520,
+          "sharedRead": 0,
+          "walBytes": 419617
+        },
+        "other": {
+          "calls": 93537,
+          "rows": 18289,
+          "executionMs": 2113.7733940000003,
+          "sharedHit": 109821,
+          "sharedRead": 0,
+          "walBytes": 5158075
+        },
+        "task-other": {
+          "calls": 13644,
+          "rows": 10594,
+          "executionMs": 2463.509942,
+          "sharedHit": 680058,
+          "sharedRead": 0,
+          "walBytes": 11991362
+        }
+      }
+    },
+    {
+      "arm": "candidate",
+      "scenario": "burst",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 1000,
+      "throughputTasksPerSecondMedian": 17.04666175904352,
+      "durationSecondsMedian": 11.732502400001977,
+      "durationSecondsRange": [
+        10.692875900000217,
+        104.42298329999903
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 2024.5058500004234,
+        "p95": 31537.461199986865,
+        "p99": 37970.67470000184,
+        "samples": 100
+      },
+      "databaseTotals": {
+        "statements": 138085,
+        "executionMs": 6444.263886,
+        "sharedHit": 901356,
+        "sharedRead": 0,
+        "sharedDirtied": 1581,
+        "sharedWritten": 1031,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 33.182917,
+        "walRecords": 87727,
+        "walBytes": 18926942
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 138.085,
+        "executionMs": 6.444263886,
+        "sharedHit": 901.356,
+        "sharedRead": 0.0,
+        "sharedDirtied": 1.581,
+        "sharedWritten": 1.031,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.033182917000000006,
+        "walRecords": 87.727,
+        "walBytes": 18926.942
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 31415,
+          "rows": 382,
+          "executionMs": 358.8995970000001,
+          "sharedHit": 88847,
+          "sharedRead": 0,
+          "walBytes": 9600
+        },
+        "id-hydration": {
+          "calls": 1388,
+          "rows": 960,
+          "executionMs": 85.68785199999998,
+          "sharedHit": 16283,
+          "sharedRead": 0,
+          "walBytes": 15778
+        },
+        "notification-notify-producer": {
+          "calls": 5148,
+          "rows": 4000,
+          "executionMs": 181.801537,
+          "sharedHit": 41689,
+          "sharedRead": 0,
+          "walBytes": 437614
+        },
+        "notification-outbox-producer": {
+          "calls": 4000,
+          "rows": 4000,
+          "executionMs": 57.803752000000024,
+          "sharedHit": 12425,
+          "sharedRead": 0,
+          "walBytes": 1153727
+        },
+        "other": {
+          "calls": 82422,
+          "rows": 18529,
+          "executionMs": 2958.462082000001,
+          "sharedHit": 109654,
+          "sharedRead": 0,
+          "walBytes": 5362694
+        },
+        "task-other": {
+          "calls": 13717,
+          "rows": 10471,
+          "executionMs": 2802.968323000001,
+          "sharedHit": 632463,
+          "sharedRead": 0,
+          "walBytes": 11947529
+        }
+      }
+    },
+    {
+      "arm": "candidate",
+      "scenario": "fifo",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 400,
+      "throughputTasksPerSecondMedian": 13.918833955242354,
+      "durationSecondsMedian": 5.747607900004368,
+      "durationSecondsRange": [
+        5.4010432999930345,
+        38.4575085999968
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 2069.236900002579,
+        "p95": 34009.707300006994,
+        "p99": 36990.38269999437,
+        "samples": 40
+      },
+      "databaseTotals": {
+        "statements": 62659,
+        "executionMs": 3242.955873,
+        "sharedHit": 671864,
+        "sharedRead": 0,
+        "sharedDirtied": 791,
+        "sharedWritten": 401,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 13.261865,
+        "walRecords": 35904,
+        "walBytes": 7848660
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 156.6475,
+        "executionMs": 8.1073896825,
+        "sharedHit": 1679.66,
+        "sharedRead": 0.0,
+        "sharedDirtied": 1.9775,
+        "sharedWritten": 1.0025,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.0331546625,
+        "walRecords": 89.76,
+        "walBytes": 19621.65
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 14761,
+          "rows": 163,
+          "executionMs": 171.05071200000003,
+          "sharedHit": 40357,
+          "sharedRead": 0,
+          "walBytes": 3850
+        },
+        "id-hydration": {
+          "calls": 608,
+          "rows": 381,
+          "executionMs": 34.49003900000002,
+          "sharedHit": 5801,
+          "sharedRead": 0,
+          "walBytes": 5276
+        },
+        "notification-notify-producer": {
+          "calls": 2253,
+          "rows": 1600,
+          "executionMs": 73.67922499999999,
+          "sharedHit": 14750,
+          "sharedRead": 0,
+          "walBytes": 174214
+        },
+        "notification-outbox-producer": {
+          "calls": 1600,
+          "rows": 1600,
+          "executionMs": 23.955945000000003,
+          "sharedHit": 5137,
+          "sharedRead": 0,
+          "walBytes": 456307
+        },
+        "other": {
+          "calls": 37042,
+          "rows": 8066,
+          "executionMs": 1093.2703499999996,
+          "sharedHit": 48528,
+          "sharedRead": 0,
+          "walBytes": 2308055
+        },
+        "task-other": {
+          "calls": 6400,
+          "rows": 5442,
+          "executionMs": 1847.849823,
+          "sharedHit": 557296,
+          "sharedRead": 0,
+          "walBytes": 4900958
+        }
+      }
+    },
+    {
+      "arm": "candidate",
+      "scenario": "sparse",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 400,
+      "throughputTasksPerSecondMedian": 1.1589389606698257,
+      "durationSecondsMedian": 69.02865699998802,
+      "durationSecondsRange": [
+        14.247745800006669,
+        128.49182160000782
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 1545.963099997607,
+        "p95": 30958.38339999318,
+        "p99": 30990.360800002236,
+        "samples": 40
+      },
+      "databaseTotals": {
+        "statements": 168346,
+        "executionMs": 3403.915450999997,
+        "sharedHit": 481877,
+        "sharedRead": 0,
+        "sharedDirtied": 818,
+        "sharedWritten": 412,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 13.473813,
+        "walRecords": 36078,
+        "walBytes": 7507363
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 420.865,
+        "executionMs": 8.509788627499994,
+        "sharedHit": 1204.6925,
+        "sharedRead": 0.0,
+        "sharedDirtied": 2.045,
+        "sharedWritten": 1.03,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.0336845325,
+        "walRecords": 90.195,
+        "walBytes": 18768.4075
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 53027,
+          "rows": 202,
+          "executionMs": 439.46746699999983,
+          "sharedHit": 86929,
+          "sharedRead": 0,
+          "walBytes": 3582
+        },
+        "id-hydration": {
+          "calls": 741,
+          "rows": 356,
+          "executionMs": 32.400373,
+          "sharedHit": 4622,
+          "sharedRead": 0,
+          "walBytes": 5980
+        },
+        "notification-notify-producer": {
+          "calls": 7825,
+          "rows": 1600,
+          "executionMs": 154.48209299999982,
+          "sharedHit": 14662,
+          "sharedRead": 0,
+          "walBytes": 174932
+        },
+        "notification-outbox-producer": {
+          "calls": 1600,
+          "rows": 1600,
+          "executionMs": 23.010989000000002,
+          "sharedHit": 5081,
+          "sharedRead": 0,
+          "walBytes": 456759
+        },
+        "other": {
+          "calls": 97053,
+          "rows": 8111,
+          "executionMs": 1416.5562459999978,
+          "sharedHit": 49858,
+          "sharedRead": 0,
+          "walBytes": 2353628
+        },
+        "task-other": {
+          "calls": 8105,
+          "rows": 5401,
+          "executionMs": 1339.342016,
+          "sharedHit": 320730,
+          "sharedRead": 0,
+          "walBytes": 4512482
+        }
+      }
+    },
+    {
+      "arm": "candidate",
+      "scenario": "steady",
+      "plannedRepetitions": 5,
+      "successfulRepetitions": 5,
+      "failedRuns": [],
+      "completedTasks": 1000,
+      "throughputTasksPerSecondMedian": 1.9223089310851298,
+      "durationSecondsMedian": 104.04154959999141,
+      "durationSecondsRange": [
+        11.316583699997864,
+        111.7242050000059
+      ],
+      "workflowElapsedMsP50P95P99": {
+        "p50": 2036.8092500066268,
+        "p95": 35947.50189999468,
+        "p99": 38638.794600003166,
+        "samples": 100
+      },
+      "databaseTotals": {
+        "statements": 207009,
+        "executionMs": 6758.033744,
+        "sharedHit": 1109307,
+        "sharedRead": 0,
+        "sharedDirtied": 1630,
+        "sharedWritten": 1016,
+        "sharedReadMs": 0,
+        "sharedWriteMs": 32.179052,
+        "walRecords": 88727,
+        "walBytes": 18730775
+      },
+      "databasePerDurablyCompletedTask": {
+        "statements": 207.009,
+        "executionMs": 6.7580337440000005,
+        "sharedHit": 1109.307,
+        "sharedRead": 0.0,
+        "sharedDirtied": 1.63,
+        "sharedWritten": 1.016,
+        "sharedReadMs": 0.0,
+        "sharedWriteMs": 0.032179052,
+        "walRecords": 88.727,
+        "walBytes": 18730.775
+      },
+      "queryClassTotals": {
+        "candidate-discovery-page": {
+          "calls": 53271,
+          "rows": 1115,
+          "executionMs": 626.7890169999997,
+          "sharedHit": 201143,
+          "sharedRead": 0,
+          "walBytes": 10554
+        },
+        "id-hydration": {
+          "calls": 1349,
+          "rows": 954,
+          "executionMs": 81.13859600000002,
+          "sharedHit": 14326,
+          "sharedRead": 0,
+          "walBytes": 16026
+        },
+        "notification-notify-producer": {
+          "calls": 9185,
+          "rows": 3999,
+          "executionMs": 233.030488,
+          "sharedHit": 44013,
+          "sharedRead": 0,
+          "walBytes": 437234
+        },
+        "notification-outbox-producer": {
+          "calls": 3999,
+          "rows": 3999,
+          "executionMs": 57.48495299999996,
+          "sharedHit": 12387,
+          "sharedRead": 0,
+          "walBytes": 1145868
+        },
+        "other": {
+          "calls": 123687,
+          "rows": 20516,
+          "executionMs": 2664.048308000001,
+          "sharedHit": 115633,
+          "sharedRead": 0,
+          "walBytes": 5785636
+        },
+        "task-other": {
+          "calls": 15523,
+          "rows": 11400,
+          "executionMs": 3096.86911,
+          "sharedHit": 721810,
+          "sharedRead": 0,
+          "walBytes": 11335457
+        }
+      }
+    }
+  ]
+}

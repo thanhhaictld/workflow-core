@@ -1,0 +1,3306 @@
+{
+  "sourceRecords": "records.json",
+  "method": "five paired interleaved repetitions per arm after one warmup per scenario and arm; latency summaries are per-repetition medians/ranges, not pooled tails",
+  "groups": [
+    {
+      "scenario": "burst",
+      "repetitionsPerArm": 5,
+      "arms": {
+        "baseline": {
+          "samples": [
+            {
+              "arm": "baseline",
+              "scenario": "burst",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 110.94489009999961,
+              "durableTasksPerSecond": 1.8026968147855302,
+              "endToEndP95Ms": 36657.7568,
+              "endToEndP99Ms": 39235.21775999999,
+              "scheduleStartP95Ms": 26851.04519999997,
+              "statementsPerTask": 329.805,
+              "executionMsPerTask": 6.469766089999987,
+              "sharedHitsPerTask": 987.04,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 13278.71,
+              "discoveryCalls": 21030,
+              "discoveryRows": 579,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "burst",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 19.271739899995737,
+              "durableTasksPerSecond": 10.37789016652535,
+              "endToEndP95Ms": 6169.515700000001,
+              "endToEndP99Ms": 6178.81354,
+              "scheduleStartP95Ms": 361.35375,
+              "statementsPerTask": 152.955,
+              "executionMsPerTask": 5.171061884999999,
+              "sharedHitsPerTask": 805.275,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 12370.03,
+              "discoveryCalls": 9114,
+              "discoveryRows": 202,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "burst",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 20.336604900003294,
+              "durableTasksPerSecond": 9.834483237660166,
+              "endToEndP95Ms": 5877.3108,
+              "endToEndP99Ms": 6107.77016,
+              "scheduleStartP95Ms": 431.25494999999955,
+              "statementsPerTask": 158.825,
+              "executionMsPerTask": 5.279213384999997,
+              "sharedHitsPerTask": 912.9,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 13887.915,
+              "discoveryCalls": 9545,
+              "discoveryRows": 209,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "burst",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 142.42926780000562,
+              "durableTasksPerSecond": 1.4042057723756136,
+              "endToEndP95Ms": 37556.37925,
+              "endToEndP99Ms": 37768.30145,
+              "scheduleStartP95Ms": 29085.117099999978,
+              "statementsPerTask": 379.265,
+              "executionMsPerTask": 7.92378390499999,
+              "sharedHitsPerTask": 1446.235,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 18625.02,
+              "discoveryCalls": 24100,
+              "discoveryRows": 635,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "burst",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 106.02921390000847,
+              "durableTasksPerSecond": 1.8862725907655156,
+              "endToEndP95Ms": 37732.9215,
+              "endToEndP99Ms": 37962.3275,
+              "scheduleStartP95Ms": 19626.76299999997,
+              "statementsPerTask": 338.025,
+              "executionMsPerTask": 8.274619444999999,
+              "sharedHitsPerTask": 1573.58,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 17775.84,
+              "discoveryCalls": 22054,
+              "discoveryRows": 623,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 106.02921390000847,
+              "min": 19.271739899995737,
+              "max": 142.42926780000562
+            },
+            "durableTasksPerSecond": {
+              "median": 1.8862725907655156,
+              "min": 1.4042057723756136,
+              "max": 10.37789016652535
+            },
+            "endToEndP95Ms": {
+              "median": 36657.7568,
+              "min": 5877.3108,
+              "max": 37732.9215
+            },
+            "endToEndP99Ms": {
+              "median": 37768.30145,
+              "min": 6107.77016,
+              "max": 39235.21775999999
+            },
+            "scheduleStartP95Ms": {
+              "median": 19626.76299999997,
+              "min": 361.35375,
+              "max": 29085.117099999978
+            },
+            "statementsPerTask": {
+              "median": 329.805,
+              "min": 152.955,
+              "max": 379.265
+            },
+            "executionMsPerTask": {
+              "median": 6.469766089999987,
+              "min": 5.171061884999999,
+              "max": 8.274619444999999
+            },
+            "sharedHitsPerTask": {
+              "median": 987.04,
+              "min": 805.275,
+              "max": 1573.58
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 13887.915,
+              "min": 12370.03,
+              "max": 18625.02
+            },
+            "discoveryCalls": {
+              "median": 21030,
+              "min": 9114,
+              "max": 24100
+            },
+            "discoveryRows": {
+              "median": 579,
+              "min": 202,
+              "max": 635
+            },
+            "hydrationCalls": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "hydrationRows": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "outboxProducerRows": {
+              "median": 400,
+              "min": 400,
+              "max": 400
+            },
+            "notifyProducerRows": {
+              "median": 400,
+              "min": 400,
+              "max": 400
+            }
+          }
+        },
+        "candidate": {
+          "samples": [
+            {
+              "arm": "candidate",
+              "scenario": "burst",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 10.704434899991611,
+              "durableTasksPerSecond": 18.683844767943494,
+              "endToEndP95Ms": 2095.1217000000006,
+              "endToEndP99Ms": 2283.4603399999996,
+              "scheduleStartP95Ms": 147.37694999999988,
+              "statementsPerTask": 102.785,
+              "executionMsPerTask": 5.8898343,
+              "sharedHitsPerTask": 520.03,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 17448.84,
+              "discoveryCalls": 3974,
+              "discoveryRows": 16,
+              "hydrationCalls": 282,
+              "hydrationRows": 191,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "burst",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 12.24320159999479,
+              "durableTasksPerSecond": 16.335596401523365,
+              "endToEndP95Ms": 2626.0231999999996,
+              "endToEndP99Ms": 2656.65424,
+              "scheduleStartP95Ms": 376.2917499999992,
+              "statementsPerTask": 109.535,
+              "executionMsPerTask": 6.17015496,
+              "sharedHitsPerTask": 720.95,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14034.275,
+              "discoveryCalls": 4484,
+              "discoveryRows": 31,
+              "hydrationCalls": 285,
+              "hydrationRows": 191,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "burst",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 104.42298329999903,
+              "durableTasksPerSecond": 1.9152871683948705,
+              "endToEndP95Ms": 37828.2782,
+              "endToEndP99Ms": 37874.73244,
+              "scheduleStartP95Ms": 1250.496599999978,
+              "statementsPerTask": 267.275,
+              "executionMsPerTask": 7.680282474999997,
+              "sharedHitsPerTask": 1147.29,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 21658.46,
+              "discoveryCalls": 14669,
+              "discoveryRows": 290,
+              "hydrationCalls": 253,
+              "hydrationRows": 190,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "burst",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 11.732502400001977,
+              "durableTasksPerSecond": 17.04666175904352,
+              "endToEndP95Ms": 2603.1646499999997,
+              "endToEndP99Ms": 2728.8785299999995,
+              "scheduleStartP95Ms": 212.4290499999994,
+              "statementsPerTask": 107.065,
+              "executionMsPerTask": 5.769917130000001,
+              "sharedHitsPerTask": 985.45,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 15952.74,
+              "discoveryCalls": 4261,
+              "discoveryRows": 24,
+              "hydrationCalls": 301,
+              "hydrationRows": 195,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "burst",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 10.692875900000217,
+              "durableTasksPerSecond": 18.704042006135687,
+              "endToEndP95Ms": 2567.9282000000003,
+              "endToEndP99Ms": 2704.6552399999996,
+              "scheduleStartP95Ms": 172.83889999999985,
+              "statementsPerTask": 103.765,
+              "executionMsPerTask": 6.711130565000001,
+              "sharedHitsPerTask": 1133.06,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 25540.395,
+              "discoveryCalls": 4027,
+              "discoveryRows": 21,
+              "hydrationCalls": 267,
+              "hydrationRows": 193,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 11.732502400001977,
+              "min": 10.692875900000217,
+              "max": 104.42298329999903
+            },
+            "durableTasksPerSecond": {
+              "median": 17.04666175904352,
+              "min": 1.9152871683948705,
+              "max": 18.704042006135687
+            },
+            "endToEndP95Ms": {
+              "median": 2603.1646499999997,
+              "min": 2095.1217000000006,
+              "max": 37828.2782
+            },
+            "endToEndP99Ms": {
+              "median": 2704.6552399999996,
+              "min": 2283.4603399999996,
+              "max": 37874.73244
+            },
+            "scheduleStartP95Ms": {
+              "median": 212.4290499999994,
+              "min": 147.37694999999988,
+              "max": 1250.496599999978
+            },
+            "statementsPerTask": {
+              "median": 107.065,
+              "min": 102.785,
+              "max": 267.275
+            },
+            "executionMsPerTask": {
+              "median": 6.17015496,
+              "min": 5.769917130000001,
+              "max": 7.680282474999997
+            },
+            "sharedHitsPerTask": {
+              "median": 985.45,
+              "min": 520.03,
+              "max": 1147.29
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 17448.84,
+              "min": 14034.275,
+              "max": 25540.395
+            },
+            "discoveryCalls": {
+              "median": 4261,
+              "min": 3974,
+              "max": 14669
+            },
+            "discoveryRows": {
+              "median": 24,
+              "min": 16,
+              "max": 290
+            },
+            "hydrationCalls": {
+              "median": 282,
+              "min": 253,
+              "max": 301
+            },
+            "hydrationRows": {
+              "median": 191,
+              "min": 190,
+              "max": 195
+            },
+            "outboxProducerRows": {
+              "median": 800,
+              "min": 800,
+              "max": 800
+            },
+            "notifyProducerRows": {
+              "median": 800,
+              "min": 800,
+              "max": 800
+            }
+          }
+        }
+      },
+      "paired": [
+        {
+          "repetition": 1,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -100.240455200008,
+            "candidateOverBaseline": 0.09648425349146972
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 16.881147953157964,
+            "candidateOverBaseline": 10.364385522124719
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -34562.6351,
+            "candidateOverBaseline": 0.057153570837155
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -36951.757419999994,
+            "candidateOverBaseline": 0.05819925236474589
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -26703.66824999997,
+            "candidateOverBaseline": 0.005488685781214954
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -227.02,
+            "candidateOverBaseline": 0.3116538560664635
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -0.5799317899999865,
+            "candidateOverBaseline": 0.9103627887109613
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -467.01,
+            "candidateOverBaseline": 0.5268580807262117
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 4170.130000000001,
+            "candidateOverBaseline": 1.314046319258422
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -17056,
+            "candidateOverBaseline": 0.18896814075130766
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -563,
+            "candidateOverBaseline": 0.027633851468048358
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 282,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 191,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 2,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -7.028538300000946,
+            "candidateOverBaseline": 0.6352930074568669
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 5.957706234998014,
+            "candidateOverBaseline": 1.574076824807323
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -3543.492500000001,
+            "candidateOverBaseline": 0.42564494973244
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -3522.1593000000003,
+            "candidateOverBaseline": 0.4299618725830655
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 14.937999999999192,
+            "candidateOverBaseline": 1.041338992607657
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -43.420000000000016,
+            "candidateOverBaseline": 0.7161256578732306
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 0.9990930750000002,
+            "candidateOverBaseline": 1.193208493191336
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -84.32499999999993,
+            "candidateOverBaseline": 0.8952842196765081
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 1664.244999999999,
+            "candidateOverBaseline": 1.1345384772712757
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -4630,
+            "candidateOverBaseline": 0.49199034452490675
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -171,
+            "candidateOverBaseline": 0.15346534653465346
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 285,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 191,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 3,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 84.08637839999574,
+            "candidateOverBaseline": 5.13473039445154
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -7.919196069265295,
+            "candidateOverBaseline": 0.19475219206846278
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 31950.9674,
+            "candidateOverBaseline": 6.436324279464683
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 31766.96228,
+            "candidateOverBaseline": 6.20107362389681
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 819.2416499999783,
+            "candidateOverBaseline": 2.8996689777125555
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 108.44999999999999,
+            "candidateOverBaseline": 1.6828270108610106
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 2.40106909,
+            "candidateOverBaseline": 1.45481569220563
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 234.39,
+            "candidateOverBaseline": 1.256753204074926
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 7770.544999999998,
+            "candidateOverBaseline": 1.559518473435357
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 5124,
+            "candidateOverBaseline": 1.5368255631220535
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": 81,
+            "candidateOverBaseline": 1.38755980861244
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 253,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 190,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 4,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -130.69676540000364,
+            "candidateOverBaseline": 0.08237423797246758
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 15.642455986667906,
+            "candidateOverBaseline": 12.139717763874621
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -34953.2146,
+            "candidateOverBaseline": 0.06931351482717812
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -35039.42292,
+            "candidateOverBaseline": 0.07225314417733762
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -28872.68804999998,
+            "candidateOverBaseline": 0.0073037027586868326
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -272.2,
+            "candidateOverBaseline": 0.282296019933292
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -2.1538667749999885,
+            "candidateOverBaseline": 0.7281769921008476
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -460.78499999999985,
+            "candidateOverBaseline": 0.6813899539148203
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -2672.2800000000007,
+            "candidateOverBaseline": 0.8565220332649307
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -19839,
+            "candidateOverBaseline": 0.17680497925311203
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -611,
+            "candidateOverBaseline": 0.03779527559055118
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 301,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 195,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 5,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -95.33633800000825,
+            "candidateOverBaseline": 0.10084839363313777
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 16.817769415370172,
+            "candidateOverBaseline": 9.915874353316521
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -35164.993299999995,
+            "candidateOverBaseline": 0.06805537705316564
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -35257.67226,
+            "candidateOverBaseline": 0.0712457696383342
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -19453.92409999997,
+            "candidateOverBaseline": 0.008806286599578347
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -234.26,
+            "candidateOverBaseline": 0.3069743362177354
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -1.5634888799999977,
+            "candidateOverBaseline": 0.8110500560911297
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -440.52,
+            "candidateOverBaseline": 0.7200523646716405
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 7764.555,
+            "candidateOverBaseline": 1.4368038303675101
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -18027,
+            "candidateOverBaseline": 0.1825972612677972
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -602,
+            "candidateOverBaseline": 0.033707865168539325
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 267,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 193,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "fifo",
+      "repetitionsPerArm": 5,
+      "arms": {
+        "baseline": {
+          "samples": [
+            {
+              "arm": "baseline",
+              "scenario": "fifo",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 10.804496500000823,
+              "durableTasksPerSecond": 7.4043246716766395,
+              "endToEndP95Ms": 4330.834699999999,
+              "endToEndP99Ms": 4447.78454,
+              "scheduleStartP95Ms": 1129.3710499999997,
+              "statementsPerTask": 209.7625,
+              "executionMsPerTask": 5.2193235000000024,
+              "sharedHitsPerTask": 844.5625,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 12673.35,
+              "discoveryCalls": 5584,
+              "discoveryRows": 104,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "fifo",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 12.29334019999078,
+              "durableTasksPerSecond": 6.507588555961381,
+              "endToEndP95Ms": 6157.60265,
+              "endToEndP99Ms": 6230.44773,
+              "scheduleStartP95Ms": 2503.4383,
+              "statementsPerTask": 219.8875,
+              "executionMsPerTask": 6.9101799625,
+              "sharedHitsPerTask": 1047.7375,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 16040.0125,
+              "discoveryCalls": 5878,
+              "discoveryRows": 118,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "fifo",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 11.834444199994323,
+              "durableTasksPerSecond": 6.759928784829488,
+              "endToEndP95Ms": 4884.624049999999,
+              "endToEndP99Ms": 5023.57601,
+              "scheduleStartP95Ms": 1250.8387,
+              "statementsPerTask": 210.1625,
+              "executionMsPerTask": 6.912863912500002,
+              "sharedHitsPerTask": 1209.6125,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 27746.5375,
+              "discoveryCalls": 5548,
+              "discoveryRows": 116,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "fifo",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 68.068929999994,
+              "durableTasksPerSecond": 1.1752792353281747,
+              "endToEndP95Ms": 35685.0856,
+              "endToEndP99Ms": 35737.95632,
+              "scheduleStartP95Ms": 24360.9207,
+              "statementsPerTask": 451.9125,
+              "executionMsPerTask": 10.316278700000009,
+              "sharedHitsPerTask": 1826.9625,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 15089.25,
+              "discoveryCalls": 11806,
+              "discoveryRows": 297,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "fifo",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 33.54115289999754,
+              "durableTasksPerSecond": 2.3851297013706962,
+              "endToEndP95Ms": 30898.646149999993,
+              "endToEndP99Ms": 32750.082029999998,
+              "scheduleStartP95Ms": 1699.4419499999988,
+              "statementsPerTask": 344.3625,
+              "executionMsPerTask": 8.506229537500014,
+              "sharedHitsPerTask": 1757.2,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 30670.625,
+              "discoveryCalls": 9511,
+              "discoveryRows": 219,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 12.29334019999078,
+              "min": 10.804496500000823,
+              "max": 68.068929999994
+            },
+            "durableTasksPerSecond": {
+              "median": 6.507588555961381,
+              "min": 1.1752792353281747,
+              "max": 7.4043246716766395
+            },
+            "endToEndP95Ms": {
+              "median": 6157.60265,
+              "min": 4330.834699999999,
+              "max": 35685.0856
+            },
+            "endToEndP99Ms": {
+              "median": 6230.44773,
+              "min": 4447.78454,
+              "max": 35737.95632
+            },
+            "scheduleStartP95Ms": {
+              "median": 1699.4419499999988,
+              "min": 1129.3710499999997,
+              "max": 24360.9207
+            },
+            "statementsPerTask": {
+              "median": 219.8875,
+              "min": 209.7625,
+              "max": 451.9125
+            },
+            "executionMsPerTask": {
+              "median": 6.912863912500002,
+              "min": 5.2193235000000024,
+              "max": 10.316278700000009
+            },
+            "sharedHitsPerTask": {
+              "median": 1209.6125,
+              "min": 844.5625,
+              "max": 1826.9625
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 16040.0125,
+              "min": 12673.35,
+              "max": 30670.625
+            },
+            "discoveryCalls": {
+              "median": 5878,
+              "min": 5548,
+              "max": 11806
+            },
+            "discoveryRows": {
+              "median": 118,
+              "min": 104,
+              "max": 297
+            },
+            "hydrationCalls": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "hydrationRows": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "outboxProducerRows": {
+              "median": 160,
+              "min": 160,
+              "max": 160
+            },
+            "notifyProducerRows": {
+              "median": 160,
+              "min": 160,
+              "max": 160
+            }
+          }
+        },
+        "candidate": {
+          "samples": [
+            {
+              "arm": "candidate",
+              "scenario": "fifo",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 38.4575085999968,
+              "durableTasksPerSecond": 2.080217957749001,
+              "endToEndP95Ms": 36912.0874,
+              "endToEndP99Ms": 37082.992679999996,
+              "scheduleStartP95Ms": 1593.22915,
+              "statementsPerTask": 286.3375,
+              "executionMsPerTask": 7.1074889999999895,
+              "sharedHitsPerTask": 1192.175,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 13976.85,
+              "discoveryCalls": 6578,
+              "discoveryRows": 125,
+              "hydrationCalls": 136,
+              "hydrationRows": 76,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "fifo",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 5.745359399996232,
+              "durableTasksPerSecond": 13.924281220780108,
+              "endToEndP95Ms": 2185.1151999999997,
+              "endToEndP99Ms": 2245.08224,
+              "scheduleStartP95Ms": 241.64604999999997,
+              "statementsPerTask": 126.1625,
+              "executionMsPerTask": 8.068583862500002,
+              "sharedHitsPerTask": 1356.25,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 15611.5625,
+              "discoveryCalls": 2125,
+              "discoveryRows": 6,
+              "hydrationCalls": 123,
+              "hydrationRows": 77,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "fifo",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 5.4010432999930345,
+              "durableTasksPerSecond": 14.811953090637724,
+              "endToEndP95Ms": 2232.08445,
+              "endToEndP99Ms": 2311.49049,
+              "scheduleStartP95Ms": 192.22514999999956,
+              "statementsPerTask": 119.2625,
+              "executionMsPerTask": 8.2231166,
+              "sharedHitsPerTask": 1677.925,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 19905.7,
+              "discoveryCalls": 1888,
+              "discoveryRows": 9,
+              "hydrationCalls": 115,
+              "hydrationRows": 74,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "fifo",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 5.747607900004368,
+              "durableTasksPerSecond": 13.918833955242354,
+              "endToEndP95Ms": 2250.1795,
+              "endToEndP99Ms": 2327.1151,
+              "scheduleStartP95Ms": 374.50324999999975,
+              "statementsPerTask": 125.8125,
+              "executionMsPerTask": 8.0554909375,
+              "sharedHitsPerTask": 1878.3625,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 16482.075,
+              "discoveryCalls": 2073,
+              "discoveryRows": 14,
+              "hydrationCalls": 122,
+              "hydrationRows": 76,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "fifo",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 5.770559199998388,
+              "durableTasksPerSecond": 13.863474444560303,
+              "endToEndP95Ms": 4477.8893,
+              "endToEndP99Ms": 4539.56266,
+              "scheduleStartP95Ms": 462.07499999999965,
+              "statementsPerTask": 125.6625,
+              "executionMsPerTask": 9.082268012500005,
+              "sharedHitsPerTask": 2293.5875,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 32132.0625,
+              "discoveryCalls": 2097,
+              "discoveryRows": 9,
+              "hydrationCalls": 112,
+              "hydrationRows": 78,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 5.747607900004368,
+              "min": 5.4010432999930345,
+              "max": 38.4575085999968
+            },
+            "durableTasksPerSecond": {
+              "median": 13.918833955242354,
+              "min": 2.080217957749001,
+              "max": 14.811953090637724
+            },
+            "endToEndP95Ms": {
+              "median": 2250.1795,
+              "min": 2185.1151999999997,
+              "max": 36912.0874
+            },
+            "endToEndP99Ms": {
+              "median": 2327.1151,
+              "min": 2245.08224,
+              "max": 37082.992679999996
+            },
+            "scheduleStartP95Ms": {
+              "median": 374.50324999999975,
+              "min": 192.22514999999956,
+              "max": 1593.22915
+            },
+            "statementsPerTask": {
+              "median": 125.8125,
+              "min": 119.2625,
+              "max": 286.3375
+            },
+            "executionMsPerTask": {
+              "median": 8.068583862500002,
+              "min": 7.1074889999999895,
+              "max": 9.082268012500005
+            },
+            "sharedHitsPerTask": {
+              "median": 1677.925,
+              "min": 1192.175,
+              "max": 2293.5875
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 16482.075,
+              "min": 13976.85,
+              "max": 32132.0625
+            },
+            "discoveryCalls": {
+              "median": 2097,
+              "min": 1888,
+              "max": 6578
+            },
+            "discoveryRows": {
+              "median": 9,
+              "min": 6,
+              "max": 125
+            },
+            "hydrationCalls": {
+              "median": 122,
+              "min": 112,
+              "max": 136
+            },
+            "hydrationRows": {
+              "median": 76,
+              "min": 74,
+              "max": 78
+            },
+            "outboxProducerRows": {
+              "median": 320,
+              "min": 320,
+              "max": 320
+            },
+            "notifyProducerRows": {
+              "median": 320,
+              "min": 320,
+              "max": 320
+            }
+          }
+        }
+      },
+      "paired": [
+        {
+          "repetition": 1,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 27.653012099995976,
+            "candidateOverBaseline": 3.5593984967271606
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -5.324106713927638,
+            "candidateOverBaseline": 0.2809463455467243
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 32581.252699999997,
+            "candidateOverBaseline": 8.523088493772343
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 32635.208139999995,
+            "candidateOverBaseline": 8.337407611925373
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 463.85810000000015,
+            "candidateOverBaseline": 1.410722499040506
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 76.57499999999999,
+            "candidateOverBaseline": 1.3650557177760563
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.888165499999987,
+            "candidateOverBaseline": 1.3617644125718564
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 347.61249999999995,
+            "candidateOverBaseline": 1.4115888403759342
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 1303.5,
+            "candidateOverBaseline": 1.1028536259157997
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 994,
+            "candidateOverBaseline": 1.1780085959885387
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": 21,
+            "candidateOverBaseline": 1.2019230769230769
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 136,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 76,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 2,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -6.547980799994548,
+            "candidateOverBaseline": 0.4673554385162579
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 7.416692664818727,
+            "candidateOverBaseline": 2.13969907609241
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -3972.48745,
+            "candidateOverBaseline": 0.35486459978056556
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -3985.3654899999997,
+            "candidateOverBaseline": 0.36034043415367845
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -2261.79225,
+            "candidateOverBaseline": 0.09652566632059595
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -93.725,
+            "candidateOverBaseline": 0.5737593087374225
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.1584039000000024,
+            "candidateOverBaseline": 1.1676372983462662
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 308.51250000000005,
+            "candidateOverBaseline": 1.2944559109509777
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -428.4500000000007,
+            "candidateOverBaseline": 0.9732886741827663
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -3753,
+            "candidateOverBaseline": 0.3615175229669956
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -112,
+            "candidateOverBaseline": 0.05084745762711865
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 123,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 77,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 3,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -6.433400900001288,
+            "candidateOverBaseline": 0.456383350896667
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 8.052024305808235,
+            "candidateOverBaseline": 2.19114040430107
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -2652.5395999999996,
+            "candidateOverBaseline": 0.4569613602094925
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -2712.0855199999996,
+            "candidateOverBaseline": 0.4601284991804076
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -1058.6135500000005,
+            "candidateOverBaseline": 0.15367700887412547
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -90.89999999999999,
+            "candidateOverBaseline": 0.5674775471361447
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.3102526874999985,
+            "candidateOverBaseline": 1.1895383308690295
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 468.3125,
+            "candidateOverBaseline": 1.3871591108722834
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -7840.837499999998,
+            "candidateOverBaseline": 0.7174120374479158
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -3660,
+            "candidateOverBaseline": 0.34030281182408073
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -107,
+            "candidateOverBaseline": 0.07758620689655173
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 115,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 74,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 4,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -62.32132209998963,
+            "candidateOverBaseline": 0.08443805272104138
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 12.74355471991418,
+            "candidateOverBaseline": 11.843001677261643
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -33434.9061,
+            "candidateOverBaseline": 0.06305658126262138
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -33410.841219999995,
+            "candidateOverBaseline": 0.0651160653721455
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -23986.41745,
+            "candidateOverBaseline": 0.015373115598212993
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -326.1,
+            "candidateOverBaseline": 0.2784001327690648
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -2.2607877625000086,
+            "candidateOverBaseline": 0.7808523956899297
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 51.399999999999864,
+            "candidateOverBaseline": 1.0281341297372004
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 1392.8250000000007,
+            "candidateOverBaseline": 1.092305780605398
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -9733,
+            "candidateOverBaseline": 0.1755886837201423
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -283,
+            "candidateOverBaseline": 0.04713804713804714
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 122,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 76,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 5,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -27.770593699999154,
+            "candidateOverBaseline": 0.17204415176792598
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 11.478344743189608,
+            "candidateOverBaseline": 5.812461450877571
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -26420.756849999994,
+            "candidateOverBaseline": 0.1449218609210812
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -28210.519369999998,
+            "candidateOverBaseline": 0.13861225311868325
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -1237.3669499999992,
+            "candidateOverBaseline": 0.27189807807204003
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -218.70000000000002,
+            "candidateOverBaseline": 0.3649134269846455
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 0.5760384749999918,
+            "candidateOverBaseline": 1.0677196015532506
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 536.3875,
+            "candidateOverBaseline": 1.3052512519918051
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 1461.4375,
+            "candidateOverBaseline": 1.0476494202514621
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -7414,
+            "candidateOverBaseline": 0.2204815476816318
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -210,
+            "candidateOverBaseline": 0.0410958904109589
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 112,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 78,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "sparse",
+      "repetitionsPerArm": 5,
+      "arms": {
+        "baseline": {
+          "samples": [
+            {
+              "arm": "baseline",
+              "scenario": "sparse",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 24.929370699988795,
+              "durableTasksPerSecond": 3.209066163873762,
+              "endToEndP95Ms": 4549.846999999999,
+              "endToEndP99Ms": 5258.218999999999,
+              "scheduleStartP95Ms": 277.78754999999995,
+              "statementsPerTask": 404.9375,
+              "executionMsPerTask": 7.281861125000004,
+              "sharedHitsPerTask": 863.725,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 12868.6,
+              "discoveryCalls": 12565,
+              "discoveryRows": 80,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "sparse",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 23.81976109999232,
+              "durableTasksPerSecond": 3.3585559344684524,
+              "endToEndP95Ms": 4234.1096499999985,
+              "endToEndP99Ms": 4878.445929999999,
+              "scheduleStartP95Ms": 270.76405,
+              "statementsPerTask": 394.7375,
+              "executionMsPerTask": 7.565874362500006,
+              "sharedHitsPerTask": 960.6125,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 24676.8875,
+              "discoveryCalls": 12177,
+              "discoveryRows": 80,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "sparse",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 24.367016499993042,
+              "durableTasksPerSecond": 3.283126598614272,
+              "endToEndP95Ms": 4194.701249999998,
+              "endToEndP99Ms": 4828.393049999999,
+              "scheduleStartP95Ms": 270.8436999999999,
+              "statementsPerTask": 393.9875,
+              "executionMsPerTask": 7.883673225,
+              "sharedHitsPerTask": 1093.625,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14222.0,
+              "discoveryCalls": 12136,
+              "discoveryRows": 80,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "sparse",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 24.977971900007105,
+              "durableTasksPerSecond": 3.2028220834045076,
+              "endToEndP95Ms": 2851.6935999999996,
+              "endToEndP99Ms": 2875.58992,
+              "scheduleStartP95Ms": 297.50995,
+              "statementsPerTask": 394.6625,
+              "executionMsPerTask": 8.462108624999995,
+              "sharedHitsPerTask": 1271.4375,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14879.325,
+              "discoveryCalls": 12132,
+              "discoveryRows": 80,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "sparse",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 25.898612699995283,
+              "durableTasksPerSecond": 3.088968545408402,
+              "endToEndP95Ms": 4214.688749999999,
+              "endToEndP99Ms": 4742.795349999999,
+              "scheduleStartP95Ms": 311.3421499999999,
+              "statementsPerTask": 417.9625,
+              "executionMsPerTask": 8.902403274999987,
+              "sharedHitsPerTask": 1440.375,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14349.725,
+              "discoveryCalls": 12938,
+              "discoveryRows": 80,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 160,
+              "notifyProducerRows": 160,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 24.929370699988795,
+              "min": 23.81976109999232,
+              "max": 25.898612699995283
+            },
+            "durableTasksPerSecond": {
+              "median": 3.209066163873762,
+              "min": 3.088968545408402,
+              "max": 3.3585559344684524
+            },
+            "endToEndP95Ms": {
+              "median": 4214.688749999999,
+              "min": 2851.6935999999996,
+              "max": 4549.846999999999
+            },
+            "endToEndP99Ms": {
+              "median": 4828.393049999999,
+              "min": 2875.58992,
+              "max": 5258.218999999999
+            },
+            "scheduleStartP95Ms": {
+              "median": 277.78754999999995,
+              "min": 270.76405,
+              "max": 311.3421499999999
+            },
+            "statementsPerTask": {
+              "median": 394.7375,
+              "min": 393.9875,
+              "max": 417.9625
+            },
+            "executionMsPerTask": {
+              "median": 7.883673225,
+              "min": 7.281861125000004,
+              "max": 8.902403274999987
+            },
+            "sharedHitsPerTask": {
+              "median": 1093.625,
+              "min": 863.725,
+              "max": 1440.375
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 14349.725,
+              "min": 12868.6,
+              "max": 24676.8875
+            },
+            "discoveryCalls": {
+              "median": 12177,
+              "min": 12132,
+              "max": 12938
+            },
+            "discoveryRows": {
+              "median": 80,
+              "min": 80,
+              "max": 80
+            },
+            "hydrationCalls": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "hydrationRows": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "outboxProducerRows": {
+              "median": 160,
+              "min": 160,
+              "max": 160
+            },
+            "notifyProducerRows": {
+              "median": 160,
+              "min": 160,
+              "max": 160
+            }
+          }
+        },
+        "candidate": {
+          "samples": [
+            {
+              "arm": "candidate",
+              "scenario": "sparse",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 14.832339000000502,
+              "durableTasksPerSecond": 5.3936199813122725,
+              "endToEndP95Ms": 1630.2624999999998,
+              "endToEndP99Ms": 1708.9509,
+              "scheduleStartP95Ms": 112.68379999999999,
+              "statementsPerTask": 262.7875,
+              "executionMsPerTask": 5.972324737499998,
+              "sharedHitsPerTask": 728.875,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 13686.3,
+              "discoveryCalls": 7028,
+              "discoveryRows": 4,
+              "hydrationCalls": 156,
+              "hydrationRows": 76,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "sparse",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 99.67545950000931,
+              "durableTasksPerSecond": 0.802604777558036,
+              "endToEndP95Ms": 31302.3404,
+              "endToEndP99Ms": 31375.30168,
+              "scheduleStartP95Ms": 645.74875,
+              "statementsPerTask": 531.2125,
+              "executionMsPerTask": 9.175886849999987,
+              "sharedHitsPerTask": 1160.5625,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 16226.9125,
+              "discoveryCalls": 13134,
+              "discoveryRows": 66,
+              "hydrationCalls": 143,
+              "hydrationRows": 67,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "sparse",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 128.49182160000782,
+              "durableTasksPerSecond": 0.6226077193382643,
+              "endToEndP95Ms": 31161.475150000002,
+              "endToEndP99Ms": 31202.28543,
+              "scheduleStartP95Ms": 1775.602949999923,
+              "statementsPerTask": 622.025,
+              "executionMsPerTask": 10.964948274999982,
+              "sharedHitsPerTask": 1436.7875,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 31315.2875,
+              "discoveryCalls": 15187,
+              "discoveryRows": 77,
+              "hydrationCalls": 150,
+              "hydrationRows": 72,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "sparse",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 14.247745800006669,
+              "durableTasksPerSecond": 5.614923309479774,
+              "endToEndP95Ms": 1703.4817999999998,
+              "endToEndP99Ms": 1772.1915599999998,
+              "scheduleStartP95Ms": 108.3412,
+              "statementsPerTask": 253.2125,
+              "executionMsPerTask": 7.237750537499998,
+              "sharedHitsPerTask": 1164.8875,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 17977.325,
+              "discoveryCalls": 6676,
+              "discoveryRows": 9,
+              "hydrationCalls": 149,
+              "hydrationRows": 71,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "sparse",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 8,
+              "completedTasks": 80,
+              "durationSeconds": 69.02865699998802,
+              "durableTasksPerSecond": 1.1589389606698257,
+              "endToEndP95Ms": 30026.3492,
+              "endToEndP99Ms": 30441.90504,
+              "scheduleStartP95Ms": 116.2893,
+              "statementsPerTask": 435.0875,
+              "executionMsPerTask": 9.198032737500002,
+              "sharedHitsPerTask": 1532.35,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14636.2125,
+              "discoveryCalls": 11002,
+              "discoveryRows": 46,
+              "hydrationCalls": 143,
+              "hydrationRows": 70,
+              "outboxProducerRows": 320,
+              "notifyProducerRows": 320,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 69.02865699998802,
+              "min": 14.247745800006669,
+              "max": 128.49182160000782
+            },
+            "durableTasksPerSecond": {
+              "median": 1.1589389606698257,
+              "min": 0.6226077193382643,
+              "max": 5.614923309479774
+            },
+            "endToEndP95Ms": {
+              "median": 30026.3492,
+              "min": 1630.2624999999998,
+              "max": 31302.3404
+            },
+            "endToEndP99Ms": {
+              "median": 30441.90504,
+              "min": 1708.9509,
+              "max": 31375.30168
+            },
+            "scheduleStartP95Ms": {
+              "median": 116.2893,
+              "min": 108.3412,
+              "max": 1775.602949999923
+            },
+            "statementsPerTask": {
+              "median": 435.0875,
+              "min": 253.2125,
+              "max": 622.025
+            },
+            "executionMsPerTask": {
+              "median": 9.175886849999987,
+              "min": 5.972324737499998,
+              "max": 10.964948274999982
+            },
+            "sharedHitsPerTask": {
+              "median": 1164.8875,
+              "min": 728.875,
+              "max": 1532.35
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 16226.9125,
+              "min": 13686.3,
+              "max": 31315.2875
+            },
+            "discoveryCalls": {
+              "median": 11002,
+              "min": 6676,
+              "max": 15187
+            },
+            "discoveryRows": {
+              "median": 46,
+              "min": 4,
+              "max": 77
+            },
+            "hydrationCalls": {
+              "median": 149,
+              "min": 143,
+              "max": 156
+            },
+            "hydrationRows": {
+              "median": 71,
+              "min": 67,
+              "max": 76
+            },
+            "outboxProducerRows": {
+              "median": 320,
+              "min": 320,
+              "max": 320
+            },
+            "notifyProducerRows": {
+              "median": 320,
+              "min": 320,
+              "max": 320
+            }
+          }
+        }
+      },
+      "paired": [
+        {
+          "repetition": 1,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -10.097031699988293,
+            "candidateOverBaseline": 0.594974465200085
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 2.1845538174385104,
+            "candidateOverBaseline": 1.6807443991125033
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -2919.584499999999,
+            "candidateOverBaseline": 0.3583114992657995
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -3549.2680999999993,
+            "candidateOverBaseline": 0.32500565305477014
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -165.10374999999996,
+            "candidateOverBaseline": 0.40564740932414
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -142.14999999999998,
+            "candidateOverBaseline": 0.6489581725574936
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -1.309536387500006,
+            "candidateOverBaseline": 0.8201646028370247
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -134.85000000000002,
+            "candidateOverBaseline": 0.8438739182031317
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 817.6999999999989,
+            "candidateOverBaseline": 1.0635422656699252
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -5537,
+            "candidateOverBaseline": 0.5593314763231197
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -76,
+            "candidateOverBaseline": 0.05
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 156,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 76,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 2,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 75.85569840001699,
+            "candidateOverBaseline": 4.184570075307827
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -2.5559511569104165,
+            "candidateOverBaseline": 0.2389731757393112
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 27068.230750000002,
+            "candidateOverBaseline": 7.392897914204941
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 26496.855750000002,
+            "candidateOverBaseline": 6.43141322671173
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 374.9847,
+            "candidateOverBaseline": 2.3849131744040615
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 136.47499999999997,
+            "candidateOverBaseline": 1.3457360904398492
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.610012487499981,
+            "candidateOverBaseline": 1.2127992628955024
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 199.95000000000005,
+            "candidateOverBaseline": 1.2081484469544173
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -8449.975,
+            "candidateOverBaseline": 0.657575332383389
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 957,
+            "candidateOverBaseline": 1.0785907859078592
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -14,
+            "candidateOverBaseline": 0.825
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 143,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 67,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 3,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 104.12480510001478,
+            "candidateOverBaseline": 5.273186464992319
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -2.6605188792760077,
+            "candidateOverBaseline": 0.18963865712673153
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 26966.773900000004,
+            "candidateOverBaseline": 7.428771035839564
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 26373.89238,
+            "candidateOverBaseline": 6.462250505890362
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 1504.7592499999232,
+            "candidateOverBaseline": 6.555821494093914
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 228.03749999999997,
+            "candidateOverBaseline": 1.5787937434563277
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 3.0812750499999817,
+            "candidateOverBaseline": 1.3908425631124484
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 343.1624999999999,
+            "candidateOverBaseline": 1.3137844325065722
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 17093.2875,
+            "candidateOverBaseline": 2.201890556883701
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 3051,
+            "candidateOverBaseline": 1.2514007910349374
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -3,
+            "candidateOverBaseline": 0.9625
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 150,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 72,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 4,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -10.730226100000436,
+            "candidateOverBaseline": 0.5704124360874397
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 2.412101226075267,
+            "candidateOverBaseline": 1.7531174580610087
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -1148.2117999999998,
+            "candidateOverBaseline": 0.59735793494785
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -1103.3983600000001,
+            "candidateOverBaseline": 0.6162879997854491
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -189.16875,
+            "candidateOverBaseline": 0.3641599213740582
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -141.45000000000002,
+            "candidateOverBaseline": 0.6415924999208183
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": -1.224358087499997,
+            "candidateOverBaseline": 0.8553128845589597
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -106.54999999999995,
+            "candidateOverBaseline": 0.9161972177161678
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 3098.0,
+            "candidateOverBaseline": 1.2082083696673067
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -5456,
+            "candidateOverBaseline": 0.5502802505769865
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -71,
+            "candidateOverBaseline": 0.1125
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 149,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 71,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 5,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 43.13004429999273,
+            "candidateOverBaseline": 2.665341877559356
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -1.9300295847385762,
+            "candidateOverBaseline": 0.37518639106653606
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 25811.660450000003,
+            "candidateOverBaseline": 7.1242150918024505
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 25699.10969,
+            "candidateOverBaseline": 6.418557579128943
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -195.0528499999999,
+            "candidateOverBaseline": 0.37350965810443604
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 17.125,
+            "candidateOverBaseline": 1.0409725752908454
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 0.2956294625000151,
+            "candidateOverBaseline": 1.033207826400115
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 91.97499999999991,
+            "candidateOverBaseline": 1.0638548988978564
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 286.4874999999993,
+            "candidateOverBaseline": 1.0199646683124588
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -1936,
+            "candidateOverBaseline": 0.8503632709846962
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -34,
+            "candidateOverBaseline": 0.575
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 143,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 70,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 160,
+            "candidateOverBaseline": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "steady",
+      "repetitionsPerArm": 5,
+      "arms": {
+        "baseline": {
+          "samples": [
+            {
+              "arm": "baseline",
+              "scenario": "steady",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 20.603049899989855,
+              "durableTasksPerSecond": 9.707300665232989,
+              "endToEndP95Ms": 6074.051850000001,
+              "endToEndP99Ms": 6565.556769999999,
+              "scheduleStartP95Ms": 395.62565,
+              "statementsPerTask": 163.805,
+              "executionMsPerTask": 4.62940188,
+              "sharedHitsPerTask": 642.24,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 17133.435,
+              "discoveryCalls": 9901,
+              "discoveryRows": 206,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "steady",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 27.674194699997315,
+              "durableTasksPerSecond": 7.226949227180923,
+              "endToEndP95Ms": 9688.93565,
+              "endToEndP99Ms": 9738.77113,
+              "scheduleStartP95Ms": 2104.134249999999,
+              "statementsPerTask": 161.94,
+              "executionMsPerTask": 5.19931186,
+              "sharedHitsPerTask": 927.68,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 12267.855,
+              "discoveryCalls": 9462,
+              "discoveryRows": 204,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "steady",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 20.886448499994003,
+              "durableTasksPerSecond": 9.575586773407524,
+              "endToEndP95Ms": 5476.624900000001,
+              "endToEndP99Ms": 5487.2481800000005,
+              "scheduleStartP95Ms": 365.8272,
+              "statementsPerTask": 162.765,
+              "executionMsPerTask": 5.5969887699999985,
+              "sharedHitsPerTask": 937.365,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 20315.93,
+              "discoveryCalls": 9839,
+              "discoveryRows": 207,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "steady",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 19.601181699996232,
+              "durableTasksPerSecond": 10.203466457332949,
+              "endToEndP95Ms": 3478.14115,
+              "endToEndP99Ms": 3643.86903,
+              "scheduleStartP95Ms": 335.0320499999998,
+              "statementsPerTask": 157.815,
+              "executionMsPerTask": 5.797528335000001,
+              "sharedHitsPerTask": 1083.2,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 19870.27,
+              "discoveryCalls": 9502,
+              "discoveryRows": 202,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "baseline",
+              "scenario": "steady",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 20.044664599990938,
+              "durableTasksPerSecond": 9.977717462036777,
+              "endToEndP95Ms": 5472.006149999999,
+              "endToEndP99Ms": 5506.93803,
+              "scheduleStartP95Ms": 374.03074999999995,
+              "statementsPerTask": 161.305,
+              "executionMsPerTask": 5.628722295000001,
+              "sharedHitsPerTask": 1218.955,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 19501.15,
+              "discoveryCalls": 9706,
+              "discoveryRows": 203,
+              "hydrationCalls": 0,
+              "hydrationRows": 0,
+              "outboxProducerRows": 400,
+              "notifyProducerRows": 400,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 20.603049899989855,
+              "min": 19.601181699996232,
+              "max": 27.674194699997315
+            },
+            "durableTasksPerSecond": {
+              "median": 9.707300665232989,
+              "min": 7.226949227180923,
+              "max": 10.203466457332949
+            },
+            "endToEndP95Ms": {
+              "median": 5476.624900000001,
+              "min": 3478.14115,
+              "max": 9688.93565
+            },
+            "endToEndP99Ms": {
+              "median": 5506.93803,
+              "min": 3643.86903,
+              "max": 9738.77113
+            },
+            "scheduleStartP95Ms": {
+              "median": 374.03074999999995,
+              "min": 335.0320499999998,
+              "max": 2104.134249999999
+            },
+            "statementsPerTask": {
+              "median": 161.94,
+              "min": 157.815,
+              "max": 163.805
+            },
+            "executionMsPerTask": {
+              "median": 5.5969887699999985,
+              "min": 4.62940188,
+              "max": 5.797528335000001
+            },
+            "sharedHitsPerTask": {
+              "median": 937.365,
+              "min": 642.24,
+              "max": 1218.955
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 19501.15,
+              "min": 12267.855,
+              "max": 20315.93
+            },
+            "discoveryCalls": {
+              "median": 9706,
+              "min": 9462,
+              "max": 9901
+            },
+            "discoveryRows": {
+              "median": 204,
+              "min": 202,
+              "max": 207
+            },
+            "hydrationCalls": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "hydrationRows": {
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "outboxProducerRows": {
+              "median": 400,
+              "min": 400,
+              "max": 400
+            },
+            "notifyProducerRows": {
+              "median": 400,
+              "min": 400,
+              "max": 400
+            }
+          }
+        },
+        "candidate": {
+          "samples": [
+            {
+              "arm": "candidate",
+              "scenario": "steady",
+              "repetition": 1,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 11.316583699997864,
+              "durableTasksPerSecond": 17.673178169489237,
+              "endToEndP95Ms": 2305.2767000000013,
+              "endToEndP99Ms": 3918.660939999997,
+              "scheduleStartP95Ms": 111.70699999999998,
+              "statementsPerTask": 104.755,
+              "executionMsPerTask": 5.1363429,
+              "sharedHitsPerTask": 619.86,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 14203.39,
+              "discoveryCalls": 4071,
+              "discoveryRows": 17,
+              "hydrationCalls": 263,
+              "hydrationRows": 190,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "steady",
+              "repetition": 2,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 106.18896420000237,
+              "durableTasksPerSecond": 1.8834348889900512,
+              "endToEndP95Ms": 35460.145749999996,
+              "endToEndP99Ms": 35683.23235,
+              "scheduleStartP95Ms": 29460.676649999998,
+              "statementsPerTask": 281.845,
+              "executionMsPerTask": 7.241523915000003,
+              "sharedHitsPerTask": 1105.33,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 21161.005,
+              "discoveryCalls": 15845,
+              "discoveryRows": 371,
+              "hydrationCalls": 258,
+              "hydrationRows": 193,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "steady",
+              "repetition": 3,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 111.7242050000059,
+              "durableTasksPerSecond": 1.7901223821640928,
+              "endToEndP95Ms": 40540.37685,
+              "endToEndP99Ms": 40826.63617,
+              "scheduleStartP95Ms": 28875.72014999998,
+              "statementsPerTask": 273.175,
+              "executionMsPerTask": 7.520659865000003,
+              "sharedHitsPerTask": 1276.51,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 16213.63,
+              "discoveryCalls": 14644,
+              "discoveryRows": 362,
+              "hydrationCalls": 263,
+              "hydrationRows": 181,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "steady",
+              "repetition": 4,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 12.109406900010072,
+              "durableTasksPerSecond": 16.51608552354729,
+              "endToEndP95Ms": 4395.800950000001,
+              "endToEndP99Ms": 4490.66339,
+              "scheduleStartP95Ms": 196.08804999999992,
+              "statementsPerTask": 110.345,
+              "executionMsPerTask": 6.323200354999999,
+              "sharedHitsPerTask": 1048.665,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 25238.215,
+              "discoveryCalls": 4481,
+              "discoveryRows": 13,
+              "hydrationCalls": 305,
+              "hydrationRows": 195,
+              "outboxProducerRows": 799,
+              "notifyProducerRows": 799,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            },
+            {
+              "arm": "candidate",
+              "scenario": "steady",
+              "repetition": 5,
+              "runId": null,
+              "workloadExit": 0,
+              "metricsExit": 0,
+              "completedWorkflows": 20,
+              "completedTasks": 200,
+              "durationSeconds": 104.04154959999141,
+              "durableTasksPerSecond": 1.9223089310851298,
+              "endToEndP95Ms": 35287.83545,
+              "endToEndP99Ms": 35445.67909,
+              "scheduleStartP95Ms": 29358.495949999982,
+              "statementsPerTask": 264.925,
+              "executionMsPerTask": 7.568441684999995,
+              "sharedHitsPerTask": 1496.17,
+              "sharedReadsPerTask": 0.0,
+              "walBytesPerTask": 16837.635,
+              "discoveryCalls": 14230,
+              "discoveryRows": 352,
+              "hydrationCalls": 260,
+              "hydrationRows": 195,
+              "outboxProducerRows": 800,
+              "notifyProducerRows": 800,
+              "retries": 0,
+              "leaseExpiries": 0,
+              "deadTasks": 0
+            }
+          ],
+          "summary": {
+            "durationSeconds": {
+              "median": 104.04154959999141,
+              "min": 11.316583699997864,
+              "max": 111.7242050000059
+            },
+            "durableTasksPerSecond": {
+              "median": 1.9223089310851298,
+              "min": 1.7901223821640928,
+              "max": 17.673178169489237
+            },
+            "endToEndP95Ms": {
+              "median": 35287.83545,
+              "min": 2305.2767000000013,
+              "max": 40540.37685
+            },
+            "endToEndP99Ms": {
+              "median": 35445.67909,
+              "min": 3918.660939999997,
+              "max": 40826.63617
+            },
+            "scheduleStartP95Ms": {
+              "median": 28875.72014999998,
+              "min": 111.70699999999998,
+              "max": 29460.676649999998
+            },
+            "statementsPerTask": {
+              "median": 264.925,
+              "min": 104.755,
+              "max": 281.845
+            },
+            "executionMsPerTask": {
+              "median": 7.241523915000003,
+              "min": 5.1363429,
+              "max": 7.568441684999995
+            },
+            "sharedHitsPerTask": {
+              "median": 1105.33,
+              "min": 619.86,
+              "max": 1496.17
+            },
+            "sharedReadsPerTask": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "walBytesPerTask": {
+              "median": 16837.635,
+              "min": 14203.39,
+              "max": 25238.215
+            },
+            "discoveryCalls": {
+              "median": 14230,
+              "min": 4071,
+              "max": 15845
+            },
+            "discoveryRows": {
+              "median": 352,
+              "min": 13,
+              "max": 371
+            },
+            "hydrationCalls": {
+              "median": 263,
+              "min": 258,
+              "max": 305
+            },
+            "hydrationRows": {
+              "median": 193,
+              "min": 181,
+              "max": 195
+            },
+            "outboxProducerRows": {
+              "median": 800,
+              "min": 799,
+              "max": 800
+            },
+            "notifyProducerRows": {
+              "median": 800,
+              "min": 799,
+              "max": 800
+            }
+          }
+        }
+      },
+      "paired": [
+        {
+          "repetition": 1,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -9.286466199991992,
+            "candidateOverBaseline": 0.5492674023957703
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 7.965877504256248,
+            "candidateOverBaseline": 1.8206068585869908
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": -3768.7751499999995,
+            "candidateOverBaseline": 0.379528650220528
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": -2646.895830000002,
+            "candidateOverBaseline": 0.5968512766359033
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -283.91865,
+            "candidateOverBaseline": 0.2823553022914464
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -59.05000000000001,
+            "candidateOverBaseline": 0.6395103934556332
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 0.5069410200000002,
+            "candidateOverBaseline": 1.109504647282858
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -22.379999999999995,
+            "candidateOverBaseline": 0.9651532137518685
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -2930.045000000002,
+            "candidateOverBaseline": 0.8289867151566512
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -5830,
+            "candidateOverBaseline": 0.41117058882941115
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -189,
+            "candidateOverBaseline": 0.0825242718446602
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 263,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 190,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 2,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 78.51476950000506,
+            "candidateOverBaseline": 3.8371112638017495
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -5.343514338190872,
+            "candidateOverBaseline": 0.2606127191133925
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 25771.210099999997,
+            "candidateOverBaseline": 3.659859764885527
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 25944.461219999997,
+            "candidateOverBaseline": 3.6640384986642562
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 27356.5424,
+            "candidateOverBaseline": 14.001329359093893
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 119.90500000000003,
+            "candidateOverBaseline": 1.7404285537853528
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 2.042212055000003,
+            "candidateOverBaseline": 1.3927850665607127
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 177.64999999999998,
+            "candidateOverBaseline": 1.1914992238703002
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 8893.150000000001,
+            "candidateOverBaseline": 1.724914828223842
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 6383,
+            "candidateOverBaseline": 1.6745931092792221
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": 167,
+            "candidateOverBaseline": 1.8186274509803921
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 258,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 193,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 3,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 90.83775650001189,
+            "candidateOverBaseline": 5.3491240983376365
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -7.785464391243432,
+            "candidateOverBaseline": 0.18694649471878455
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 35063.75195,
+            "candidateOverBaseline": 7.402438105629618
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 35339.387989999996,
+            "candidateOverBaseline": 7.440275130766911
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 28509.89294999998,
+            "candidateOverBaseline": 78.93267682118766
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 110.41000000000003,
+            "candidateOverBaseline": 1.6783399379473476
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.9236710950000049,
+            "candidateOverBaseline": 1.343697508437203
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 339.145,
+            "candidateOverBaseline": 1.3618067668410918
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -4102.300000000001,
+            "candidateOverBaseline": 0.7980747127992663
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 4805,
+            "candidateOverBaseline": 1.4883626384795203
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": 155,
+            "candidateOverBaseline": 1.748792270531401
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 263,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 181,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        },
+        {
+          "repetition": 4,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": -7.49177479998616,
+            "candidateOverBaseline": 0.6177896356122448
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 6.31261906621434,
+            "candidateOverBaseline": 1.6186739665986392
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 917.6598000000008,
+            "candidateOverBaseline": 1.2638362735796391
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 846.7943599999999,
+            "candidateOverBaseline": 1.23238880240435
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": -138.94399999999987,
+            "candidateOverBaseline": 0.5852814678476285
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": -47.47,
+            "candidateOverBaseline": 0.6992047650730285
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 0.5256720199999982,
+            "candidateOverBaseline": 1.0906717465831925
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": -34.53500000000008,
+            "candidateOverBaseline": 0.9681176144756277
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": 5367.945,
+            "candidateOverBaseline": 1.2701495752196623
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": -5021,
+            "candidateOverBaseline": 0.4715849294885287
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": -189,
+            "candidateOverBaseline": 0.06435643564356436
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 305,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 195,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 399,
+            "candidateOverBaseline": 1.9975
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 399,
+            "candidateOverBaseline": 1.9975
+          }
+        },
+        {
+          "repetition": 5,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "durationSeconds": {
+            "candidateMinusBaseline": 83.99688500000047,
+            "candidateOverBaseline": 5.190485931105998
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -8.055408530951647,
+            "candidateOverBaseline": 0.1926601889058426
+          },
+          "endToEndP95Ms": {
+            "candidateMinusBaseline": 29815.829299999998,
+            "candidateOverBaseline": 6.448793090263615
+          },
+          "endToEndP99Ms": {
+            "candidateMinusBaseline": 29938.741059999997,
+            "candidateOverBaseline": 6.436549475752861
+          },
+          "scheduleStartP95Ms": {
+            "candidateMinusBaseline": 28984.46519999998,
+            "candidateOverBaseline": 78.4921987029141
+          },
+          "statementsPerTask": {
+            "candidateMinusBaseline": 103.62,
+            "candidateOverBaseline": 1.6423855429155947
+          },
+          "executionMsPerTask": {
+            "candidateMinusBaseline": 1.9397193899999943,
+            "candidateOverBaseline": 1.3446109593509434
+          },
+          "sharedHitsPerTask": {
+            "candidateMinusBaseline": 277.21500000000015,
+            "candidateOverBaseline": 1.2274202082931693
+          },
+          "sharedReadsPerTask": {
+            "candidateMinusBaseline": 0.0,
+            "candidateOverBaseline": null
+          },
+          "walBytesPerTask": {
+            "candidateMinusBaseline": -2663.515000000003,
+            "candidateOverBaseline": 0.8634175420423922
+          },
+          "discoveryCalls": {
+            "candidateMinusBaseline": 4524,
+            "candidateOverBaseline": 1.4661034411704101
+          },
+          "discoveryRows": {
+            "candidateMinusBaseline": 149,
+            "candidateOverBaseline": 1.7339901477832513
+          },
+          "hydrationCalls": {
+            "candidateMinusBaseline": 260,
+            "candidateOverBaseline": null
+          },
+          "hydrationRows": {
+            "candidateMinusBaseline": 195,
+            "candidateOverBaseline": null
+          },
+          "outboxProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          },
+          "notifyProducerRows": {
+            "candidateMinusBaseline": 400,
+            "candidateOverBaseline": 2.0
+          }
+        }
+      ]
+    }
+  ]
+}
