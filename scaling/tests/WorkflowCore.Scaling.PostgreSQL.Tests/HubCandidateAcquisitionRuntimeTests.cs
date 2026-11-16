@@ -14,15 +14,18 @@ public sealed class CandidateAcquisitionRuntimeCollection { }
 [Collection("CandidateAcquisitionRuntime")]
 public sealed class HubCandidateAcquisitionRuntimeTests
 {
-    [Fact]
-    public async Task ConfirmedMatchingCreditsAreRetiredWithoutWaitingForFortyFiveSecondLeases()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExistingCandidateMatcherClaimsWorkWithTaskIdHintsOffOrOn(bool taskIdHintsEnabled)
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required");
         var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL",
             "WFC_HUB_MATCHING_PEERS", "WFC_HUB_MATCHING_PARTITIONS",
-            "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY", "WFC_HUB_CANDIDATE_BACKPRESSURE" };
+            "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY", "WFC_HUB_CANDIDATE_BACKPRESSURE",
+            "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         try
         {
@@ -34,6 +37,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
             // One candidate stream/bucket, reducing test time and noise.
             Environment.SetEnvironmentVariable(keys[5], "64");
             Environment.SetEnvironmentVariable(keys[6], "3");
+            Environment.SetEnvironmentVariable(keys[8], taskIdHintsEnabled ? "true" : "false");
 
             var hub = "candidate-credit-" + Guid.NewGuid().ToString("N");
             await using var tasks = new HubTaskStore(database, 12);
@@ -53,6 +57,9 @@ public sealed class HubCandidateAcquisitionRuntimeTests
                 var owner = await ownership.AcquirePartitionAsync(hub, 0, default);
                 Assert.True(ownership.IsLocal(owner));
                 Assert.True(matcher.Enabled);
+                await using (var hintSetting = tasks.DataSource.CreateCommand(
+                    "SELECT current_setting('wfc.hub_candidate_task_id_hints',true)='on'"))
+                    Assert.Equal(taskIdHintsEnabled, (bool)(await hintSetting.ExecuteScalarAsync())!);
                 var capability = new HubCapability(hub, "work", 1);
                 var payload = JsonSerializer.SerializeToElement(new { message = "credit-lifetime" });
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(40));
@@ -121,7 +128,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
             var matcher = new HubCandidateAcquisition(tasks, ownership, readiness,
                 NullLogger<HubCandidateAcquisition>.Instance);
             var listener = new PostgresHubNotificationListener(database, readiness,
-                NullLogger<PostgresHubNotificationListener>.Instance);
+                NullLogger<PostgresHubNotificationListener>.Instance, taskIdHintsEnabled: true);
             var exact = new System.Collections.Concurrent.ConcurrentDictionary<int, Guid>();
             var coarse = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
             var recovery = 0;

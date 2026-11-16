@@ -25,10 +25,12 @@ public sealed class PostgresHubNotificationListener : BackgroundService
     private readonly string _connectionString;
     private readonly HubReadinessBroadcaster _readiness;
     private readonly ILogger<PostgresHubNotificationListener> _logger;
+    private readonly bool _taskIdHintsEnabled;
 
     public PostgresHubNotificationListener(string connectionString,
         HubReadinessBroadcaster readiness,
-        ILogger<PostgresHubNotificationListener> logger)
+        ILogger<PostgresHubNotificationListener> logger,
+        bool? taskIdHintsEnabled = null)
     {
         // LISTEN is session-scoped; a dedicated, non-pooled connection must
         // never pass through a transaction-pooling PgBouncer endpoint.
@@ -41,6 +43,8 @@ public sealed class PostgresHubNotificationListener : BackgroundService
         _connectionString = options.ConnectionString;
         _readiness = readiness;
         _logger = logger;
+        _taskIdHintsEnabled = taskIdHintsEnabled ??
+            Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED") is "true" or "1" or "True";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -114,7 +118,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                             {
                                 if (idElement.ValueKind != JsonValueKind.String || !Guid.TryParse(idElement.GetString(), out var parsedId) || partition is null)
                                 { InvalidHint(); return; }
-                                taskId = parsedId;
+                                if (_taskIdHintsEnabled) taskId = parsedId;
                             }
                             if (type is not null && version < 1) { InvalidHint(); return; }
                             HubTelemetry.PostgresHintsReceived.Add(1);

@@ -26,15 +26,21 @@ public sealed class HubCandidateRecoveryLatencyTests
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for recovery measurements");
         var arm = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_ARM") ?? "candidate";
+        var taskIdHintsEnabled = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_TASK_ID_HINTS") is "true" or "1" or "True";
+        var repetitions = int.TryParse(Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_REPETITIONS"), out var configuredRepetitions)
+            ? Math.Clamp(configuredRepetitions, 1, 100) : 2;
+        var focus = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_FOCUS");
         var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL", "WFC_HUB_MATCHING_PEERS",
-            "WFC_HUB_MATCHING_PARTITIONS", "WFC_HUB_CANDIDATE_BACKPRESSURE", "WFC_HUB_PUSH_ENABLED" };
+            "WFC_HUB_MATCHING_PARTITIONS", "WFC_HUB_CANDIDATE_BACKPRESSURE", "WFC_HUB_PUSH_ENABLED",
+            "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         var observations = new List<Observation>();
         try
         {
             Environment.SetEnvironmentVariable(keys[0], "true");
             Environment.SetEnvironmentVariable(keys[1], "true");
+            Environment.SetEnvironmentVariable(keys[8], taskIdHintsEnabled ? "true" : "false");
             Environment.SetEnvironmentVariable(keys[2], "candidate-recovery-latency");
             Environment.SetEnvironmentVariable(keys[3], "http://localhost:5100");
             Environment.SetEnvironmentVariable(keys[4], "http://localhost:5100");
@@ -54,7 +60,7 @@ public sealed class HubCandidateRecoveryLatencyTests
                 var matcher = new HubCandidateAcquisition(tasks, ownership, readiness,
                     NullLogger<HubCandidateAcquisition>.Instance,
                     new HubCandidateCoordinatorOptions(RecoveryCadence: TimeSpan.FromSeconds(10)), requireDemand);
-                using var lifetime = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+                using var lifetime = new CancellationTokenSource(TimeSpan.FromMinutes(20));
                 await ownership.StartAsync(lifetime.Token);
                 await matcher.StartAsync(lifetime.Token);
                 await readiness.StartAsync(lifetime.Token);
@@ -62,10 +68,12 @@ public sealed class HubCandidateRecoveryLatencyTests
                 {
                     var owner = await ownership.AcquirePartitionAsync(hub, 0, lifetime.Token);
                     Assert.True(ownership.IsLocal(owner));
-                    var scenarios = new[] { "arrival-after-sweep", "no-listen-hint",
+                    var allScenarios = new[] { "arrival-after-sweep", "no-listen-hint",
                         "outbox-no-dispatcher", "future-due", "lease-expiry", "demand-after-absent" };
+                    var scenarios = string.IsNullOrWhiteSpace(focus) ? allScenarios : allScenarios.Where(x => x == focus).ToArray();
+                    if (scenarios.Length == 0) throw new ArgumentException($"Unknown recovery focus '{focus}'");
                     for (var scenarioIndex = 0; scenarioIndex < scenarios.Length; scenarioIndex++)
-                    for (var repetition = 1; repetition <= 2; repetition++)
+                    for (var repetition = 1; repetition <= repetitions; repetition++)
                     {
                         var scenario = scenarios[scenarioIndex];
                 var observation = await MeasureOne(arm, database, hub, tasks, matcher,
@@ -93,15 +101,19 @@ public sealed class HubCandidateRecoveryLatencyTests
                 sourceCommitOrLabel = Environment.GetEnvironmentVariable("WFC_EVIDENCE_SOURCE_COMMIT") ?? "uncommitted",
                 testAssemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
                     Path.Combine(AppContext.BaseDirectory, "WorkflowCore.Scaling.PostgreSQL.Tests.dll")))),
-                featureFlags = new { candidateIdHints = true, outboxDispatcher = false,
+                featureFlags = new { candidateTopologyEnabled = true, taskIdHintsEnabled,
+                    outboxDispatcher = false,
                     listenConsumer = false, pushRecoverySweep = true },
+                repetitions,
+                focus = focus ?? "all",
                 claimMeansDurablyLeasedTaskReturnedByHubCandidateAcquisition,
                 notificationListenerStarted = false,
                 recoveryCadenceSeconds = 10,
                 observations
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
-        Assert.Equal(24, observations.Count);
+        var expectedObservations = (string.IsNullOrWhiteSpace(focus) ? 6 : 1) * 2 * repetitions;
+        Assert.Equal(expectedObservations, observations.Count);
         Assert.All(observations, row => Assert.True(row.Claimed, row.Error));
     }
 

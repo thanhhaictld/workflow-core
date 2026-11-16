@@ -54,8 +54,8 @@ span these matching partitions and are *always* rechecked transactionally.
 ## End-to-end assignment
 
 1. **Task becomes ready:** the workflow engine or timer scheduler commits the
-   durable task. When experimental candidate mode is enabled, migration 032
-   emits a transaction-committed task-ID hint for
+   durable task. When experimental task-ID hints are enabled, migration 032
+   emits a transaction-committed exact-ID hint for
    immediately ready inserts and task state/epoch/readiness changes. The owner
    hydrates current task metadata in bounded ID batches; hints are advisory and
    may be duplicated, reordered, or lost. The indexed candidate reader still
@@ -98,11 +98,15 @@ higher than the available connection budget.
 
 Migration `032_hub_candidate_task_id_hints.sql` replaces the 014/030 trigger
 function and expands its trigger to observe task state, due-time and lease-epoch
-changes. Task-ID payloads and owner hydration are **opt-in** through
-`WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`; the Hub's task-writer connections
-set the matching PostgreSQL session flag. When disabled, migration 032 retains
-the prior coarse notification payload and suppresses epoch-only notifications.
-Exact hints route by hub, task ID and task partition; each owner reads
+changes. The existing partition-owned in-memory matcher remains the normal
+architecture and is controlled by `WFC_HUB_MATCHING_CANDIDATES_ENABLED`.
+Exact task-ID payloads and hydration are a separate experimental opt-in through
+`WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED=true`; Hub task-writer connections set
+the corresponding PostgreSQL session flag. When this new flag is disabled,
+migration 032 preserves migration 030's coarse payload, channel and outbox
+delivery behavior, and suppresses epoch-only producer events. A mixed-version
+exact-ID payload is conservatively converted to the existing coarse candidate
+rescan. Exact hints route by hub, task ID and task partition; each owner reads
 the row's current state and bounded workflow/resource metadata before adding,
 updating or safely removing the advisory entry. Lease-heartbeat updates do not
 emit hints. Future tasks becoming due and leases expiring without a task-row
@@ -110,10 +114,12 @@ update remain indexed PostgreSQL discovery streams; no future-task timer heap
 or sequence-watermark feed is used. Deletes and out-of-band resource writes
 also rely on authoritative admission and periodic recovery.
 
-In opt-in mode, an exact hint is emitted per immediately ready insert and
+In exact-ID opt-in mode, an exact hint is emitted per immediately ready insert and
 relevant state/epoch transition, so workflow fan-out, claims, retries and
 completions produce per-task notifications; a permit release also emits a
 hub-wide hint. In default mode the legacy coarse task hint is retained.
+Policy-change hints use the same opt-in; with task-ID hints off, indexed
+reconciliation remains responsible for observing capacity/policy changes.
 Outbox
 mode stores each notification separately and the dispatcher deletes those rows
 in the notification transaction. Heartbeats do not add event rows. The bounded
@@ -234,14 +240,16 @@ make ups-16
 ```
 
 The standard preset configures two Hub replicas, four matching partitions,
-PostgreSQL claim admission and worker SSE push; experimental candidate-ID
-hydration is off unless explicitly enabled. The
+the existing in-memory candidate matcher, PostgreSQL claim admission and
+worker SSE push; experimental exact-ID hydration is off unless explicitly
+enabled. The
 important environment settings are:
 
 | Setting | Main preset |
 | --- | --- |
 | `WFC_HUB_MATCHING_ENABLED` | `true` on Hub replicas |
-| `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `false` (experimental opt-in; set `true` for an A/B run) |
+| `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `true` (existing in-memory candidate matcher) |
+| `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` | `false` (experimental exact-ID hydration opt-in) |
 | `WFC_HUB_PUSH_ENABLED` | `true` on Hub replicas and workers |
 | `WFC_HUB_MATCHING_PARTITIONS` | `4`, consistent on Hub and worker |
 | `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY` | `2` (per Hub) |

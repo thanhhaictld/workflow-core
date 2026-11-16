@@ -182,7 +182,7 @@ public sealed class HubRegistrationTests
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for policy hint tests");
         var hub = "policy-hint-" + Guid.NewGuid().ToString("N");
-        await using var tasks = new HubTaskStore(database);
+        await using var tasks = new HubTaskStore(database, enableTaskIdHints: true);
         var definitions = new HubDefinitionStore(tasks);
         var registration = new HubActivityRegistration(hub, "activity", 1, 4, 10, 10);
         Assert.True(await definitions.RegisterActivityAsync(registration, default));
@@ -200,5 +200,32 @@ public sealed class HubRegistrationTests
         using var payload = System.Text.Json.JsonDocument.Parse(await received.Task);
         Assert.Equal(hub, payload.RootElement.GetProperty("hub").GetString());
         Assert.Equal("policy-change", payload.RootElement.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public async Task PolicyChangeUsesExistingRecoveryWhenTaskIdHintsAreDisabled()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for policy hint tests");
+        var hub = "policy-hint-off-" + Guid.NewGuid().ToString("N");
+        await using var tasks = new HubTaskStore(database, enableTaskIdHints: false);
+        var definitions = new HubDefinitionStore(tasks);
+        var registration = new HubActivityRegistration(hub, "activity", 1, 4, 10, 10);
+        Assert.True(await definitions.RegisterActivityAsync(registration, default));
+        await using var listener = new NpgsqlConnection(database); await listener.OpenAsync();
+        var received = 0;
+        listener.Notification += (_, e) =>
+        {
+            if (e.Channel == "wfc_hub_matching_ready" && e.Payload.Contains(hub, StringComparison.Ordinal))
+                Interlocked.Increment(ref received);
+        };
+        await using (var listen = new NpgsqlCommand("LISTEN wfc_hub_matching_ready", listener)) await listen.ExecuteNonQueryAsync();
+        await definitions.UpdateActivityCapacityAsync(new(hub, "activity", 1, 1, 11, 10, 10), default);
+        using (var quiet = new CancellationTokenSource(TimeSpan.FromMilliseconds(250)))
+        {
+            try { await listener.WaitAsync(quiet.Token); }
+            catch (OperationCanceledException) when (quiet.IsCancellationRequested) { }
+        }
+        Assert.Equal(0, Volatile.Read(ref received));
     }
 }
