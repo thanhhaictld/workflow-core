@@ -14,6 +14,7 @@ public sealed class HubNotificationOutboxTests
         var connection = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required");
         var hub = "outbox-" + Guid.NewGuid().ToString("N");
+        var taskId = Guid.NewGuid();
         await using var db = new NpgsqlConnection(connection);
         await db.OpenAsync();
         await using var listener = new NpgsqlConnection(connection);
@@ -28,7 +29,7 @@ public sealed class HubNotificationOutboxTests
                 INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
                 VALUES (@id,@hub,0,'work',1,'{}');
                 """, db, tx);
-            cmd.Parameters.AddWithValue("id", Guid.NewGuid()); cmd.Parameters.AddWithValue("hub", hub);
+            cmd.Parameters.AddWithValue("id", taskId); cmd.Parameters.AddWithValue("hub", hub);
             await cmd.ExecuteNonQueryAsync();
         }
         await using (var rolledBack = await db.BeginTransactionAsync()) { await Insert(rolledBack); await rolledBack.RollbackAsync(); }
@@ -48,7 +49,8 @@ public sealed class HubNotificationOutboxTests
         Assert.True(await dispatcher.DispatchAsync(default) >= 1);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!received.Task.IsCompleted) await listener.WaitAsync(timeout.Token);
-        Assert.Contains(hub, await received.Task);
+        using (var json = System.Text.Json.JsonDocument.Parse(await received.Task))
+            Assert.Equal(taskId, json.RootElement.GetProperty("taskId").GetGuid());
         await using var remaining = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_notification_outbox WHERE hub_id=@hub", db);
         remaining.Parameters.AddWithValue("hub", hub); Assert.Equal(0L, (long)(await remaining.ExecuteScalarAsync())!);
     }

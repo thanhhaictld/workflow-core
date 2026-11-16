@@ -71,6 +71,7 @@ public sealed class HubPostgresNotificationTests
             NullLogger<HubReadinessBroadcaster>.Instance);
         var a = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var b = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exact = new TaskCompletionSource<(Guid Id, int Partition)>(TaskCreationOptions.RunContinuationsAsynchronously);
         readyA.TaskReady += (observed, type, version, partition) =>
         {
             if (observed == hub && type == "notify-test" && version == 1 && partition == 0)
@@ -80,6 +81,11 @@ public sealed class HubPostgresNotificationTests
         {
             if (observed == hub && type == "notify-test" && version == 1 && partition == 0)
                 b.TrySetResult();
+        };
+        readyA.CandidateTaskChanged += (observed, id, partition, type, version) =>
+        {
+            if (observed == hub && type == "notify-test" && version == 1)
+                exact.TrySetResult((id, partition));
         };
         using var listenerA = new PostgresHubNotificationListener(Database, readyA,
             NullLogger<PostgresHubNotificationListener>.Instance);
@@ -93,14 +99,115 @@ public sealed class HubPostgresNotificationTests
                 await Task.Delay(25, lifetime.Token);
             await using var writer = new NpgsqlConnection(Database);
             await writer.OpenAsync(lifetime.Token);
-            await InsertTaskAsync(writer, hub);
-            await Task.WhenAll(a.Task.WaitAsync(lifetime.Token), b.Task.WaitAsync(lifetime.Token));
+            var id = await InsertTaskAsync(writer, hub);
+            await Task.WhenAll(a.Task.WaitAsync(lifetime.Token), b.Task.WaitAsync(lifetime.Token), exact.Task.WaitAsync(lifetime.Token));
+            Assert.Equal((id, 0), await exact.Task);
         }
         finally
         {
             await listenerA.StopAsync(CancellationToken.None);
             await listenerB.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task ExactTaskIdHintIsCommitCoupledForInsertAndStateInvalidation()
+    {
+        if (Database is null) return;
+        var hub = Hub(); var received = new List<string>();
+        await using var listener = new NpgsqlConnection(Database);
+        await listener.OpenAsync();
+        listener.Notification += (_, e) => { if (e.Channel == "wfc_hub_matching_ready") received.Add(e.Payload); };
+        await using (var listen = new NpgsqlCommand("LISTEN wfc_hub_matching_ready", listener)) await listen.ExecuteNonQueryAsync();
+        await using var writer = new NpgsqlConnection(Database); await writer.OpenAsync();
+        await using (var tx = await writer.BeginTransactionAsync())
+        {
+            await InsertTaskAsync(writer, hub, tx: tx);
+            await tx.RollbackAsync();
+        }
+        using (var quiet = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+        {
+            try { await listener.WaitAsync(quiet.Token); }
+            catch (OperationCanceledException) when (quiet.IsCancellationRequested) { }
+        }
+        Assert.Empty(received);
+
+        var id = Guid.NewGuid();
+        await using (var tx = await writer.BeginTransactionAsync())
+        {
+            await using var insert = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+                VALUES (@id,@hub,3,'exact-test',1,'{}')
+                """, writer, tx);
+            insert.Parameters.AddWithValue("id", id); insert.Parameters.AddWithValue("hub", hub);
+            await insert.ExecuteNonQueryAsync(); await tx.CommitAsync();
+        }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (received.Count == 0) await listener.WaitAsync(timeout.Token);
+        using (var json = System.Text.Json.JsonDocument.Parse(received[^1]))
+        {
+            Assert.Equal(id, json.RootElement.GetProperty("taskId").GetGuid());
+            Assert.Equal(3, json.RootElement.GetProperty("partition").GetInt32());
+        }
+        received.Clear();
+        await using (var update = new NpgsqlCommand("UPDATE wfc_scale.hub_task SET state=1,owner='worker',lease_until=now()+interval '1 minute',epoch=epoch+1 WHERE id=@id", writer))
+        {
+            update.Parameters.AddWithValue("id", id); await update.ExecuteNonQueryAsync();
+        }
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        while (received.Count == 0) await listener.WaitAsync(timeout.Token);
+        using var invalidation = System.Text.Json.JsonDocument.Parse(received[^1]);
+        Assert.Equal(id, invalidation.RootElement.GetProperty("taskId").GetGuid());
+        received.Clear();
+        await using (var complete = new NpgsqlCommand("UPDATE wfc_scale.hub_task SET state=2,owner=NULL,lease_until=NULL WHERE id=@id", writer))
+        {
+            complete.Parameters.AddWithValue("id", id); await complete.ExecuteNonQueryAsync();
+        }
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        while (received.Count < 2) await listener.WaitAsync(timeout.Token);
+        Assert.Contains(received, payload =>
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(payload);
+            return json.RootElement.TryGetProperty("kind", out var kind) && kind.GetString() == "permit-release";
+        });
+        Assert.Contains(received, payload =>
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(payload);
+            return json.RootElement.TryGetProperty("taskId", out var taskId) && taskId.GetGuid() == id;
+        });
+    }
+
+    [Fact]
+    public async Task MalformedAndOversizedMatchingPayloadsRequestRecoveryWithoutTearingDownListener()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var store = new HubTaskStore(Database);
+        using var readiness = new HubReadinessBroadcaster(store,
+            new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            NullLogger<HubReadinessBroadcaster>.Instance);
+        using var listener = new PostgresHubNotificationListener(Database, readiness,
+            NullLogger<PostgresHubNotificationListener>.Instance);
+        var recovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exact = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        readiness.CandidateRecoveryRequired += () => recovery.TrySetResult();
+        readiness.CandidateTaskChanged += (observed, id, _, _, _) => { if (observed == hub) exact.TrySetResult(id); };
+        await listener.StartAsync(lifetime.Token);
+        try
+        {
+            while (!listener.IsListening) await Task.Delay(25, lifetime.Token);
+            await using var writer = new NpgsqlConnection(Database); await writer.OpenAsync(lifetime.Token);
+            await using (var malformed = new NpgsqlCommand("SELECT pg_notify('wfc_hub_matching_ready','{\\\"hub\\\":42}')", writer))
+                await malformed.ExecuteNonQueryAsync(lifetime.Token);
+            await recovery.Task.WaitAsync(lifetime.Token);
+            await using (var oversized = new NpgsqlCommand("SELECT pg_notify('wfc_hub_matching_ready',repeat('x',513))", writer))
+                await oversized.ExecuteNonQueryAsync(lifetime.Token);
+            var id = await InsertTaskAsync(writer, hub);
+            Assert.Equal(id, await exact.Task.WaitAsync(lifetime.Token));
+            Assert.True(listener.IsListening);
+        }
+        finally { await listener.StopAsync(CancellationToken.None); }
     }
 
     [Fact]

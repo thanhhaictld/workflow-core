@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using WorkflowCore.Hub;
 using WorkflowCore.Interface;
 using WorkflowCore.Models;
@@ -173,5 +174,31 @@ public sealed class HubRegistrationTests
         Assert.Equal(3, policy.HubConcurrency);
         Assert.Equal(2, policy.ActivityConcurrency);
         Assert.Equal(1, policy.ResourceCapacity);
+    }
+
+    [Fact]
+    public async Task PolicyCapacityChangePublishesCrossReplicaCandidateInvalidation()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for policy hint tests");
+        var hub = "policy-hint-" + Guid.NewGuid().ToString("N");
+        await using var tasks = new HubTaskStore(database);
+        var definitions = new HubDefinitionStore(tasks);
+        var registration = new HubActivityRegistration(hub, "activity", 1, 4, 10, 10);
+        Assert.True(await definitions.RegisterActivityAsync(registration, default));
+        await using var listener = new NpgsqlConnection(database); await listener.OpenAsync();
+        var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        listener.Notification += (_, e) =>
+        {
+            if (e.Channel == "wfc_hub_matching_ready" && e.Payload.Contains(hub, StringComparison.Ordinal))
+                received.TrySetResult(e.Payload);
+        };
+        await using (var listen = new NpgsqlCommand("LISTEN wfc_hub_matching_ready", listener)) await listen.ExecuteNonQueryAsync();
+        await definitions.UpdateActivityCapacityAsync(new(hub, "activity", 1, 1, 11, 10, 10), default);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!received.Task.IsCompleted) await listener.WaitAsync(timeout.Token);
+        using var payload = System.Text.Json.JsonDocument.Parse(await received.Task);
+        Assert.Equal(hub, payload.RootElement.GetProperty("hub").GetString());
+        Assert.Equal("policy-change", payload.RootElement.GetProperty("kind").GetString());
     }
 }

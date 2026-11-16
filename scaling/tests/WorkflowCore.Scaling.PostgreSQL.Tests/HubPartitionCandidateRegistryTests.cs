@@ -16,7 +16,9 @@ public sealed class HubPartitionCandidateRegistryTests
         public readonly Dictionary<(string, int, HubCandidateStream), List<HubTaskCandidate>> Data = new();
         public readonly List<(string Hub,int Bucket,HubCandidateStream Stream,long? Cursor)> Calls = [];
         public int Active, MaxActive, Captures;
+        public int HydrationCalls;
         public TaskCompletionSource? Entered, Release, PageEntered, PageRelease;
+        public TaskCompletionSource? HydrationEntered, HydrationRelease;
         public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct)
         {
             Captures++; var current = Interlocked.Increment(ref Active); MaxActive = Math.Max(MaxActive,current);
@@ -30,6 +32,19 @@ public sealed class HubPartitionCandidateRegistryTests
             var all = Data.GetValueOrDefault((hub,bucket,stream),[]).Where(x => x.Sequence > (cursor?.Sequence ?? 0) && x.Sequence <= horizon.UpperSequence).OrderBy(x => x.Sequence).Take(pageSize).ToArray();
             var last = all.LastOrDefault();
             return new HubCandidatePage(all,last is null ? cursor : new(last.Sequence,stream == HubCandidateStream.Ready ? null : last.Deadline),all.Length < pageSize,all.Length*160);
+        }
+        public async Task<HubCandidateHydrationPage> HydrateAsync(string hub,int matchingPartition,int partitionCount,
+            IReadOnlyList<Guid> ids,int byteLimit,CancellationToken ct)
+        {
+            Interlocked.Increment(ref HydrationCalls);
+            if (HydrationEntered is not null)
+            {
+                HydrationEntered.TrySetResult();
+                await HydrationRelease!.Task.WaitAsync(ct);
+            }
+            var items = Data.Values.SelectMany(x => x).Where(x => ids.Contains(x.Id) && x.HubId == hub &&
+                x.PartitionId % partitionCount == matchingPartition).DistinctBy(x => x.Id).ToArray();
+            return new HubCandidateHydrationPage(items,0,items.Length*160);
         }
         public void Add(string hub, int bucket, HubCandidateStream stream, params HubTaskCandidate[] items)
         { if (!Data.TryGetValue((hub,bucket,stream),out var list)) Data[(hub,bucket,stream)] = list = []; list.AddRange(items); }
@@ -71,6 +86,84 @@ public sealed class HubPartitionCandidateRegistryTests
         await Pump(registry, clock, 10);
         Assert.Equal(captures, source.Captures);
         Assert.Equal(reads, source.Calls.Count);
+    }
+
+    [Fact]
+    public async Task ExactHintHydratesByIdAndRetainsSameIdHintArrivingDuringHydration()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-hint";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        source.HydrationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.HydrationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("worker", hub)));
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        var firstHydration = registry.RunOneTurnAsync(clock.Now, default);
+        await source.HydrationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        source.HydrationRelease.SetResult();
+        await firstHydration;
+        Assert.Equal(0, source.Captures);
+        Assert.Empty(source.Calls);
+        Assert.Equal(1, source.HydrationCalls);
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(2, source.HydrationCalls);
+        Assert.Equal(candidate.Id, registry.TakeReservation(hub, 0, 1)!.Candidate.Id);
+    }
+
+    [Fact]
+    public async Task ExactHintForNoLongerEligibleTaskRemovesOnlyUnreservedCandidate()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-terminal";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(1, registry.Snapshot().Entries);
+        source.Data[(hub, 0, HubCandidateStream.ReadyDue)].Clear();
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(0, registry.Snapshot().Entries);
+    }
+
+    [Fact]
+    public async Task ExactHintFloodIsBoundedAndFallsBackToIndexedRecovery()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-flood";
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        var accepted = 0;
+        for (var i = 0; i < 20; i++)
+            if (registry.NotifyTask(hub, 0, 1, Guid.NewGuid())) accepted++;
+        Assert.Equal(4, accepted);
+        Assert.True(registry.Snapshot().Bytes <= Options().ProcessBytes);
+        await Pump(registry, clock, 20);
+        Assert.True(source.HydrationCalls <= 8);
+        Assert.True(source.Captures > 0);
+    }
+
+    [Fact]
+    public async Task OwnerGenerationLossDuringHydrationCannotPopulateReplacement()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-takeover";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        source.HydrationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.HydrationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub, epoch: 1), 64);
+        registry.NotifyTask(hub, 0, 1, candidate.Id);
+        var hydration = registry.RunOneTurnAsync(clock.Now, default);
+        await source.HydrationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        source.Data.Clear();
+        registry.StartGeneration(Owner(hub, epoch: 2), 64);
+        await hydration;
+        source.HydrationEntered = null;
+        source.HydrationRelease!.SetResult();
+        await Pump(registry, clock, 3);
+        Assert.Equal(0, registry.Snapshot().Entries);
+        Assert.True(source.Captures > 0);
     }
 
     [Fact]

@@ -121,10 +121,11 @@ public static class HubGatewayEndpoints
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
         routes.MapPost("/activity-registrations", async (HubActivityRegistration policy,
-            HubDefinitionStore store, CancellationToken ct) =>
+            HubDefinitionStore store, HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             try {
                 var created=await store.RegisterActivityAsync(policy,ct);
+                readiness.PublishMatchingHint(policy.HubId, null, 0);
                 return created?Results.Created("/api/hub/activity-registrations",new{registered=true}):
                     Results.Ok(new{registered=true});
             }
@@ -138,9 +139,14 @@ public static class HubGatewayEndpoints
             return current is null?Results.NotFound():Results.Ok(current);
         });
         routes.MapPut("/activity-registrations/capacity",async (
-            HubActivityCapacityUpdate request,HubDefinitionStore store,CancellationToken ct) =>
+            HubActivityCapacityUpdate request,HubDefinitionStore store,HubReadinessBroadcaster readiness,CancellationToken ct) =>
         {
-            try{return Results.Ok(new {revision=await store.UpdateActivityCapacityAsync(request,ct)});}
+            try
+            {
+                var revision = await store.UpdateActivityCapacityAsync(request,ct);
+                readiness.PublishMatchingHint(request.HubId, null, 0);
+                return Results.Ok(new {revision});
+            }
             catch(ArgumentException ex){return Results.BadRequest(new {error=ex.Message});}
             catch(KeyNotFoundException ex){return Results.NotFound(new {error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new {error=ex.Message});}
@@ -164,7 +170,7 @@ public static class HubGatewayEndpoints
                 var def=await registry.GetAsync(request.HubId,request.DefinitionId,request.Version,ct);
                 var id = def is null ? await workflows.StartAsync(request, ct)
                     : await remote.StartAsync(request,ct);
-                readiness.Publish(request.HubId);
+                readiness.PublishFallback(request.HubId);
                 return Results.Accepted($"/api/hub/workflows/{id}", new { workflowId = id });
             }
             catch (KeyNotFoundException)
@@ -196,7 +202,7 @@ public static class HubGatewayEndpoints
                 var outcome = await native.CommitWithRoutingAsync(id,request,ct);
                 if(outcome is null)return Results.Conflict(new{error="Stale native lease or revision"});
                 candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
-                readiness.Publish(outcome.HubId);
+                readiness.PublishFallback(outcome.HubId);
                 return Results.Ok(outcome.Result);
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
@@ -206,7 +212,7 @@ public static class HubGatewayEndpoints
         routes.MapPost("/hubs/{hub}/events", async (string hub, HubNativeEvent request,
             HubNativeWorkflowStore native, HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
-            try { await native.PublishEventAsync(hub,request,ct); readiness.Publish(hub); return Results.NoContent(); }
+            try { await native.PublishEventAsync(hub,request,ct); readiness.PublishFallback(hub); return Results.NoContent(); }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
@@ -217,7 +223,7 @@ public static class HubGatewayEndpoints
             {
                 if(!await native.ChangeStatusAsync(id,request,ct))return Results.Conflict();
                 var runtime=await native.GetRuntimeAsync(id,ct);
-                if(runtime is not null)readiness.Publish(runtime.HubId);
+                if(runtime is not null)readiness.PublishFallback(runtime.HubId);
                 return Results.NoContent();
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
@@ -239,7 +245,7 @@ public static class HubGatewayEndpoints
                 if(result is null)return Results.Conflict(new{error="Stale task lease or workflow revision"});
                 candidate.ReleaseCompletedLease(request.TaskId,request.Epoch);
                 var runtime=await remote.GetRuntimeAsync(id,ct);
-                if(runtime is not null)readiness.Publish(runtime.HubId);
+                if(runtime is not null)readiness.PublishFallback(runtime.HubId);
                 return Results.Ok(result);
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
@@ -333,7 +339,7 @@ public static class HubGatewayEndpoints
             {
                 var id = await store.EnqueueAsync(route, request.Payload.GetRawText(),
                     request.WorkflowId, request.IdempotencyKey, ct);
-                readiness.Publish(request.HubId, request.TaskType, request.Version);
+                readiness.PublishFallback(request.HubId, request.TaskType, request.Version);
                 return Results.Accepted($"/api/hub/tasks/{id}", new { taskId = id });
             }
             catch (InvalidOperationException ex)
@@ -668,11 +674,11 @@ public static class HubGatewayEndpoints
             if (done)
             {
                 candidate.ReleaseCompletedLease(id, request.Epoch);
-                if (fastPath) readiness.Publish(route.HubId);
+                if (fastPath) readiness.PublishFallback(route.HubId);
                 else
                 {
                     var task = await store.GetAsync(id, ct);
-                    if (task is not null) readiness.Publish(task.HubId);
+                    if (task is not null) readiness.PublishFallback(task.HubId);
                 }
             }
             return done ? Results.NoContent() :
@@ -697,7 +703,7 @@ public static class HubGatewayEndpoints
             {
                 candidate.ReleaseCompletedLease(id, request.Epoch);
                 var task = await store.GetAsync(id, ct);
-                if (task is not null) readiness.Publish(task.HubId);
+                if (task is not null) readiness.PublishFallback(task.HubId);
             }
             return failed ? Results.NoContent() :
                 Results.Conflict(new { error = "Task is stale or lease expired" });

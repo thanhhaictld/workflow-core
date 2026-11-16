@@ -89,19 +89,21 @@ Use `pwsh -NoProfile -File ./scripts/dev.ps1 up` for the local development stack
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
    Current Hub deployments apply migrations through
-   `scaling/sql/031_hub_retire_compatibility_claim_indexes.sql` in numeric order,
+   `scaling/sql/032_hub_candidate_task_id_hints.sql` in numeric order,
    skipping retired index-only migrations 023 and 025–027, as configured in
    Compose and `scripts/dev.ps1`. Migration 029 adds candidate discovery indexes;
    030 adds the opt-in notification outbox; 031 concurrently drops five retired
-   compatibility claim indexes without changing task data. Run 031 with
+   compatibility claim indexes without changing task data. Migration 032 adds
+   exact task-ID notification hints while retaining indexed reconciliation. Run 031 with
    autocommit, outside a transaction block. Migrations 015–019 add activity
    ordering and matching ownership/hints; 020–024 add reconciliation and claim indexes.
    Migration 028 remains in the ordered migration history for databases where
    it was previously installed; normal setup does not install it.
    See the [ordered merge experiment](docs/hub-ordered-capability-merge-experiment.md)
    and [snapshot contract reuse investigation](docs/snapshot-contract-reuse-throughput.md).
-   Migration 014 enables transaction-committed cross-pod work-ready hints;
-   2-second PostgreSQL reconciliation continues to recover missed hints.
+   Migration 014 enables transaction-committed cross-pod work-ready hints; the
+   2-second readiness sweep continues for legacy/SSE consumers, while owner
+   candidate discovery retains its indexed 10-second recovery sweep.
 2. Add project reference to `scaling/src/WorkflowCore.Scaling.PostgreSQL`.
 3. Configure DI:
 

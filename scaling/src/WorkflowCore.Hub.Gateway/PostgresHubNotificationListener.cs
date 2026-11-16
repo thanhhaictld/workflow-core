@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using System.Text.Json;
+using System.Text;
 using Npgsql;
 using WorkflowCore.Hub;
 
@@ -14,9 +15,11 @@ public sealed class PostgresHubNotificationListener : BackgroundService
 {
     public const string ChannelName = "wfc_hub_task_ready";
     public const string MatchingChannelName = "wfc_hub_matching_ready";
-    private sealed record Hint(string Hub, string? Type, int Version, bool Legacy, int? Partition = null);
+    private sealed record Hint(string Hub, string? Type, int Version, bool Legacy,
+        int? Partition = null, Guid? TaskId = null, bool Recovery = false);
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
     private int _listening;
+    private int _recoveryRequired;
     public bool IsListening => Volatile.Read(ref _listening) == 1;
     private readonly string _connectionString;
     private readonly HubReadinessBroadcaster _readiness;
@@ -51,40 +54,74 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 {
                     SingleReader = true,
                     SingleWriter = true,
-                    FullMode = BoundedChannelFullMode.DropOldest
+                    FullMode = BoundedChannelFullMode.Wait
                 });
+                void Enqueue(Hint hint)
+                {
+                    if (hints.Writer.TryWrite(hint)) return;
+                    HubTelemetry.CandidateHintsDropped.Add(1);
+                    Interlocked.Exchange(ref _recoveryRequired, 1);
+                }
+                void InvalidHint()
+                {
+                    HubTelemetry.CandidateHintsDropped.Add(1);
+                    Interlocked.Exchange(ref _recoveryRequired, 1);
+                    Enqueue(new Hint(string.Empty, null, 0, false, Recovery: true));
+                }
                 connection.Notification += (_, args) =>
                 {
-                    if (args.Channel == ChannelName && args.Payload is { Length: > 0 and <= 80 })
+                    if (args.Channel == ChannelName && args.Payload is { Length: > 0 } && Encoding.UTF8.GetByteCount(args.Payload) <= 80)
                     {
                         HubTelemetry.PostgresHintsReceived.Add(1);
-                        hints.Writer.TryWrite(new Hint(args.Payload, null, 0, true));
+                        Enqueue(new Hint(args.Payload, null, 0, true));
                     }
-                    else if (args.Channel == MatchingChannelName && args.Payload.Length <= 512)
+                    else if (args.Channel == MatchingChannelName && Encoding.UTF8.GetByteCount(args.Payload) <= 512)
                     {
                         try
                         {
                             using var document = JsonDocument.Parse(args.Payload);
                             var root = document.RootElement;
-                            var hub = root.GetProperty("hub").GetString();
-                            if (string.IsNullOrWhiteSpace(hub) || hub.Length > 80) return;
-                            string? type = root.TryGetProperty("type", out var kind) ?
-                                kind.GetString() : null;
-                            int version = root.TryGetProperty("version", out var ver) ?
-                                ver.GetInt32() : 0;
-                            if (type is { Length: > 80 } || (type is not null && version < 1))
-                                return;
-                            int? partition = root.TryGetProperty("partition", out var p)
-                                ? p.GetInt32() : null;
-                            if (partition < 0) return;
+                            if (root.ValueKind != JsonValueKind.Object ||
+                                !root.TryGetProperty("hub", out var hubElement) || hubElement.ValueKind != JsonValueKind.String)
+                            { InvalidHint(); return; }
+                            var hub = hubElement.GetString();
+                            if (string.IsNullOrWhiteSpace(hub) || Encoding.UTF8.GetByteCount(hub) > 80)
+                            { InvalidHint(); return; }
+                            string? type = null;
+                            if (root.TryGetProperty("type", out var kind))
+                            {
+                                if (kind.ValueKind != JsonValueKind.String) { InvalidHint(); return; }
+                                type = kind.GetString();
+                                if (type is { } value && Encoding.UTF8.GetByteCount(value) > 80) { InvalidHint(); return; }
+                            }
+                            var version = 0;
+                            if (root.TryGetProperty("version", out var ver) &&
+                                (ver.ValueKind != JsonValueKind.Number || !ver.TryGetInt32(out version) || version < 0))
+                            { InvalidHint(); return; }
+                            int? partition = null;
+                            if (root.TryGetProperty("partition", out var p))
+                            {
+                                if (p.ValueKind != JsonValueKind.Number || !p.TryGetInt32(out var parsedPartition) || parsedPartition is < 0 or >= 64)
+                                { InvalidHint(); return; }
+                                partition = parsedPartition;
+                            }
+                            Guid? taskId = null;
+                            if (root.TryGetProperty("taskId", out var idElement))
+                            {
+                                if (idElement.ValueKind != JsonValueKind.String || !Guid.TryParse(idElement.GetString(), out var parsedId) || partition is null)
+                                { InvalidHint(); return; }
+                                taskId = parsedId;
+                            }
+                            if (type is not null && version < 1) { InvalidHint(); return; }
                             HubTelemetry.PostgresHintsReceived.Add(1);
-                            hints.Writer.TryWrite(new Hint(hub, type, version, false, partition));
+                            Enqueue(new Hint(hub, type, version, false, partition, taskId));
                         }
-                        catch (JsonException)
+                        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
                         {
-                            // An advisory hint must never tear down LISTEN.
+                            InvalidHint();
                         }
                     }
+                    else if (args.Channel == MatchingChannelName) InvalidHint();
                 };
 
                 await connection.OpenAsync(stoppingToken);
@@ -138,9 +175,18 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             await Task.Delay(CoalesceWindow, ct);
             var legacy = new HashSet<string>(StringComparer.Ordinal);
             var typed = new HashSet<(string Hub, string? Type, int Version, int? Partition)>();
+            var taskIds = new Dictionary<(string Hub, Guid Id, int Partition), Hint>();
+            var recovery = false;
             while (reader.TryRead(out var hint))
             {
+                if (hint.Recovery) { recovery = true; continue; }
                 if (hint.Legacy) legacy.Add(hint.Hub);
+                else if (hint.TaskId is Guid id && hint.Partition is int partition)
+                {
+                    var key = (hint.Hub, id, partition);
+                    if (taskIds.ContainsKey(key)) HubTelemetry.CandidateHintsDeduped.Add(1);
+                    taskIds[key] = hint;
+                }
                 else typed.Add((hint.Hub, hint.Type, hint.Version, hint.Partition));
             }
             foreach (var hub in legacy)
@@ -154,6 +200,18 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 _readiness.PublishMatchingHint(hint.Hub, hint.Type, hint.Version, hint.Partition);
                 HubTelemetry.PostgresHintsForwarded.Add(1);
             }
+            foreach (var ((hub, id, partition), hint) in taskIds)
+            {
+                _readiness.PublishCandidateTaskChanged(hub, id, partition, hint.Type, hint.Version);
+                HubTelemetry.PostgresHintsForwarded.Add(1);
+            }
+            if (recovery || Interlocked.Exchange(ref _recoveryRequired, 0) != 0)
+            {
+                Interlocked.Exchange(ref _recoveryRequired, 0);
+                _readiness.PublishCandidateRecoveryRequired();
+                HubTelemetry.CandidateHintsDropped.Add(1);
+            }
         }
     }
+
 }
