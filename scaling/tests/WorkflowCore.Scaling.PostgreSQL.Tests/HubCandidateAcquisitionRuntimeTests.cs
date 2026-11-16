@@ -125,6 +125,20 @@ public sealed class HubCandidateAcquisitionRuntimeTests
             var exact = new System.Collections.Concurrent.ConcurrentDictionary<int, Guid>();
             var coarse = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
             var recovery = 0;
+            long hydrationCalls = 0;
+            using var meter = new System.Diagnostics.Metrics.MeterListener();
+            meter.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == HubTelemetry.MeterName &&
+                    instrument.Name == "workflow_hub_candidate_hydration_calls")
+                    listener.EnableMeasurementEvents(instrument);
+            };
+            meter.SetMeasurementEventCallback<long>((instrument, value, _, _) =>
+            {
+                if (instrument.Name == "workflow_hub_candidate_hydration_calls")
+                    Interlocked.Add(ref hydrationCalls, value);
+            });
+            meter.Start();
             readiness.CandidateTaskChanged += (observed, id, partition, _, _) =>
             { if (observed == hub) exact[partition] = id; };
             readiness.CandidateRescanRequested += (observed, _, _, partition) =>
@@ -141,6 +155,9 @@ public sealed class HubCandidateAcquisitionRuntimeTests
                 while (!listener.IsListening) await Task.Delay(25, lifetime.Token);
                 var ids = new Dictionary<int, Guid> { [64] = Guid.NewGuid(), [4095] = Guid.NewGuid() };
                 await using var db = new NpgsqlConnection(database); await db.OpenAsync(lifetime.Token);
+                await using (var enableIds = new NpgsqlCommand(
+                    "SET wfc.hub_candidate_task_id_hints='on'", db))
+                    await enableIds.ExecuteNonQueryAsync(lifetime.Token);
                 foreach (var (partition, id) in ids)
                 {
                     await using var insert = new NpgsqlCommand("""
@@ -154,7 +171,11 @@ public sealed class HubCandidateAcquisitionRuntimeTests
                 while (!ids.All(pair => exact.TryGetValue(pair.Key, out var observed) && observed == pair.Value))
                     await Task.Delay(25, timeout.Token);
                 while (matcher.CandidateBuffered < 2) await Task.Delay(25, timeout.Token);
+                using var hydrationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (Volatile.Read(ref hydrationCalls) == 0) await Task.Delay(25, hydrationTimeout.Token);
                 Assert.Equal(ids[64], exact[64]); Assert.Equal(ids[4095], exact[4095]);
+                Assert.True(Volatile.Read(ref hydrationCalls) > 0,
+                    "Committed task-ID notifications must reach the batched candidate hydration query");
                 Assert.Equal(2, matcher.GenerationCount);
                 Assert.Equal(0, Volatile.Read(ref recovery));
                 // Old 014/030 typed payloads remain valid with task partitions

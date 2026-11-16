@@ -9,6 +9,7 @@ DECLARE
     task_changed boolean := false;
     ready_now boolean := false;
     permit_released boolean := false;
+    candidate_ids_enabled boolean := current_setting('wfc.hub_candidate_task_id_hints', true) = 'on';
 BEGIN
     IF octet_length(NEW.hub_id) > 80 THEN RETURN NEW; END IF;
 
@@ -20,16 +21,26 @@ BEGIN
             AND (OLD.state <> 0 OR OLD.due_at > statement_timestamp());
         -- Claim/terminal transitions invalidate cached readiness. Include epoch
         -- to cover retries/reclaims without turning lease heartbeats into hints.
-        task_changed := ready_now OR NEW.state IS DISTINCT FROM OLD.state
-            OR NEW.epoch IS DISTINCT FROM OLD.epoch
-            OR (OLD.state = 0 AND NEW.due_at IS DISTINCT FROM OLD.due_at);
+        IF candidate_ids_enabled THEN
+            task_changed := ready_now OR NEW.state IS DISTINCT FROM OLD.state
+                OR NEW.epoch IS DISTINCT FROM OLD.epoch
+                OR (OLD.state = 0 AND NEW.due_at IS DISTINCT FROM OLD.due_at);
+        ELSE
+            -- Keep the pre-032 019 trigger's producer behavior in normal mode.
+            task_changed := ready_now;
+        END IF;
         permit_released := OLD.state = 1 AND NEW.state <> 1;
     END IF;
 
     IF task_changed THEN
-        payload := json_build_object('hub',NEW.hub_id,'taskId',NEW.id,
-            'partition',NEW.partition_id,'type',NEW.task_type,
-            'version',NEW.task_version,'kind','task')::text;
+        IF candidate_ids_enabled THEN
+            payload := json_build_object('hub',NEW.hub_id,'taskId',NEW.id,
+                'partition',NEW.partition_id,'type',NEW.task_type,
+                'version',NEW.task_version,'kind','task')::text;
+        ELSE
+            payload := json_build_object('hub',NEW.hub_id,'partition',NEW.partition_id,
+                'type',NEW.task_type,'version',NEW.task_version,'kind','task')::text;
+        END IF;
         IF octet_length(payload) > 512 THEN
             payload := json_build_object('hub',NEW.hub_id,'kind','recovery')::text;
         END IF;
@@ -52,7 +63,7 @@ BEGIN
     -- Preserve 030's hub-wide release contract for old listeners and for
     -- resources whose keys cross matching partitions, even when an exact ID
     -- invalidation was also emitted for the changed task.
-    IF task_changed AND permit_released THEN
+    IF candidate_ids_enabled AND task_changed AND permit_released THEN
         payload := json_build_object('hub',NEW.hub_id,'kind','permit-release')::text;
         IF current_setting('wfc.hub_notification_outbox', true) = 'on' THEN
             INSERT INTO wfc_scale.hub_notification_outbox(hub_id,matching_payload)

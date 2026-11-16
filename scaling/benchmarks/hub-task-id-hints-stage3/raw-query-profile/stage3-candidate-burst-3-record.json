@@ -1,0 +1,302 @@
+{
+  "arm": "candidate",
+  "candidateEnabled": true,
+  "scenario": "burst",
+  "repetition": 3,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-candidate-burst-3",
+    "workflowCount": 20,
+    "completedWorkflows": 20,
+    "completedTasks": 200,
+    "taskCount": 200,
+    "tasksWithStartTime": 200,
+    "scheduleStartP50Ms": 76.3365,
+    "scheduleStartP95Ms": 177.43824999999993,
+    "scheduleStartP99Ms": 300.9024399999997,
+    "endToEndP95Ms": 1921.94115,
+    "endToEndP99Ms": 1982.2722299999998,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 2869,
+      "executionMs": 32.198271000000005,
+      "sharedHit": 4134,
+      "sharedRead": 0,
+      "sharedDirtied": 0,
+      "sharedWritten": 0,
+      "walRecords": 7,
+      "walBytes": 514
+    },
+    [
+      {
+        "class": "candidate-discovery-page",
+        "calls": 1164,
+        "rows": 0,
+        "executionMs": 7.2249519999999965,
+        "sharedHit": 1164,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "class": "notification-outbox",
+        "calls": 55,
+        "rows": 0,
+        "executionMs": 0.7673020000000002,
+        "sharedHit": 55,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "class": "other",
+        "calls": 1615,
+        "rows": 87,
+        "executionMs": 16.203818,
+        "sharedHit": 378,
+        "sharedRead": 0,
+        "walBytes": 514
+      },
+      {
+        "class": "task-other",
+        "calls": 36,
+        "rows": 22,
+        "executionMs": 8.117962,
+        "sharedHit": 2538,
+        "sharedRead": 0,
+        "walBytes": 0
+      }
+    ],
+    {
+      "tasksInserted": 0,
+      "outboxInserted": 0,
+      "outboxDeleted": 0
+    }
+  ],
+  "durationSeconds": 2.690651800003252,
+  "sharedTenant": false,
+  "staggerMs": 0,
+  "load": {
+    "run_id": "stage3-candidate-burst-3",
+    "vus": 4,
+    "requested": 20,
+    "duration_seconds": 2.690651800003252,
+    "shared_tenant": false,
+    "stagger_ms": 0,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794852365.186927,
+        "poll_errors": 0,
+        "workflow_id": "34cec94e-9b95-4271-b6c0-a2e577c03553",
+        "state": "Complete",
+        "elapsed_ms": 539.7221999883186
+      },
+      {
+        "index": 1,
+        "start_unix": 1794852365.187514,
+        "poll_errors": 0,
+        "workflow_id": "cdca3a96-3107-4f3b-8d87-e4a0aac16a60",
+        "state": "Complete",
+        "elapsed_ms": 539.5238000055542
+      },
+      {
+        "index": 2,
+        "start_unix": 1794852365.1885748,
+        "poll_errors": 0,
+        "workflow_id": "d51d71c9-77f6-440d-a8a3-1ffc139bae43",
+        "state": "Complete",
+        "elapsed_ms": 537.9176999995252
+      },
+      {
+        "index": 3,
+        "start_unix": 1794852365.1891534,
+        "poll_errors": 0,
+        "workflow_id": "9b416518-82fe-417e-9259-bb5c892d73e2",
+        "state": "Complete",
+        "elapsed_ms": 537.1313000068767
+      },
+      {
+        "index": 4,
+        "start_unix": 1794852365.7263124,
+        "poll_errors": 0,
+        "workflow_id": "446c5435-8533-4e48-8caa-bc655c5c7681",
+        "state": "Complete",
+        "elapsed_ms": 513.5680999956094
+      },
+      {
+        "index": 5,
+        "start_unix": 1794852365.7265062,
+        "poll_errors": 0,
+        "workflow_id": "c67f930d-2174-43d9-9e4a-48c2a7f6524f",
+        "state": "Complete",
+        "elapsed_ms": 511.67599999462254
+      },
+      {
+        "index": 6,
+        "start_unix": 1794852365.726662,
+        "poll_errors": 0,
+        "workflow_id": "9e71797f-8f8c-4c6c-a968-27d89530d5c5",
+        "state": "Complete",
+        "elapsed_ms": 511.19880001351703
+      },
+      {
+        "index": 7,
+        "start_unix": 1794852365.7270513,
+        "poll_errors": 0,
+        "workflow_id": "3b26a00a-7090-46b7-9a24-ab4b0716832c",
+        "state": "Complete",
+        "elapsed_ms": 510.9636999986833
+      },
+      {
+        "index": 8,
+        "start_unix": 1794852366.2378788,
+        "poll_errors": 0,
+        "workflow_id": "230a5cc4-92d7-465c-b58d-3c93a3f7cc01",
+        "state": "Complete",
+        "elapsed_ms": 508.54190000973176
+      },
+      {
+        "index": 9,
+        "start_unix": 1794852366.238026,
+        "poll_errors": 0,
+        "workflow_id": "5e5d0038-e254-4e43-9b77-c26e039abd3f",
+        "state": "Complete",
+        "elapsed_ms": 508.56519999797456
+      },
+      {
+        "index": 10,
+        "start_unix": 1794852366.2381926,
+        "poll_errors": 0,
+        "workflow_id": "0509fe09-ec32-4bbc-a96d-26d1b76e6fa8",
+        "state": "Complete",
+        "elapsed_ms": 516.3833999977214
+      },
+      {
+        "index": 11,
+        "start_unix": 1794852366.239894,
+        "poll_errors": 0,
+        "workflow_id": "823fcaa0-bc3e-4a6f-bc99-403abf568b25",
+        "state": "Complete",
+        "elapsed_ms": 530.9065999899758
+      },
+      {
+        "index": 12,
+        "start_unix": 1794852366.7464411,
+        "poll_errors": 0,
+        "workflow_id": "b4990c35-363c-415a-9990-8b8cb855f51b",
+        "state": "Complete",
+        "elapsed_ms": 518.3673999999883
+      },
+      {
+        "index": 13,
+        "start_unix": 1794852366.746602,
+        "poll_errors": 0,
+        "workflow_id": "dee7477d-96d4-4182-a8bb-e0ec58cdf54b",
+        "state": "Complete",
+        "elapsed_ms": 507.4201999959769
+      },
+      {
+        "index": 14,
+        "start_unix": 1794852366.7545917,
+        "poll_errors": 0,
+        "workflow_id": "15138167-08af-4876-bb42-da2a7d7bc6dd",
+        "state": "Complete",
+        "elapsed_ms": 505.9850999969058
+      },
+      {
+        "index": 15,
+        "start_unix": 1794852366.7708223,
+        "poll_errors": 0,
+        "workflow_id": "0f0ac382-b008-4ee5-891d-3ae6df6a4e05",
+        "state": "Complete",
+        "elapsed_ms": 526.7775999964215
+      },
+      {
+        "index": 16,
+        "start_unix": 1794852367.2540379,
+        "poll_errors": 0,
+        "workflow_id": "ca023952-8d5f-46c8-82d1-87de8b5b3d38",
+        "state": "Complete",
+        "elapsed_ms": 518.2505999982823
+      },
+      {
+        "index": 17,
+        "start_unix": 1794852367.2605915,
+        "poll_errors": 0,
+        "workflow_id": "7f2cb4a5-9ff4-4c69-a4c8-ddce8719e83b",
+        "state": "Complete",
+        "elapsed_ms": 527.4055000045337
+      },
+      {
+        "index": 18,
+        "start_unix": 1794852367.2648313,
+        "poll_errors": 0,
+        "workflow_id": "2491b527-8356-4444-8e33-ed77f46d20f4",
+        "state": "Complete",
+        "elapsed_ms": 506.6112999920733
+      },
+      {
+        "index": 19,
+        "start_unix": 1794852367.2976239,
+        "poll_errors": 0,
+        "workflow_id": "b81c733c-2507-4a2e-9a3b-2152a36b93e1",
+        "state": "Complete",
+        "elapsed_ms": 536.3975999935064
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794852365.1435318,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 35.23,
+        "docker_exit": 0
+      }
+    ]
+  },
+  "benchmarkManifest": {
+    "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+    "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+    "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+    "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+    "candidateHubBinarySha256": "23b3357a9b7bf74efe4d66851243420c59453661a3957fd49981eb709b0b56f1",
+    "candidateWorkerBinarySha256": "2dbd4f88a2c1210854598a879df5647a02f3a1ae8e9823ceb234b389c685e6ee",
+    "runtimeFlags": {
+      "hubOwners": 2,
+      "matchingPartitions": 2,
+      "matchingEnabled": true,
+      "candidateIdsBaseline": false,
+      "candidateIdsFinal": true,
+      "workerLaneInstances": 4,
+      "workflowAndActivityWorkersPerLane": 1,
+      "pushEnabled": true,
+      "claimAdmission": "queue, limit 3",
+      "candidateBackpressure": false,
+      "candidateBatchSize": 32,
+      "outboxEnabled": true,
+      "writerSessionOutbox": "on",
+      "outboxDispatcher": true,
+      "historyTemplateRows": 20000
+    }
+  }
+}

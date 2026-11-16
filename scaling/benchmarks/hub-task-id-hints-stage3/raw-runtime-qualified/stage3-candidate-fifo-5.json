@@ -1,0 +1,120 @@
+{
+  "run_id": "stage3-candidate-fifo-5",
+  "vus": 4,
+  "requested": 8,
+  "duration_seconds": 5.750018999999156,
+  "shared_tenant": true,
+  "stagger_ms": 400,
+  "items": [
+    {
+      "index": 0,
+      "start_unix": 1794857757.7568955,
+      "poll_errors": 0,
+      "workflow_id": "edf45107-e775-4124-8bfb-266f18e8da60",
+      "state": "Complete",
+      "elapsed_ms": 2062.171599987778
+    },
+    {
+      "index": 1,
+      "start_unix": 1794857758.1163483,
+      "poll_errors": 0,
+      "workflow_id": "c9ec71be-ffce-4db1-a8f3-762fbc96ab49",
+      "state": "Complete",
+      "elapsed_ms": 2554.106399999
+    },
+    {
+      "index": 2,
+      "start_unix": 1794857758.5163503,
+      "poll_errors": 0,
+      "workflow_id": "c5c35162-0a26-42ac-9e6c-c7e7622b4631",
+      "state": "Complete",
+      "elapsed_ms": 2525.515599991195
+    },
+    {
+      "index": 3,
+      "start_unix": 1794857758.9163408,
+      "poll_errors": 0,
+      "workflow_id": "346ae9d9-5fe0-4a12-94bb-d260f50b0455",
+      "state": "Complete",
+      "elapsed_ms": 2525.074500008486
+    },
+    {
+      "index": 4,
+      "start_unix": 1794857759.8190978,
+      "poll_errors": 0,
+      "workflow_id": "6a735f9c-ee4d-4102-b6d2-debfcd162560",
+      "state": "Complete",
+      "elapsed_ms": 2021.1670999997295
+    },
+    {
+      "index": 5,
+      "start_unix": 1794857760.6704912,
+      "poll_errors": 0,
+      "workflow_id": "dbf84e64-fcc0-4b1c-ac53-4195f705abfd",
+      "state": "Complete",
+      "elapsed_ms": 2033.9999999996508
+    },
+    {
+      "index": 6,
+      "start_unix": 1794857761.041891,
+      "poll_errors": 0,
+      "workflow_id": "248acca0-cf9c-4f7a-a2fb-cc51335351f1",
+      "state": "Complete",
+      "elapsed_ms": 2021.629099996062
+    },
+    {
+      "index": 7,
+      "start_unix": 1794857761.441455,
+      "poll_errors": 0,
+      "workflow_id": "30ab0d0c-3c4f-4eaf-ab46-7c9c9fe2b920",
+      "state": "Complete",
+      "elapsed_ms": 2024.0439000044717
+    }
+  ],
+  "samples": [
+    {
+      "time": 1794857757.7157106,
+      "transport": {
+        "pushConnected": 8,
+        "readinessConnected": 0,
+        "candidateEnabled": true,
+        "candidateCredits": 8,
+        "candidateReservations": 0,
+        "candidateUncertain": 0,
+        "candidateBuffered": 0,
+        "candidateAdmissionsActive": 0,
+        "pullClaims": 0,
+        "pullEmptyClaims": 0,
+        "pullFailedClaims": 0,
+        "pushClaims": 0,
+        "pushEmptyClaims": 0,
+        "pushDeliveries": 0,
+        "pushEndedSessions": 0
+      },
+      "postgres_cpu_percent": 77.8,
+      "docker_exit": 0
+    },
+    {
+      "time": 1794857761.1989632,
+      "transport": {
+        "pushConnected": 8,
+        "readinessConnected": 0,
+        "candidateEnabled": true,
+        "candidateCredits": 8,
+        "candidateReservations": 0,
+        "candidateUncertain": 0,
+        "candidateBuffered": 129,
+        "candidateAdmissionsActive": 0,
+        "pullClaims": 0,
+        "pullEmptyClaims": 0,
+        "pullFailedClaims": 0,
+        "pushClaims": 0,
+        "pushEmptyClaims": 0,
+        "pushDeliveries": 54,
+        "pushEndedSessions": 0
+      },
+      "postgres_cpu_percent": 76.77,
+      "docker_exit": 0
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+{
+  "arm": "candidate",
+  "candidateEnabled": true,
+  "scenario": "burst",
+  "repetition": 1,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-candidate-burst-1",
+    "workflowCount": 20,
+    "completedWorkflows": 20,
+    "completedTasks": 200,
+    "taskCount": 200,
+    "tasksWithStartTime": 200,
+    "scheduleStartP50Ms": 78.0415,
+    "scheduleStartP95Ms": 193.29679999999982,
+    "scheduleStartP99Ms": 351.85276999999957,
+    "endToEndP95Ms": 2353.1197,
+    "endToEndP99Ms": 2557.1599399999996,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 2627,
+      "executionMs": 48.310288,
+      "sharedHit": 3279,
+      "sharedRead": 0,
+      "sharedDirtied": 0,
+      "sharedWritten": 0,
+      "walRecords": 23,
+      "walBytes": 1638
+    },
+    {
+      "tasksInserted": 0,
+      "outboxInserted": 0,
+      "outboxDeleted": 0
+    }
+  ],
+  "durationSeconds": 2.6707387999922503,
+  "sharedTenant": false,
+  "staggerMs": 0,
+  "load": {
+    "run_id": "stage3-candidate-burst-1",
+    "vus": 4,
+    "requested": 20,
+    "duration_seconds": 2.6707387999922503,
+    "shared_tenant": false,
+    "stagger_ms": 0,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794850021.3647707,
+        "poll_errors": 0,
+        "workflow_id": "8f3415d3-7b86-483a-b723-0f3869261ebc",
+        "state": "Complete",
+        "elapsed_ms": 538.9641000074334
+      },
+      {
+        "index": 1,
+        "start_unix": 1794850021.365393,
+        "poll_errors": 0,
+        "workflow_id": "5af73ff9-0942-420c-994c-30fdc84c3457",
+        "state": "Complete",
+        "elapsed_ms": 538.1796000001486
+      },
+      {
+        "index": 2,
+        "start_unix": 1794850021.365702,
+        "poll_errors": 0,
+        "workflow_id": "57231309-8d2d-498b-b03e-3084d7f354fb",
+        "state": "Complete",
+        "elapsed_ms": 537.475799996173
+      },
+      {
+        "index": 3,
+        "start_unix": 1794850021.366033,
+        "poll_errors": 0,
+        "workflow_id": "9d3d140d-9653-45d2-b15e-792335c1af6b",
+        "state": "Complete",
+        "elapsed_ms": 537.3624999920139
+      },
+      {
+        "index": 4,
+        "start_unix": 1794850021.9032025,
+        "poll_errors": 0,
+        "workflow_id": "888c1c1a-7061-49f0-94e0-f96a86a0e227",
+        "state": "Complete",
+        "elapsed_ms": 511.679200004437
+      },
+      {
+        "index": 5,
+        "start_unix": 1794850021.9034095,
+        "poll_errors": 0,
+        "workflow_id": "51b79101-875c-4d01-8111-f34a35f91b98",
+        "state": "Complete",
+        "elapsed_ms": 511.6593999991892
+      },
+      {
+        "index": 6,
+        "start_unix": 1794850021.903584,
+        "poll_errors": 0,
+        "workflow_id": "be3c50b4-3107-4592-8797-0375416f2526",
+        "state": "Complete",
+        "elapsed_ms": 511.135299995658
+      },
+      {
+        "index": 7,
+        "start_unix": 1794850021.9037611,
+        "poll_errors": 0,
+        "workflow_id": "d6da4178-dec0-4248-9540-22f36b622eae",
+        "state": "Complete",
+        "elapsed_ms": 510.78850000340026
+      },
+      {
+        "index": 8,
+        "start_unix": 1794850022.4145653,
+        "poll_errors": 0,
+        "workflow_id": "58058820-6d27-4667-a707-d4f91e1ff643",
+        "state": "Complete",
+        "elapsed_ms": 511.81669998914003
+      },
+      {
+        "index": 9,
+        "start_unix": 1794850022.4147308,
+        "poll_errors": 0,
+        "workflow_id": "62732eef-292b-4f05-9afd-07e9b3c65b7c",
+        "state": "Complete",
+        "elapsed_ms": 509.5819999987725
+      },
+      {
+        "index": 10,
+        "start_unix": 1794850022.414896,
+        "poll_errors": 0,
+        "workflow_id": "1f639fbe-250b-4a73-9d4f-5c8a1440487b",
+        "state": "Complete",
+        "elapsed_ms": 509.2323999997461
+      },
+      {
+        "index": 11,
+        "start_unix": 1794850022.415078,
+        "poll_errors": 0,
+        "workflow_id": "78369333-5e95-4ddc-ab70-547d9c724714",
+        "state": "Complete",
+        "elapsed_ms": 526.3620000041556
+      },
+      {
+        "index": 12,
+        "start_unix": 1794850022.924146,
+        "poll_errors": 0,
+        "workflow_id": "5e19c0a6-29f0-4355-9e9a-15c742bd34f2",
+        "state": "Complete",
+        "elapsed_ms": 539.6636999939801
+      },
+      {
+        "index": 13,
+        "start_unix": 1794850022.9243257,
+        "poll_errors": 0,
+        "workflow_id": "1a7a3bb3-8b72-4fa9-bb7a-a414d6cbcb2a",
+        "state": "Complete",
+        "elapsed_ms": 524.6614000061527
+      },
+      {
+        "index": 14,
+        "start_unix": 1794850022.9263992,
+        "poll_errors": 0,
+        "workflow_id": "c1af6f24-ece7-43e0-bc1b-6e95e99002f9",
+        "state": "Complete",
+        "elapsed_ms": 522.7589999994962
+      },
+      {
+        "index": 15,
+        "start_unix": 1794850022.9414604,
+        "poll_errors": 0,
+        "workflow_id": "37ecd38e-99d3-4a14-bf76-1e7dc1c1e405",
+        "state": "Complete",
+        "elapsed_ms": 509.4746000104351
+      },
+      {
+        "index": 16,
+        "start_unix": 1794850023.4490042,
+        "poll_errors": 0,
+        "workflow_id": "996629d5-84d2-4c94-9f89-856bf2424e6c",
+        "state": "Complete",
+        "elapsed_ms": 538.6324999999488
+      },
+      {
+        "index": 17,
+        "start_unix": 1794850023.4491692,
+        "poll_errors": 0,
+        "workflow_id": "a64e04c4-6eeb-4032-ab6f-13d00450294a",
+        "state": "Complete",
+        "elapsed_ms": 520.8705000113696
+      },
+      {
+        "index": 18,
+        "start_unix": 1794850023.4509428,
+        "poll_errors": 0,
+        "workflow_id": "fe6352c0-b723-45a3-8e51-13950ac17ceb",
+        "state": "Complete",
+        "elapsed_ms": 536.5746000024956
+      },
+      {
+        "index": 19,
+        "start_unix": 1794850023.4638293,
+        "poll_errors": 0,
+        "workflow_id": "aff8efb5-ccbe-47da-97ec-8843a28d24f3",
+        "state": "Complete",
+        "elapsed_ms": 523.7565000134055
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794850021.3168356,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 33.63,
+        "docker_exit": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+  "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+  "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+  "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+  "candidateHubBinarySha256": "23b3357a9b7bf74efe4d66851243420c59453661a3957fd49981eb709b0b56f1",
+  "candidateWorkerBinarySha256": "2dbd4f88a2c1210854598a879df5647a02f3a1ae8e9823ceb234b389c685e6ee",
+  "runtimeFlags": {
+    "hubOwners": 2,
+    "matchingPartitions": 2,
+    "matchingEnabled": true,
+    "candidateIdsBaseline": false,
+    "candidateIdsFinal": true,
+    "workerLaneInstances": 4,
+    "workflowAndActivityWorkersPerLane": 1,
+    "pushEnabled": true,
+    "claimAdmission": "queue, limit 3",
+    "candidateBackpressure": false,
+    "candidateBatchSize": 32,
+    "outboxEnabled": true,
+    "writerSessionOutbox": "on",
+    "outboxDispatcher": true,
+    "historyTemplateRows": 20000
+  }
+}

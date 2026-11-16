@@ -26,6 +26,7 @@ public sealed class HubNotificationOutboxTests
         {
             await using var cmd = new NpgsqlCommand("""
                 SET LOCAL wfc.hub_notification_outbox = 'on';
+                SET LOCAL wfc.hub_candidate_task_id_hints = 'on';
                 INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
                 VALUES (@id,@hub,0,'work',1,'{}');
                 """, db, tx);

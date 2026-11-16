@@ -1,0 +1,2 @@
+This run folder is retained as an interrupted diagnostic only, not qualification data.
+It stopped after the warmup when the disposable database clone was found not to inherit the template's outbox GUC. Its Hub processes had opened connections with direct notifications, so it did not represent the required outbox-enabled workload. The qualified pair explicitly sets wfc.hub_notification_outbox=on at database scope before starting applications.

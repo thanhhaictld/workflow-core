@@ -30,7 +30,7 @@ internal interface IHubCandidateDiscovery
 
 internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDiscovery
 {
-    private const string HydrationSql = """
+    internal const string HydrationSql = """
         WITH requested AS MATERIALIZED (
           SELECT unnest(@ids::uuid[]) AS id
         ), page AS MATERIALIZED (
@@ -50,7 +50,7 @@ internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDisc
           SELECT p.id,128+octet_length(p.hub_id)+octet_length(p.task_type)+
             COALESCE(octet_length(w.definition_id),0) AS bytes,b.per_candidate
           FROM page p LEFT JOIN wfc_scale.hub_workflow w ON w.id=p.workflow_id CROSS JOIN budget b
-        ), resources AS (
+        ), resources AS MATERIALIZED (
           SELECT c.task_id,array_agg(c.resource_key ORDER BY c.resource_key) AS keys
           FROM wfc_scale.hub_task_constraint c JOIN resource_sizes s ON s.task_id=c.task_id
           JOIN base_size b ON b.id=c.task_id
@@ -207,7 +207,7 @@ internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDisc
             throw new ArgumentException("Candidate hydration ID array exceeds its byte budget", nameof(ids));
         // UUID parameters consume managed memory too; reserve their exact wire
         // size before SQL divides the remaining metadata budget across eligible rows.
-        var batchMetadataLimit = byteLimit - requestedIds.Length * 16;
+        var batchMetadataLimit = HydrationMetadataBudget(byteLimit, requestedIds.Length);
         await using var command = tasks.DataSource.CreateCommand(HydrationSql);
         command.Parameters.AddWithValue("ids", requestedIds);
         command.Parameters.AddWithValue("hub", hub);
@@ -237,5 +237,14 @@ internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDisc
             items.Add(item);
         }
         return new(items, oversized, bytes);
+    }
+
+    // Kept beside the SQL so plan reproduction and production use precisely
+    // the same parameter budget after UUID array wire bytes are reserved.
+    internal static int HydrationMetadataBudget(int byteLimit, int requestedIdCount)
+    {
+        if (requestedIdCount < 1 || byteLimit < requestedIdCount * 16)
+            throw new ArgumentOutOfRangeException(nameof(requestedIdCount));
+        return byteLimit - requestedIdCount * 16;
     }
 }

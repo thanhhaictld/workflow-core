@@ -1,0 +1,197 @@
+{
+  "arm": "baseline",
+  "candidateEnabled": false,
+  "scenario": "burst",
+  "repetition": 0,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-baseline-burst-warm",
+    "workflowCount": 8,
+    "completedWorkflows": 8,
+    "completedTasks": 80,
+    "taskCount": 80,
+    "tasksWithStartTime": 80,
+    "scheduleStartP50Ms": 23.083,
+    "scheduleStartP95Ms": 54.127199999999995,
+    "scheduleStartP99Ms": 67.61609999999983,
+    "endToEndP95Ms": 1254.0712,
+    "endToEndP99Ms": 1256.60464,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 383,
+      "executionMs": 12.659918,
+      "sharedHit": 2428,
+      "sharedRead": 0,
+      "sharedDirtied": 0,
+      "sharedWritten": 0,
+      "walRecords": 13,
+      "walBytes": 950
+    },
+    [
+      {
+        "class": "notification-outbox",
+        "calls": 46,
+        "rows": 0,
+        "executionMs": 0.29559,
+        "sharedHit": 0,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "class": "other",
+        "calls": 298,
+        "rows": 41,
+        "executionMs": 4.030381,
+        "sharedHit": 211,
+        "sharedRead": 0,
+        "walBytes": 950
+      },
+      {
+        "class": "task-other",
+        "calls": 40,
+        "rows": 7,
+        "executionMs": 8.439672,
+        "sharedHit": 2218,
+        "sharedRead": 0,
+        "walBytes": 0
+      }
+    ],
+    {
+      "tasksInserted": 0,
+      "outboxInserted": 0,
+      "outboxDeleted": 0
+    }
+  ],
+  "durationSeconds": 2.1865149999939604,
+  "sharedTenant": false,
+  "staggerMs": 0,
+  "load": {
+    "run_id": "stage3-baseline-burst-warm",
+    "vus": 2,
+    "requested": 8,
+    "duration_seconds": 2.1865149999939604,
+    "shared_tenant": false,
+    "stagger_ms": 0,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794852308.548848,
+        "poll_errors": 0,
+        "workflow_id": "0bc95708-9a50-4878-92f5-2bdc8483b589",
+        "state": "Complete",
+        "elapsed_ms": 537.8778000012971
+      },
+      {
+        "index": 1,
+        "start_unix": 1794852308.5493515,
+        "poll_errors": 0,
+        "workflow_id": "e852a259-6ac0-4a74-8759-e172b3b2df7a",
+        "state": "Complete",
+        "elapsed_ms": 537.1854999975767
+      },
+      {
+        "index": 2,
+        "start_unix": 1794852309.0865571,
+        "poll_errors": 0,
+        "workflow_id": "f8b8bc61-d8b5-4d17-a2fb-4d4f38f48895",
+        "state": "Complete",
+        "elapsed_ms": 527.5587999931304
+      },
+      {
+        "index": 3,
+        "start_unix": 1794852309.0867429,
+        "poll_errors": 0,
+        "workflow_id": "404ea309-b17a-4f13-9002-210fd6fcb55c",
+        "state": "Complete",
+        "elapsed_ms": 542.0440000016242
+      },
+      {
+        "index": 4,
+        "start_unix": 1794852309.614136,
+        "poll_errors": 0,
+        "workflow_id": "0ffd4ef3-703e-4202-9d7d-5dc72502acaa",
+        "state": "Complete",
+        "elapsed_ms": 508.47550001344644
+      },
+      {
+        "index": 5,
+        "start_unix": 1794852309.628807,
+        "poll_errors": 0,
+        "workflow_id": "59630226-1d41-44bf-981f-c41efcf5a90e",
+        "state": "Complete",
+        "elapsed_ms": 543.5992999991868
+      },
+      {
+        "index": 6,
+        "start_unix": 1794852310.1226318,
+        "poll_errors": 0,
+        "workflow_id": "bf5ce2ce-bea6-47a4-a1af-c59209102190",
+        "state": "Complete",
+        "elapsed_ms": 546.6356999968411
+      },
+      {
+        "index": 7,
+        "start_unix": 1794852310.172434,
+        "poll_errors": 0,
+        "workflow_id": "e85645bb-bde0-4f11-9737-748fa132f31d",
+        "state": "Complete",
+        "elapsed_ms": 527.5524000026053
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794852308.5134947,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": false,
+          "candidateCredits": 0,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 24,
+          "pushEmptyClaims": 24,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 4.29,
+        "docker_exit": 0
+      }
+    ]
+  },
+  "benchmarkManifest": {
+    "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+    "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+    "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+    "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+    "candidateHubBinarySha256": "23b3357a9b7bf74efe4d66851243420c59453661a3957fd49981eb709b0b56f1",
+    "candidateWorkerBinarySha256": "2dbd4f88a2c1210854598a879df5647a02f3a1ae8e9823ceb234b389c685e6ee",
+    "runtimeFlags": {
+      "hubOwners": 2,
+      "matchingPartitions": 2,
+      "matchingEnabled": true,
+      "candidateIdsBaseline": false,
+      "candidateIdsFinal": true,
+      "workerLaneInstances": 4,
+      "workflowAndActivityWorkersPerLane": 1,
+      "pushEnabled": true,
+      "claimAdmission": "queue, limit 3",
+      "candidateBackpressure": false,
+      "candidateBatchSize": 32,
+      "outboxEnabled": true,
+      "writerSessionOutbox": "on",
+      "outboxDispatcher": true,
+      "historyTemplateRows": 20000
+    }
+  }
+}

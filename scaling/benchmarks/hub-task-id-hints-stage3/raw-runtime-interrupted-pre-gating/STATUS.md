@@ -1,0 +1,2 @@
+This run folder is retained as an interrupted diagnostic only, not as qualification data.
+It stopped during the first measured repetition after an audit found that the disposable baseline database still had the ungated 032 trigger. The old trigger would make baseline producer volume differ from ca190 behavior. The qualified run uses fresh paired databases with the reviewed 032 migration reapplied and verifies its opt-in GUC behavior.

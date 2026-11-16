@@ -1,0 +1,885 @@
+{
+  "cells": [
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "arrival-after-sweep",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 1724.6828,
+          "demandToClaimMs": 1689.238,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 1
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1733.2771,
+          "demandToClaimMs": 1727.9199999999998,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1724.6828,
+        "median": 1728.97995,
+        "max": 1733.2771,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1689.238,
+        "median": 1708.579,
+        "max": 1727.9199999999998,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "demand-after-absent",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2524.1061,
+          "demandToClaimMs": 6.35,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 13
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 2530.9359,
+          "demandToClaimMs": 22.159000000000002,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 14
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 2524.1061,
+        "median": 2527.5209999999997,
+        "max": 2530.9359,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 6.35,
+        "median": 14.2545,
+        "max": 22.159000000000002,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "future-due",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 4000.9196,
+          "demandToClaimMs": 3997.305,
+          "eligibleToClaimMs": 2000.9196,
+          "pendingOutboxRows": 9
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3996.1148,
+          "demandToClaimMs": 3992.789,
+          "eligibleToClaimMs": 1996.1148,
+          "pendingOutboxRows": 10
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3996.1148,
+        "median": 3998.5172000000002,
+        "max": 4000.9196,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3992.789,
+        "median": 3995.047,
+        "max": 3997.305,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1996.1148,
+        "median": 1998.5172,
+        "max": 2000.9196,
+        "n": 2
+      }
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "lease-expiry",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 4010.8269,
+          "demandToClaimMs": 4007.7090000000003,
+          "eligibleToClaimMs": 2010.8269,
+          "pendingOutboxRows": 11
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3997.5197,
+          "demandToClaimMs": 3994.694,
+          "eligibleToClaimMs": 1997.5197,
+          "pendingOutboxRows": 12
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3997.5197,
+        "median": 4004.1733,
+        "max": 4010.8269,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3994.694,
+        "median": 4001.2015,
+        "max": 4007.7090000000003,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1997.5197,
+        "median": 2004.1733,
+        "max": 2010.8269,
+        "n": 2
+      }
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "no-listen-hint",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2006.5033,
+          "demandToClaimMs": 2001.948,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 3
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1981.1336,
+          "demandToClaimMs": 1977.5210000000002,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 4
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1981.1336,
+        "median": 1993.81845,
+        "max": 2006.5033,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1977.5210000000002,
+        "median": 1989.7345,
+        "max": 2001.948,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": false,
+      "scenario": "outbox-no-dispatcher",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2005.9463,
+          "demandToClaimMs": 2002.541,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 6
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1991.8516,
+          "demandToClaimMs": 1988.373,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 8
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1991.8516,
+        "median": 1998.89895,
+        "max": 2005.9463,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1988.373,
+        "median": 1995.4569999999999,
+        "max": 2002.541,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "arrival-after-sweep",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 1774.4542,
+          "demandToClaimMs": 1757.062,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 1
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1799.8851,
+          "demandToClaimMs": 1795.239,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1774.4542,
+        "median": 1787.1696499999998,
+        "max": 1799.8851,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1757.062,
+        "median": 1776.1505,
+        "max": 1795.239,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "demand-after-absent",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2768.2274,
+          "demandToClaimMs": 251.22499999999997,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 13
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 2682.9206,
+          "demandToClaimMs": 175.93800000000002,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 14
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 2682.9206,
+        "median": 2725.574,
+        "max": 2768.2274,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 175.93800000000002,
+        "median": 213.5815,
+        "max": 251.22499999999997,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "future-due",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3314.8482,
+          "demandToClaimMs": 3310.6620000000003,
+          "eligibleToClaimMs": 1314.8482,
+          "pendingOutboxRows": 9
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 4005.7989,
+          "demandToClaimMs": 4002.466,
+          "eligibleToClaimMs": 2005.7989,
+          "pendingOutboxRows": 10
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3314.8482,
+        "median": 3660.32355,
+        "max": 4005.7989,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3310.6620000000003,
+        "median": 3656.5640000000003,
+        "max": 4002.466,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1314.8482,
+        "median": 1660.32355,
+        "max": 2005.7989,
+        "n": 2
+      }
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "lease-expiry",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3991.5393,
+          "demandToClaimMs": 3988.365,
+          "eligibleToClaimMs": 1991.5393,
+          "pendingOutboxRows": 11
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3990.3206,
+          "demandToClaimMs": 3987.187,
+          "eligibleToClaimMs": 1990.3206,
+          "pendingOutboxRows": 12
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3990.3206,
+        "median": 3990.9299499999997,
+        "max": 3991.5393,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3987.187,
+        "median": 3987.776,
+        "max": 3988.365,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1990.3206,
+        "median": 1990.92995,
+        "max": 1991.5393,
+        "n": 2
+      }
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "no-listen-hint",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 152.6741,
+          "demandToClaimMs": 149.407,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 3
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 162.2473,
+          "demandToClaimMs": 158.234,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 4
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 152.6741,
+        "median": 157.4607,
+        "max": 162.2473,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 149.407,
+        "median": 153.8205,
+        "max": 158.234,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "baseline",
+      "requireDemand": true,
+      "scenario": "outbox-no-dispatcher",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 166.8766,
+          "demandToClaimMs": 163.706,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 6
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 198.3127,
+          "demandToClaimMs": 194.998,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 8
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 166.8766,
+        "median": 182.59465,
+        "max": 198.3127,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 163.706,
+        "median": 179.35199999999998,
+        "max": 194.998,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "arrival-after-sweep",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3717.8095,
+          "demandToClaimMs": 1642.692,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1717.7555,
+          "demandToClaimMs": 1712.61,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1717.7555,
+        "median": 2717.7825,
+        "max": 3717.8095,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1642.692,
+        "median": 1677.6509999999998,
+        "max": 1712.61,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "demand-after-absent",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2518.7249,
+          "demandToClaimMs": 6.768,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 2522.5881,
+          "demandToClaimMs": 6.904999999999999,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 2518.7249,
+        "median": 2520.6565,
+        "max": 2522.5881,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 6.768,
+        "median": 6.836499999999999,
+        "max": 6.904999999999999,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "future-due",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3995.8553,
+          "demandToClaimMs": 3992.5989999999997,
+          "eligibleToClaimMs": 1995.8553,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 4005.1747,
+          "demandToClaimMs": 4001.296,
+          "eligibleToClaimMs": 2005.1747,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3995.8553,
+        "median": 4000.5150000000003,
+        "max": 4005.1747,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3992.5989999999997,
+        "median": 3996.9474999999998,
+        "max": 4001.296,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1995.8553,
+        "median": 2000.5149999999999,
+        "max": 2005.1747,
+        "n": 2
+      }
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "lease-expiry",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3997.0306,
+          "demandToClaimMs": 3993.7909999999997,
+          "eligibleToClaimMs": 1997.0306,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3996.5144,
+          "demandToClaimMs": 3993.611,
+          "eligibleToClaimMs": 1996.5144,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3996.5144,
+        "median": 3996.7725,
+        "max": 3997.0306,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3993.611,
+        "median": 3993.701,
+        "max": 3993.7909999999997,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1996.5144,
+        "median": 1996.7725,
+        "max": 1997.0306,
+        "n": 2
+      }
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "no-listen-hint",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 1995.369,
+          "demandToClaimMs": 1992.162,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1979.5433,
+          "demandToClaimMs": 1976.3010000000002,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1979.5433,
+        "median": 1987.45615,
+        "max": 1995.369,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1976.3010000000002,
+        "median": 1984.2315,
+        "max": 1992.162,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": false,
+      "scenario": "outbox-no-dispatcher",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 1952.8857,
+          "demandToClaimMs": 1947.76,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 1
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1978.0734,
+          "demandToClaimMs": 1974.8980000000001,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1952.8857,
+        "median": 1965.47955,
+        "max": 1978.0734,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1947.76,
+        "median": 1961.3290000000002,
+        "max": 1974.8980000000001,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "arrival-after-sweep",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 1780.8284,
+          "demandToClaimMs": 1775.831,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 1836.4894,
+          "demandToClaimMs": 1833.162,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 1780.8284,
+        "median": 1808.6589,
+        "max": 1836.4894,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 1775.831,
+        "median": 1804.4965,
+        "max": 1833.162,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "demand-after-absent",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 2761.4903,
+          "demandToClaimMs": 253.40699999999998,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 2671.7321,
+          "demandToClaimMs": 160.411,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 2671.7321,
+        "median": 2716.6112000000003,
+        "max": 2761.4903,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 160.411,
+        "median": 206.909,
+        "max": 253.40699999999998,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "future-due",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 3302.4284,
+          "demandToClaimMs": 3299.2149999999997,
+          "eligibleToClaimMs": 1302.4284,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3995.8611,
+          "demandToClaimMs": 3992.6119999999996,
+          "eligibleToClaimMs": 1995.8611,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3302.4284,
+        "median": 3649.14475,
+        "max": 3995.8611,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3299.2149999999997,
+        "median": 3645.9134999999997,
+        "max": 3992.6119999999996,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1302.4284,
+        "median": 1649.14475,
+        "max": 1995.8611,
+        "n": 2
+      }
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "lease-expiry",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 4000.3194,
+          "demandToClaimMs": 3996.778,
+          "eligibleToClaimMs": 2000.3194,
+          "pendingOutboxRows": 2
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 3992.1258,
+          "demandToClaimMs": 3989.126,
+          "eligibleToClaimMs": 1992.1258,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 3992.1258,
+        "median": 3996.2226,
+        "max": 4000.3194,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 3989.126,
+        "median": 3992.952,
+        "max": 3996.778,
+        "n": 2
+      },
+      "eligibleToClaimMs": {
+        "min": 1992.1258,
+        "median": 1996.2226,
+        "max": 2000.3194,
+        "n": 2
+      }
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "no-listen-hint",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 162.6706,
+          "demandToClaimMs": 159.236,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 193.0006,
+          "demandToClaimMs": 188.255,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 0
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 162.6706,
+        "median": 177.8356,
+        "max": 193.0006,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 159.236,
+        "median": 173.7455,
+        "max": 188.255,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    },
+    {
+      "arm": "final",
+      "requireDemand": true,
+      "scenario": "outbox-no-dispatcher",
+      "sampleCount": 2,
+      "samples": [
+        {
+          "repetition": 1,
+          "arrivalToClaimMs": 167.7586,
+          "demandToClaimMs": 164.663,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 1
+        },
+        {
+          "repetition": 2,
+          "arrivalToClaimMs": 161.9898,
+          "demandToClaimMs": 158.801,
+          "eligibleToClaimMs": null,
+          "pendingOutboxRows": 2
+        }
+      ],
+      "arrivalToClaimMs": {
+        "min": 161.9898,
+        "median": 164.8742,
+        "max": 167.7586,
+        "n": 2
+      },
+      "demandToClaimMs": {
+        "min": 158.801,
+        "median": 161.732,
+        "max": 164.663,
+        "n": 2
+      },
+      "eligibleToClaimMs": null
+    }
+  ],
+  "failedSamples": []
+}
