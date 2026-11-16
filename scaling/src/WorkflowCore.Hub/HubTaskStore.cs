@@ -153,6 +153,14 @@ public sealed class HubTaskStore : IAsyncDisposable
         {
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
+        // Task-ID hints are experimental and off in normal presets. The same
+        // session flag gates migration 032's producer payload and the in-memory
+        // consumer topology, preserving baseline notification volume by default.
+        var taskIdHintsEnabled = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_CANDIDATES_ENABLED") is "true" or "1" or "True";
+        var taskIdHintsSetting = "-c wfc.hub_candidate_task_id_hints=" + (taskIdHintsEnabled ? "on" : "off");
+        builder.Options = string.IsNullOrWhiteSpace(builder.Options)
+            ? taskIdHintsSetting
+            : builder.Options + " " + taskIdHintsSetting;
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
         var admissionMode = Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MODE");
         _demandAwareAdmissionEnabled = string.Equals(admissionMode, "demand",

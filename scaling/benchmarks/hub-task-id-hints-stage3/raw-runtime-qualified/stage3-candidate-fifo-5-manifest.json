@@ -1,0 +1,72 @@
+{
+  "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+  "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+  "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+  "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+  "candidateHubBinarySha256": "fd648108a10cd49691b518e68822ab502f9921187b9648075c9d2d1047af9d1a",
+  "candidateWorkerBinarySha256": "187f6ead43b82e143510995916d85e5cf74f6dee4ff21cf64d3006dc63c225e9",
+  "runtimeSourceSha256": {
+    "HubTaskStore.cs": {
+      "baseline": "ab5c17417f058ad2d8e12be945e80977e0935c4beb027b5fd98fd7dbc028235d",
+      "candidate": "c747ba5fef9333552d61199f699c2ddf9d3faf7ca9e2723013083360aed407ac"
+    },
+    "HubCandidateReader.cs": {
+      "baseline": "8cb7f6a7fb179749ea63cdd8c927a55247c249841ac9957e21ee0bde5e7ce67c",
+      "candidate": "144610b23de8b3eaaaa8eb993b9f0cdb2e281dbdd58bc6916d0c4e933ad11830"
+    },
+    "HubPartitionCandidateRegistry.cs": {
+      "baseline": "7d6809c73529340085528d96e6c316834f308923738db347e4b5699bf41299e0",
+      "candidate": "3f5ec6519ae8e4d10c12a4aafbcf7e8581ecb3c7a7e6f669a830f437c76199ba"
+    },
+    "HubCandidateAcquisition.cs": {
+      "baseline": "6987a163207e8bbfc24b1b56d914be960115681e0434b0acd9cef49ec540a8ac",
+      "candidate": "2a8eef02d590dba4d458cbebe03b29a97751b024995cc0ea5cad7130f1e682ed"
+    },
+    "HubMatchingOwnership.cs": {
+      "baseline": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81",
+      "candidate": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81"
+    },
+    "PostgresHubNotificationListener.cs": {
+      "baseline": "adbaf0bb64a8c5c15786011a0a6ed433b1dc0a1a8fc9b92ade88972598509a19",
+      "candidate": "404808966502cb97cc51439581df3993ce85c575ef6bfd030e7822d1a6d10d16"
+    },
+    "HubReadinessBroadcaster.cs": {
+      "baseline": "321240d3cfcd935090d9e0cca05ec01957056db0d9119fe34ae78bce01124bed",
+      "candidate": "8ea370a9d925db09b2595eed7cf31eb8a05210cd77aa403f801479e72c4bbddb"
+    },
+    "HubGatewayEndpoints.cs": {
+      "baseline": "f2bd8623d41844d58a81a5c29bbe4d2f3ac55738f7b10143644d94e719b18470",
+      "candidate": "44b3c4def43ad1598cc783fb6c62dfe719bfa071a8623025d6d29154756b82be"
+    }
+  },
+  "candidateMigrationSha256": "98610f95e10d1dfd52d2f052c43c1a61478d7b773f77b4745ef4fcbb6de93ac1",
+  "runtimeFlags": {
+    "hubOwners": 2,
+    "matchingPartitions": 2,
+    "matchingEnabled": true,
+    "candidateIdsBaseline": false,
+    "candidateIdsFinal": true,
+    "workerLaneInstances": 4,
+    "workflowAndActivityWorkersPerLane": 1,
+    "pushEnabled": true,
+    "claimAdmission": "queue, limit 3",
+    "candidateBackpressure": false,
+    "candidateBatchSize": 32,
+    "outboxEnabled": true,
+    "writerOutboxSetting": "database-level wfc.hub_notification_outbox=on for isolated paired DBs",
+    "outboxDispatcher": true,
+    "historyTemplateRows": 20000
+  },
+  "databaseMeasurement": {
+    "postgresMajor": 17,
+    "pgStatStatementsTrack": "all (including nested trigger statements)",
+    "trackIoTiming": true,
+    "workloadSize": "20 workflows/200 tasks burst and steady; 8 workflows/80 tasks sparse and shared-resource strict FIFO",
+    "rawRepetitionsPerArmAndScenario": 5,
+    "isolation": "dedicated disposable PostgreSQL 17 container; paired databases start with equal 20,000 terminal-task history rows and zero workflows",
+    "baselineDatabase": "stage3baseq3",
+    "candidateDatabase": "stage3candq3",
+    "bufferTiming": "track_io_timing=on",
+    "serverCpu": "not directly available; pg_stat_statements execution time includes wait time and is not CPU time"
+  }
+}

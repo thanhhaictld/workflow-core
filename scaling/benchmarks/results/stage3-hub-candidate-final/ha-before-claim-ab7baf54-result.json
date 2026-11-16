@@ -1,0 +1,12 @@
+{
+  "scenario": "before-claim",
+  "database": "wfc_push_ha_ab7baf54",
+  "runId": "ha-before-claim-ab7baf54",
+  "started": "2026-11-16T20:03:25.1167996Z",
+  "events": [],
+  "errors": [
+    "Timed out waiting for Hub A ready after 30 seconds"
+  ],
+  "outcome": "failed",
+  "finished": "2026-11-16T20:03:56.2376650Z"
+}

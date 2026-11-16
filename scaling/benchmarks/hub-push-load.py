@@ -21,6 +21,7 @@ vus = int(os.getenv("WFC_BENCH_VUS", "100"))
 count = int(os.getenv("WFC_BENCH_WORKFLOWS", "100"))
 timeout = int(os.getenv("WFC_BENCH_TIMEOUT", "300"))
 shared_tenant = os.getenv("WFC_BENCH_SHARED_TENANT", "false").lower() in ("true", "1")
+stagger_ms = int(os.getenv("WFC_BENCH_STAGGER_MS", "0"))
 container = os.getenv("WFC_BENCH_POSTGRES_CONTAINER", "workflow-core-monitor-postgres-1")
 headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
 samples = []
@@ -50,7 +51,11 @@ def sample():
         stop.wait(2)
 
 
-def iteration(index):
+def iteration(index, run_started):
+    if stagger_ms:
+        delay = run_started + index * stagger_ms / 1000 - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
     # The sample ProvisionTenant registration has a strict FIFO, capacity-one
     # tenant resource. A shared key produces a reproducible hot resource.
     tenant = f"{run_id}-tenant" if shared_tenant else f"{run_id}-tenant-{index}"
@@ -85,12 +90,13 @@ sampler = threading.Thread(target=sample, daemon=True)
 sampler.start()
 started = time.monotonic()
 with concurrent.futures.ThreadPoolExecutor(max_workers=vus) as pool:
-    items = list(pool.map(iteration, range(count)))
+    items = list(pool.map(lambda index: iteration(index, started), range(count)))
 duration = time.monotonic() - started
 stop.set()
 sampler.join(timeout=15)
 result = {"run_id": run_id, "vus": vus, "requested": count, "duration_seconds": duration,
-          "shared_tenant": shared_tenant, "items": items, "samples": samples}
+          "shared_tenant": shared_tenant, "stagger_ms": stagger_ms,
+          "items": items, "samples": samples}
 os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
 with open(output, "w", encoding="utf-8") as f:
     json.dump(result, f, indent=2)

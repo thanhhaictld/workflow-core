@@ -1,0 +1,47 @@
+{
+  "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+  "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+  "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+  "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+  "candidateHubBinarySha256": "23b3357a9b7bf74efe4d66851243420c59453661a3957fd49981eb709b0b56f1",
+  "candidateWorkerBinarySha256": "2dbd4f88a2c1210854598a879df5647a02f3a1ae8e9823ceb234b389c685e6ee",
+  "runtimeSourceSha256": {
+    "HubTaskStore.cs": {
+      "baseline": "ab5c17417f058ad2d8e12be945e80977e0935c4beb027b5fd98fd7dbc028235d",
+      "candidate": "c747ba5fef9333552d61199f699c2ddf9d3faf7ca9e2723013083360aed407ac"
+    },
+    "HubCandidateReader.cs": {
+      "baseline": "8cb7f6a7fb179749ea63cdd8c927a55247c249841ac9957e21ee0bde5e7ce67c",
+      "candidate": "b20e8bfeb798b36518057bd8a6d159061eaa3aba5246687def194f9d9334221e"
+    },
+    "HubPartitionCandidateRegistry.cs": {
+      "baseline": "7d6809c73529340085528d96e6c316834f308923738db347e4b5699bf41299e0",
+      "candidate": "3f5ec6519ae8e4d10c12a4aafbcf7e8581ecb3c7a7e6f669a830f437c76199ba"
+    },
+    "HubCandidateAcquisition.cs": {
+      "baseline": "6987a163207e8bbfc24b1b56d914be960115681e0434b0acd9cef49ec540a8ac",
+      "candidate": "2a8eef02d590dba4d458cbebe03b29a97751b024995cc0ea5cad7130f1e682ed"
+    },
+    "HubMatchingOwnership.cs": {
+      "baseline": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81",
+      "candidate": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81"
+    }
+  },
+  "runtimeFlags": {
+    "hubOwners": 2,
+    "matchingPartitions": 2,
+    "matchingEnabled": true,
+    "candidateIdsBaseline": false,
+    "candidateIdsFinal": true,
+    "workerLaneInstances": 4,
+    "workflowAndActivityWorkersPerLane": 1,
+    "pushEnabled": true,
+    "claimAdmission": "queue, limit 3",
+    "candidateBackpressure": false,
+    "candidateBatchSize": 32,
+    "outboxEnabled": true,
+    "writerSessionOutbox": "on",
+    "outboxDispatcher": true,
+    "historyTemplateRows": 20000
+  }
+}

@@ -54,7 +54,8 @@ span these matching partitions and are *always* rechecked transactionally.
 ## End-to-end assignment
 
 1. **Task becomes ready:** the workflow engine or timer scheduler commits the
-   durable task. Migration 032 emits a transaction-committed task-ID hint for
+   durable task. When experimental candidate mode is enabled, migration 032
+   emits a transaction-committed task-ID hint for
    immediately ready inserts and task state/epoch/readiness changes. The owner
    hydrates current task metadata in bounded ID batches; hints are advisory and
    may be duplicated, reordered, or lost. The indexed candidate reader still
@@ -97,7 +98,11 @@ higher than the available connection budget.
 
 Migration `032_hub_candidate_task_id_hints.sql` replaces the 014/030 trigger
 function and expands its trigger to observe task state, due-time and lease-epoch
-changes. Exact hints route by hub, task ID and task partition; each owner reads
+changes. Task-ID payloads and owner hydration are **opt-in** through
+`WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`; the Hub's task-writer connections
+set the matching PostgreSQL session flag. When disabled, migration 032 retains
+the prior coarse notification payload and suppresses epoch-only notifications.
+Exact hints route by hub, task ID and task partition; each owner reads
 the row's current state and bounded workflow/resource metadata before adding,
 updating or safely removing the advisory entry. Lease-heartbeat updates do not
 emit hints. Future tasks becoming due and leases expiring without a task-row
@@ -105,9 +110,11 @@ update remain indexed PostgreSQL discovery streams; no future-task timer heap
 or sequence-watermark feed is used. Deletes and out-of-band resource writes
 also rely on authoritative admission and periodic recovery.
 
-An exact hint is emitted per immediately ready insert and relevant state/epoch
-transition, so workflow fan-out, claims, retries and completions produce
-per-task notifications; a permit release also emits a hub-wide hint. Outbox
+In opt-in mode, an exact hint is emitted per immediately ready insert and
+relevant state/epoch transition, so workflow fan-out, claims, retries and
+completions produce per-task notifications; a permit release also emits a
+hub-wide hint. In default mode the legacy coarse task hint is retained.
+Outbox
 mode stores each notification separately and the dispatcher deletes those rows
 in the notification transaction. Heartbeats do not add event rows. The bounded
 `workflow_hub_candidate_task_hints_received`, `..._deduped`, `..._dropped`,
@@ -152,7 +159,7 @@ budget. When base metadata fits but resource keys do not, the entry carries
 constraints transactionally. Requested IDs are deduplicated and their parameter
 array is bounded by the wire-byte budget.
 With default coordinator limits, pending exact IDs are capped at 1,024 per
-owner and 16,384 process-wide, charged at 64 bytes each; one hydration batch is
+owner and 32,768 process-wide, charged at 64 bytes each; one hydration batch is
 at most 128 IDs and 64 KiB of metadata. Persistent candidate entries remain
 under the existing 4 MiB per-partition and 64 MiB process budgets.
 
@@ -227,13 +234,14 @@ make ups-16
 ```
 
 The standard preset configures two Hub replicas, four matching partitions,
-candidate discovery, PostgreSQL claim admission and worker SSE push. The
+PostgreSQL claim admission and worker SSE push; experimental candidate-ID
+hydration is off unless explicitly enabled. The
 important environment settings are:
 
 | Setting | Main preset |
 | --- | --- |
 | `WFC_HUB_MATCHING_ENABLED` | `true` on Hub replicas |
-| `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `true` on Hub replicas |
+| `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `false` (experimental opt-in; set `true` for an A/B run) |
 | `WFC_HUB_PUSH_ENABLED` | `true` on Hub replicas and workers |
 | `WFC_HUB_MATCHING_PARTITIONS` | `4`, consistent on Hub and worker |
 | `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY` | `2` (per Hub) |

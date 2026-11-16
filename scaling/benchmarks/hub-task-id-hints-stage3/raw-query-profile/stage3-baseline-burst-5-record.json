@@ -1,0 +1,293 @@
+{
+  "arm": "baseline",
+  "candidateEnabled": false,
+  "scenario": "burst",
+  "repetition": 5,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-baseline-burst-5",
+    "workflowCount": 20,
+    "completedWorkflows": 20,
+    "completedTasks": 200,
+    "taskCount": 200,
+    "tasksWithStartTime": 200,
+    "scheduleStartP50Ms": 38.197,
+    "scheduleStartP95Ms": 27943.969699999998,
+    "scheduleStartP99Ms": 29514.633389999995,
+    "endToEndP95Ms": 31026.19775,
+    "endToEndP99Ms": 31081.278749999998,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 571,
+      "executionMs": 15.222134000000004,
+      "sharedHit": 2912,
+      "sharedRead": 0,
+      "sharedDirtied": 0,
+      "sharedWritten": 0,
+      "walRecords": 13,
+      "walBytes": 950
+    },
+    [
+      {
+        "class": "notification-outbox",
+        "calls": 54,
+        "rows": 0,
+        "executionMs": 0.34302499999999997,
+        "sharedHit": 0,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "class": "other",
+        "calls": 469,
+        "rows": 89,
+        "executionMs": 6.790543000000001,
+        "sharedHit": 408,
+        "sharedRead": 0,
+        "walBytes": 950
+      },
+      {
+        "class": "task-other",
+        "calls": 49,
+        "rows": 7,
+        "executionMs": 8.240153000000001,
+        "sharedHit": 2505,
+        "sharedRead": 0,
+        "walBytes": 0
+      }
+    ],
+    {
+      "tasksInserted": 0,
+      "outboxInserted": 0,
+      "outboxDeleted": 0
+    }
+  ],
+  "durationSeconds": 2.6202275000105146,
+  "sharedTenant": false,
+  "staggerMs": 0,
+  "load": {
+    "run_id": "stage3-baseline-burst-5",
+    "vus": 4,
+    "requested": 20,
+    "duration_seconds": 2.6202275000105146,
+    "shared_tenant": false,
+    "stagger_ms": 0,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794852390.0217378,
+        "poll_errors": 0,
+        "workflow_id": "21eda624-5d12-4f87-8241-f26e041aa885",
+        "state": "Complete",
+        "elapsed_ms": 541.0285999969346
+      },
+      {
+        "index": 1,
+        "start_unix": 1794852390.0223296,
+        "poll_errors": 0,
+        "workflow_id": "6b2bca83-c7ff-40ab-a5e7-c0d7c94e6837",
+        "state": "Complete",
+        "elapsed_ms": 540.6562000134727
+      },
+      {
+        "index": 2,
+        "start_unix": 1794852390.0238101,
+        "poll_errors": 0,
+        "workflow_id": "37f42eaa-aebd-467c-8e82-55fc52f9b9ed",
+        "state": "Complete",
+        "elapsed_ms": 538.7627999880351
+      },
+      {
+        "index": 3,
+        "start_unix": 1794852390.0241935,
+        "poll_errors": 0,
+        "workflow_id": "a9b6b2b8-2cce-40d4-a8bc-9f0c9440c075",
+        "state": "Complete",
+        "elapsed_ms": 540.7558000006247
+      },
+      {
+        "index": 4,
+        "start_unix": 1794852390.5625947,
+        "poll_errors": 0,
+        "workflow_id": "49fa9e2b-48a7-4bef-b518-19e75e1bd412",
+        "state": "Complete",
+        "elapsed_ms": 508.98589999997057
+      },
+      {
+        "index": 5,
+        "start_unix": 1794852390.5627863,
+        "poll_errors": 0,
+        "workflow_id": "2be4e3a8-b08d-4551-bd78-d70e802d48ea",
+        "state": "Complete",
+        "elapsed_ms": 508.60679999459535
+      },
+      {
+        "index": 6,
+        "start_unix": 1794852390.562996,
+        "poll_errors": 0,
+        "workflow_id": "073dff43-312e-4497-babc-b9f89625ad9f",
+        "state": "Complete",
+        "elapsed_ms": 510.33259999530856
+      },
+      {
+        "index": 7,
+        "start_unix": 1794852390.5649626,
+        "poll_errors": 0,
+        "workflow_id": "6704beee-2de9-4e36-9b72-1e52f1badcd4",
+        "state": "Complete",
+        "elapsed_ms": 506.80560000182595
+      },
+      {
+        "index": 8,
+        "start_unix": 1794852391.0714128,
+        "poll_errors": 0,
+        "workflow_id": "c6e64ed9-e839-4b05-9f1d-7a13406e578c",
+        "state": "Complete",
+        "elapsed_ms": 509.4332000007853
+      },
+      {
+        "index": 9,
+        "start_unix": 1794852391.0715957,
+        "poll_errors": 0,
+        "workflow_id": "0572993b-b0e5-4421-9bad-b73892752997",
+        "state": "Complete",
+        "elapsed_ms": 510.41269999404904
+      },
+      {
+        "index": 10,
+        "start_unix": 1794852391.0717745,
+        "poll_errors": 0,
+        "workflow_id": "9b0421d8-9dd3-41ee-a415-99669075bb99",
+        "state": "Complete",
+        "elapsed_ms": 509.96449998638127
+      },
+      {
+        "index": 11,
+        "start_unix": 1794852391.0733411,
+        "poll_errors": 0,
+        "workflow_id": "cc069be0-0b1a-4096-a443-e99130880e82",
+        "state": "Complete",
+        "elapsed_ms": 508.0331999924965
+      },
+      {
+        "index": 12,
+        "start_unix": 1794852391.58088,
+        "poll_errors": 0,
+        "workflow_id": "25a1a975-27e9-4c1e-9bc2-a5cad9528023",
+        "state": "Complete",
+        "elapsed_ms": 513.9637000102084
+      },
+      {
+        "index": 13,
+        "start_unix": 1794852391.5813985,
+        "poll_errors": 0,
+        "workflow_id": "1ff0502a-2b0e-40a2-ad9f-53c10eddcc80",
+        "state": "Complete",
+        "elapsed_ms": 513.9236000104574
+      },
+      {
+        "index": 14,
+        "start_unix": 1794852391.5817523,
+        "poll_errors": 0,
+        "workflow_id": "5798456e-b5c5-4e03-9319-2ad3b96b2511",
+        "state": "Complete",
+        "elapsed_ms": 512.6049999962561
+      },
+      {
+        "index": 15,
+        "start_unix": 1794852391.582033,
+        "poll_errors": 0,
+        "workflow_id": "7ae74fde-8ef3-478d-b2dd-747d51bdf73d",
+        "state": "Complete",
+        "elapsed_ms": 512.5526999909198
+      },
+      {
+        "index": 16,
+        "start_unix": 1794852392.0943737,
+        "poll_errors": 0,
+        "workflow_id": "267fc559-8161-4fbe-839b-e5603175fc30",
+        "state": "Complete",
+        "elapsed_ms": 511.4403999905335
+      },
+      {
+        "index": 17,
+        "start_unix": 1794852392.094612,
+        "poll_errors": 0,
+        "workflow_id": "66407426-20d8-43b3-84db-338383418dfa",
+        "state": "Complete",
+        "elapsed_ms": 510.9338999900501
+      },
+      {
+        "index": 18,
+        "start_unix": 1794852392.0948741,
+        "poll_errors": 0,
+        "workflow_id": "bfe699ab-ba31-4792-bd70-93c032988cd9",
+        "state": "Complete",
+        "elapsed_ms": 510.72980000753887
+      },
+      {
+        "index": 19,
+        "start_unix": 1794852392.095335,
+        "poll_errors": 0,
+        "workflow_id": "89bc69dc-61d1-4af2-a0da-ca31167b5a30",
+        "state": "Complete",
+        "elapsed_ms": 510.3895000065677
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794852389.9855757,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": false,
+          "candidateCredits": 0,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 24,
+          "pushEmptyClaims": 24,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 4.59,
+        "docker_exit": 0
+      }
+    ]
+  },
+  "benchmarkManifest": {
+    "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+    "candidateSourceHeadAtRun": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+    "baselineHubBinarySha256": "9644526941b9638cf98b5d75fa795a990caff6843fe443dbcd3e2a614b7ff816",
+    "baselineWorkerBinarySha256": "21f3658893ef4820a2b61d8a4c81836e6f85fb1a895f28ef39d329a29271046f",
+    "candidateHubBinarySha256": "23b3357a9b7bf74efe4d66851243420c59453661a3957fd49981eb709b0b56f1",
+    "candidateWorkerBinarySha256": "2dbd4f88a2c1210854598a879df5647a02f3a1ae8e9823ceb234b389c685e6ee",
+    "runtimeFlags": {
+      "hubOwners": 2,
+      "matchingPartitions": 2,
+      "matchingEnabled": true,
+      "candidateIdsBaseline": false,
+      "candidateIdsFinal": true,
+      "workerLaneInstances": 4,
+      "workflowAndActivityWorkersPerLane": 1,
+      "pushEnabled": true,
+      "claimAdmission": "queue, limit 3",
+      "candidateBackpressure": false,
+      "candidateBatchSize": 32,
+      "outboxEnabled": true,
+      "writerSessionOutbox": "on",
+      "outboxDispatcher": true,
+      "historyTemplateRows": 20000
+    }
+  }
+}
