@@ -21,6 +21,7 @@ for row in records:
         "workloadExit": row["workloadExit"], "metricsExit": row["metricsExit"],
         "completedWorkflows": workload["completedWorkflows"],
         "completedTasks": task_count, "durationSeconds": row["durationSeconds"],
+        "durableTasksPerSecond": task_count / row["durationSeconds"],
         "endToEndP95Ms": workload["endToEndP95Ms"],
         "endToEndP99Ms": workload["endToEndP99Ms"],
         "scheduleStartP95Ms": workload["scheduleStartP95Ms"],
@@ -40,7 +41,7 @@ for row in records:
     })
 
 summary = []
-metrics = ("durationSeconds", "endToEndP95Ms", "endToEndP99Ms",
+metrics = ("durationSeconds", "durableTasksPerSecond", "endToEndP95Ms", "endToEndP99Ms",
            "scheduleStartP95Ms", "statementsPerTask", "executionMsPerTask",
            "sharedHitsPerTask", "sharedReadsPerTask", "walBytesPerTask",
            "discoveryCalls", "discoveryRows", "hydrationCalls", "hydrationRows",

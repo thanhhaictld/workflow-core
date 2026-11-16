@@ -18,6 +18,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 8.766323499992723,
+              "durableTasksPerSecond": 22.814581278019915,
               "endToEndP95Ms": 1529.2287000000001,
               "endToEndP99Ms": 1569.38254,
               "scheduleStartP95Ms": 105.63504999999981,
@@ -46,6 +47,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 9.223034399998141,
+              "durableTasksPerSecond": 21.68483725920401,
               "endToEndP95Ms": 1744.56475,
               "endToEndP99Ms": 1780.88895,
               "scheduleStartP95Ms": 196.99044999999975,
@@ -74,6 +76,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 9.20095090000541,
+              "durableTasksPerSecond": 21.736883738819042,
               "endToEndP95Ms": 1700.5345500000003,
               "endToEndP99Ms": 1882.6389099999997,
               "scheduleStartP95Ms": 204.173399999999,
@@ -102,6 +105,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 9.697254700004123,
+              "durableTasksPerSecond": 20.624393829721207,
               "endToEndP95Ms": 1633.71,
               "endToEndP99Ms": 1656.6164,
               "scheduleStartP95Ms": 131.58565000000002,
@@ -130,6 +134,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 91.84503479998966,
+              "durableTasksPerSecond": 2.177580970332677,
               "endToEndP95Ms": 30690.413600000003,
               "endToEndP99Ms": 30714.21072,
               "scheduleStartP95Ms": 1642.7632499995916,
@@ -154,6 +159,11 @@
               "median": 9.223034399998141,
               "min": 8.766323499992723,
               "max": 91.84503479998966
+            },
+            "durableTasksPerSecond": {
+              "median": 21.68483725920401,
+              "min": 2.177580970332677,
+              "max": 22.814581278019915
             },
             "endToEndP95Ms": {
               "median": 1700.5345500000003,
@@ -239,6 +249,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 104.36545369999658,
+              "durableTasksPerSecond": 1.9163429363792106,
               "endToEndP95Ms": 36899.99095000001,
               "endToEndP99Ms": 36972.90459,
               "scheduleStartP95Ms": 1873.2711,
@@ -267,6 +278,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 11.224754800001392,
+              "durableTasksPerSecond": 17.817761150557622,
               "endToEndP95Ms": 4932.96595,
               "endToEndP99Ms": 5028.89239,
               "scheduleStartP95Ms": 331.8444999999997,
@@ -295,6 +307,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 102.93617030000314,
+              "durableTasksPerSecond": 1.9429516312595312,
               "endToEndP95Ms": 34469.150349999996,
               "endToEndP99Ms": 35303.27087,
               "scheduleStartP95Ms": 2499.2358499995207,
@@ -323,6 +336,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 63.515379199991,
+              "durableTasksPerSecond": 3.1488436740692296,
               "endToEndP95Ms": 33260.76175,
               "endToEndP99Ms": 33334.87315,
               "scheduleStartP95Ms": 868.6189999999733,
@@ -351,6 +365,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 10.224090199990314,
+              "durableTasksPerSecond": 19.561642756261037,
               "endToEndP95Ms": 2059.0469500000004,
               "endToEndP99Ms": 2264.8845899999997,
               "scheduleStartP95Ms": 167.06609999999998,
@@ -375,6 +390,11 @@
               "median": 63.515379199991,
               "min": 10.224090199990314,
               "max": 104.36545369999658
+            },
+            "durableTasksPerSecond": {
+              "median": 3.1488436740692296,
+              "min": 1.9163429363792106,
+              "max": 19.561642756261037
             },
             "endToEndP95Ms": {
               "median": 33260.76175,
@@ -460,6 +480,10 @@
             "candidateMinusBaseline": 95.59913020000386,
             "candidateOverBaseline": 11.905270630279983
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -20.898238341640706,
+            "candidateOverBaseline": 0.08399641058613067
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 35370.76225000001,
             "candidateOverBaseline": 24.129805404515363
@@ -526,6 +550,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": 2.0017204000032507,
             "candidateOverBaseline": 1.2170349055624963
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -3.867076108646387,
+            "candidateOverBaseline": 0.8216691201127171
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 3188.4012,
@@ -594,6 +622,10 @@
             "candidateMinusBaseline": 93.73521939999773,
             "candidateOverBaseline": 11.187557831652228
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -19.79393210755951,
+            "candidateOverBaseline": 0.08938501280152181
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 32768.6158,
             "candidateOverBaseline": 20.26959719812808
@@ -661,6 +693,10 @@
             "candidateMinusBaseline": 53.81812449998688,
             "candidateOverBaseline": 6.549830974323485
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -17.475550155651977,
+            "candidateOverBaseline": 0.15267569558973043
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 31627.05175,
             "candidateOverBaseline": 20.359036640529837
@@ -727,6 +763,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": -81.62094459999935,
             "candidateOverBaseline": 0.11131892129231863
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 17.38406178592836,
+            "candidateOverBaseline": 8.983198798468804
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -28631.366650000004,
@@ -803,6 +843,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 30.630630999992718,
+              "durableTasksPerSecond": 2.6117646743881644,
               "endToEndP95Ms": 29739.56345,
               "endToEndP99Ms": 29786.90389,
               "scheduleStartP95Ms": 888.6684499999994,
@@ -831,6 +872,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 29.355638299995917,
+              "durableTasksPerSecond": 2.725200494107843,
               "endToEndP95Ms": 18283.53774999999,
               "endToEndP99Ms": 25365.996349999994,
               "scheduleStartP95Ms": 318.0898999999999,
@@ -859,6 +901,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 5.357526099993265,
+              "durableTasksPerSecond": 14.93226509901661,
               "endToEndP95Ms": 1950.82035,
               "endToEndP99Ms": 1977.9520699999998,
               "scheduleStartP95Ms": 419.6472499999998,
@@ -887,6 +930,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 4.753613299995777,
+              "durableTasksPerSecond": 16.829303300727272,
               "endToEndP95Ms": 1546.88735,
               "endToEndP99Ms": 1554.49187,
               "scheduleStartP95Ms": 358.8134499999999,
@@ -915,6 +959,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 5.250031900010072,
+              "durableTasksPerSecond": 15.238002649059434,
               "endToEndP95Ms": 3645.6403999999998,
               "endToEndP99Ms": 3748.8136799999997,
               "scheduleStartP95Ms": 239.38944999999993,
@@ -939,6 +984,11 @@
               "median": 5.357526099993265,
               "min": 4.753613299995777,
               "max": 30.630630999992718
+            },
+            "durableTasksPerSecond": {
+              "median": 14.93226509901661,
+              "min": 2.6117646743881644,
+              "max": 16.829303300727272
             },
             "endToEndP95Ms": {
               "median": 3645.6403999999998,
@@ -1024,6 +1074,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 5.773945599998115,
+              "durableTasksPerSecond": 13.855343562645642,
               "endToEndP95Ms": 1838.30845,
               "endToEndP99Ms": 1851.19209,
               "scheduleStartP95Ms": 289.47799999999995,
@@ -1052,6 +1103,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 5.255600800010143,
+              "durableTasksPerSecond": 15.221856271854895,
               "endToEndP95Ms": 1865.5642,
               "endToEndP99Ms": 1867.34164,
               "scheduleStartP95Ms": 358.0323,
@@ -1080,6 +1132,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 30.769044499989832,
+              "durableTasksPerSecond": 2.6000157398461443,
               "endToEndP95Ms": 30253.6069,
               "endToEndP99Ms": 30260.20538,
               "scheduleStartP95Ms": 2148.911949999945,
@@ -1108,6 +1161,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 37.42948649999744,
+              "durableTasksPerSecond": 2.1373523251516016,
               "endToEndP95Ms": 33275.988000000005,
               "endToEndP99Ms": 33465.6376,
               "scheduleStartP95Ms": 3599.689149999931,
@@ -1136,6 +1190,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 5.750018999999156,
+              "durableTasksPerSecond": 13.912997504879852,
               "endToEndP95Ms": 1972.2834,
               "endToEndP99Ms": 1976.49348,
               "scheduleStartP95Ms": 171.5413999999998,
@@ -1160,6 +1215,11 @@
               "median": 5.773945599998115,
               "min": 5.255600800010143,
               "max": 37.42948649999744
+            },
+            "durableTasksPerSecond": {
+              "median": 13.855343562645642,
+              "min": 2.1373523251516016,
+              "max": 15.221856271854895
             },
             "endToEndP95Ms": {
               "median": 1972.2834,
@@ -1245,6 +1305,10 @@
             "candidateMinusBaseline": -24.856685399994603,
             "candidateOverBaseline": 0.18850233937392563
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 11.243578888257478,
+            "candidateOverBaseline": 5.30497395056904
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -27901.255,
             "candidateOverBaseline": 0.0618135653904496
@@ -1311,6 +1375,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": -24.100037499985774,
             "candidateOverBaseline": 0.17903207371276522
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 12.496655777747051,
+            "candidateOverBaseline": 5.585591337138708
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -16417.973549999988,
@@ -1379,6 +1447,10 @@
             "candidateMinusBaseline": 25.411518399996567,
             "candidateOverBaseline": 5.743144116466089
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -12.332249359170465,
+            "candidateOverBaseline": 0.1741206523327377
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 28302.786549999997,
             "candidateOverBaseline": 15.508146047379503
@@ -1446,6 +1518,10 @@
             "candidateMinusBaseline": 32.67587320000166,
             "candidateOverBaseline": 7.873902258736672
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -14.69195097557567,
+            "candidateOverBaseline": 0.1270018304952194
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 31729.100650000004,
             "candidateOverBaseline": 21.511578073219106
@@ -1512,6 +1588,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": 0.4999870999890845,
             "candidateOverBaseline": 1.0952350594266151
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -1.3250051441795812,
+            "candidateOverBaseline": 0.913046009067247
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -1673.3569999999997,
@@ -1588,6 +1668,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 127.29121250000026,
+              "durableTasksPerSecond": 0.6284801474414413,
               "endToEndP95Ms": 33043.56295,
               "endToEndP99Ms": 33376.92059,
               "scheduleStartP95Ms": 1457.710199999921,
@@ -1616,6 +1697,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 130.4097718999983,
+              "durableTasksPerSecond": 0.6134509617986766,
               "endToEndP95Ms": 32452.693,
               "endToEndP99Ms": 32467.1802,
               "scheduleStartP95Ms": 3944.251449999929,
@@ -1644,6 +1726,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 12.098955699999351,
+              "durableTasksPerSecond": 6.612140913947168,
               "endToEndP95Ms": 1221.1154999999999,
               "endToEndP99Ms": 1274.2063,
               "scheduleStartP95Ms": 99.55834999999999,
@@ -1672,6 +1755,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 162.52066490000288,
+              "durableTasksPerSecond": 0.49224509418062673,
               "endToEndP95Ms": 32969.48775,
               "endToEndP99Ms": 33076.93355,
               "scheduleStartP95Ms": 27703.90989999999,
@@ -1700,6 +1784,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 63.85499149998941,
+              "durableTasksPerSecond": 1.2528386289114652,
               "endToEndP95Ms": 28876.249749999995,
               "endToEndP99Ms": 30626.276349999996,
               "scheduleStartP95Ms": 120.92459999999986,
@@ -1724,6 +1809,11 @@
               "median": 127.29121250000026,
               "min": 12.098955699999351,
               "max": 162.52066490000288
+            },
+            "durableTasksPerSecond": {
+              "median": 0.6284801474414413,
+              "min": 0.49224509418062673,
+              "max": 6.612140913947168
             },
             "endToEndP95Ms": {
               "median": 32452.693,
@@ -1809,6 +1899,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 13.410170200004359,
+              "durableTasksPerSecond": 5.965621525070129,
               "endToEndP95Ms": 3024.321049999999,
               "endToEndP99Ms": 3575.4666099999995,
               "scheduleStartP95Ms": 112.6142,
@@ -1837,6 +1928,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 13.81646109999565,
+              "durableTasksPerSecond": 5.790194712018202,
               "endToEndP95Ms": 1590.6056999999998,
               "endToEndP99Ms": 1626.11474,
               "scheduleStartP95Ms": 109.3318,
@@ -1865,6 +1957,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 13.343140299999504,
+              "durableTasksPerSecond": 5.995590108574588,
               "endToEndP95Ms": 1704.7342999999996,
               "endToEndP99Ms": 1810.3116599999998,
               "scheduleStartP95Ms": 107.23279999999998,
@@ -1893,6 +1986,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 13.358737399990787,
+              "durableTasksPerSecond": 5.988589909706225,
               "endToEndP95Ms": 1720.3076999999998,
               "endToEndP99Ms": 1828.5383399999998,
               "scheduleStartP95Ms": 113.27974999999999,
@@ -1921,6 +2015,7 @@
               "completedWorkflows": 8,
               "completedTasks": 80,
               "durationSeconds": 14.28385100000014,
+              "durableTasksPerSecond": 5.600730503279488,
               "endToEndP95Ms": 3352.982699999999,
               "endToEndP99Ms": 3704.2141399999996,
               "scheduleStartP95Ms": 110.5195,
@@ -1945,6 +2040,11 @@
               "median": 13.410170200004359,
               "min": 13.343140299999504,
               "max": 14.28385100000014
+            },
+            "durableTasksPerSecond": {
+              "median": 5.965621525070129,
+              "min": 5.600730503279488,
+              "max": 5.995590108574588
             },
             "endToEndP95Ms": {
               "median": 1720.3076999999998,
@@ -2030,6 +2130,10 @@
             "candidateMinusBaseline": -113.8810422999959,
             "candidateOverBaseline": 0.10535032180641953
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 5.337141377628688,
+            "candidateOverBaseline": 9.492139965528468
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -30019.2419,
             "candidateOverBaseline": 0.09152527088486985
@@ -2096,6 +2200,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": -116.59331080000266,
             "candidateOverBaseline": 0.10594651688057917
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 5.176743750219526,
+            "candidateOverBaseline": 9.438724645635878
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -30862.0873,
@@ -2164,6 +2272,10 @@
             "candidateMinusBaseline": 1.2441846000001533,
             "candidateOverBaseline": 1.10283404872705
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -0.6165508053725794,
+            "candidateOverBaseline": 0.906754738987478
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 483.61879999999974,
             "candidateOverBaseline": 1.3960467294043846
@@ -2231,6 +2343,10 @@
             "candidateMinusBaseline": -149.1619275000121,
             "candidateOverBaseline": 0.08219716186990907
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 5.496344815525599,
+            "candidateOverBaseline": 12.1658701742363
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -31249.18005,
             "candidateOverBaseline": 0.05217878157661093
@@ -2297,6 +2413,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": -49.57114049998927,
             "candidateOverBaseline": 0.22369200378019796
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 4.347891874368022,
+            "candidateOverBaseline": 4.470432483508039
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -25523.267049999995,
@@ -2373,6 +2493,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 96.81575370000792,
+              "durableTasksPerSecond": 2.065779507534667,
               "endToEndP95Ms": 32223.65715,
               "endToEndP99Ms": 32784.99543,
               "scheduleStartP95Ms": 25622.57894999997,
@@ -2401,6 +2522,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 9.622722100000829,
+              "durableTasksPerSecond": 20.784139656281123,
               "endToEndP95Ms": 1510.8204,
               "endToEndP99Ms": 1578.32968,
               "scheduleStartP95Ms": 105.02834999999999,
@@ -2429,6 +2551,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 128.11787479999475,
+              "durableTasksPerSecond": 1.56106242249351,
               "endToEndP95Ms": 33214.63865,
               "endToEndP99Ms": 33364.23173,
               "scheduleStartP95Ms": 25976.746049999987,
@@ -2457,6 +2580,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 11.7107410000026,
+              "durableTasksPerSecond": 17.078338595307983,
               "endToEndP95Ms": 4778.1025500000005,
               "endToEndP99Ms": 4964.70611,
               "scheduleStartP95Ms": 387.96509999999995,
@@ -2485,6 +2609,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 9.481969300002675,
+              "durableTasksPerSecond": 21.092664790629893,
               "endToEndP95Ms": 1503.5602000000001,
               "endToEndP99Ms": 1533.46164,
               "scheduleStartP95Ms": 119.75179999999999,
@@ -2509,6 +2634,11 @@
               "median": 11.7107410000026,
               "min": 9.481969300002675,
               "max": 128.11787479999475
+            },
+            "durableTasksPerSecond": {
+              "median": 17.078338595307983,
+              "min": 1.56106242249351,
+              "max": 21.092664790629893
             },
             "endToEndP95Ms": {
               "median": 4778.1025500000005,
@@ -2594,6 +2724,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 170.28494939999655,
+              "durableTasksPerSecond": 1.1745019198978255,
               "endToEndP95Ms": 98851.4091,
               "endToEndP99Ms": 99162.84342,
               "scheduleStartP95Ms": 30451.667550000002,
@@ -2622,6 +2753,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 107.88515170000028,
+              "durableTasksPerSecond": 1.853823226352283,
               "endToEndP95Ms": 37122.93895,
               "endToEndP99Ms": 37327.63659,
               "scheduleStartP95Ms": 30072.909349999998,
@@ -2650,6 +2782,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 11.261763599992264,
+              "durableTasksPerSecond": 17.759207802953473,
               "endToEndP95Ms": 3790.11025,
               "endToEndP99Ms": 3805.81565,
               "scheduleStartP95Ms": 414.87049999999994,
@@ -2678,6 +2811,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 11.762987300011446,
+              "durableTasksPerSecond": 17.002483714303203,
               "endToEndP95Ms": 2244.78635,
               "endToEndP99Ms": 2251.78367,
               "scheduleStartP95Ms": 136.35435,
@@ -2706,6 +2840,7 @@
               "completedWorkflows": 20,
               "completedTasks": 200,
               "durationSeconds": 106.08598660001007,
+              "durableTasksPerSecond": 1.8852631380437292,
               "endToEndP95Ms": 35835.67985,
               "endToEndP99Ms": 36304.44557,
               "scheduleStartP95Ms": 29392.175799999994,
@@ -2730,6 +2865,11 @@
               "median": 106.08598660001007,
               "min": 11.261763599992264,
               "max": 170.28494939999655
+            },
+            "durableTasksPerSecond": {
+              "median": 1.8852631380437292,
+              "min": 1.1745019198978255,
+              "max": 17.759207802953473
             },
             "endToEndP95Ms": {
               "median": 35835.67985,
@@ -2815,6 +2955,10 @@
             "candidateMinusBaseline": 73.46919569998863,
             "candidateOverBaseline": 1.758855794560453
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -0.8912775876368417,
+            "candidateOverBaseline": 0.5685514429850715
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 66627.75195,
             "candidateOverBaseline": 3.067665741348046
@@ -2881,6 +3025,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": 98.26242959999945,
             "candidateOverBaseline": 11.211500298859404
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -18.93031642992884,
+            "candidateOverBaseline": 0.08919412864857476
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 35612.11855000001,
@@ -2949,6 +3097,10 @@
             "candidateMinusBaseline": -116.85611120000249,
             "candidateOverBaseline": 0.08790157983476576
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": 16.198145380459962,
+            "candidateOverBaseline": 11.376359809229413
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -29424.5284,
             "candidateOverBaseline": 0.11410963370513742
@@ -3016,6 +3168,10 @@
             "candidateMinusBaseline": 0.05224630000884645,
             "candidateOverBaseline": 1.0044614000095156
           },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -0.07585488100477988,
+            "candidateOverBaseline": 0.995558415674835
+          },
           "endToEndP95Ms": {
             "candidateMinusBaseline": -2533.3162000000007,
             "candidateOverBaseline": 0.4698070680797756
@@ -3082,6 +3238,10 @@
           "durationSeconds": {
             "candidateMinusBaseline": 96.6040173000074,
             "candidateOverBaseline": 11.188180771686337
+          },
+          "durableTasksPerSecond": {
+            "candidateMinusBaseline": -19.207401652586164,
+            "candidateOverBaseline": 0.08938003598678673
           },
           "endToEndP95Ms": {
             "candidateMinusBaseline": 34332.11965,
