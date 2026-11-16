@@ -136,8 +136,10 @@ manifest = {
         "hubOwners": 2,
         "matchingPartitions": 2,
         "matchingEnabled": True,
-        "candidateIdsBaseline": False,
-        "candidateIdsFinal": True,
+        "candidateTopologyBaseline": True,
+        "candidateTopologyFinal": True,
+        "taskIdHintsBaseline": False,
+        "taskIdHintsFinal": True,
         "workerLaneInstances": 4,
         "workflowAndActivityWorkersPerLane": 1,
         "pushEnabled": True,
@@ -184,7 +186,7 @@ def pg(database, sql, run_id=None):
     return result.stdout.strip()
 
 
-def environment(arm, node, database, candidate_enabled):
+def environment(arm, node, database, task_id_hints_enabled):
     env = os.environ.copy()
     db = base_connection if arm == "baseline" else candidate_connection
     # The supplied connection string contains no Database key; database name
@@ -195,7 +197,10 @@ def environment(arm, node, database, candidate_enabled):
         "WFC_HUB_MATCHING_ENABLED": "true",
         "WFC_HUB_MATCHING_PARTITIONS": "2",
         "WFC_HUB_MATCHING_PEERS": f"http://127.0.0.1:{ports[0]},http://127.0.0.1:{ports[1]}",
-        "WFC_HUB_MATCHING_CANDIDATES_ENABLED": "true" if candidate_enabled else "false",
+        # Compare task-ID hints within the established in-memory matcher;
+        # candidate topology is on for both arms.
+        "WFC_HUB_MATCHING_CANDIDATES_ENABLED": "true",
+        "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED": "true" if task_id_hints_enabled else "false",
         "WFC_HUB_PUSH_ENABLED": "true",
         "WFC_HUB_CLAIM_ADMISSION_ENABLED": "true",
         "WFC_HUB_CLAIM_ADMISSION_MODE": "queue",
@@ -213,13 +218,13 @@ def environment(arm, node, database, candidate_enabled):
     return env
 
 
-def start(arm, database, candidate_enabled):
+def start(arm, database, task_id_hints_enabled):
     hub = baseline_hub if arm == "baseline" else final_hub
     worker = baseline_worker if arm == "baseline" else final_worker
     for index, node in enumerate(("a", "b")):
         log = (out / f"{arm}-{node}.log").open("a", encoding="utf-8")
         logs.append(log)
-        env = environment(arm, node, database, candidate_enabled)
+        env = environment(arm, node, database, task_id_hints_enabled)
         env["ASPNETCORE_URLS"] = f"http://127.0.0.1:{ports[index]}"
         processes.append(subprocess.Popen(["dotnet", str(hub)], cwd=hub.parent, env=env,
                                           stdout=log, stderr=subprocess.STDOUT))
@@ -238,7 +243,7 @@ def start(arm, database, candidate_enabled):
         raise RuntimeError(f"{arm} Hub readiness timed out")
     worker_log = (out / f"{arm}-worker.log").open("a", encoding="utf-8")
     logs.append(worker_log)
-    env = environment(arm, "a", database, candidate_enabled)
+    env = environment(arm, "a", database, task_id_hints_enabled)
     env.update({
         "WFC_HUB_URL": f"http://127.0.0.1:{ports[0]}",
         "WFC_HUB_WORKER_LANE_INSTANCES": "4",
@@ -269,8 +274,8 @@ def stop():
     logs = []
 
 
-def execute(arm, database, candidate_enabled, scenario, repetition, warmup=False):
-    start(arm, database, candidate_enabled)
+def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=False):
+    start(arm, database, task_id_hints_enabled)
     try:
         # Reset only this isolated PG17 container's cumulative query/table stats.
         pg(database, "SELECT pg_stat_statements_reset(); SELECT pg_stat_reset();")
@@ -322,7 +327,8 @@ def execute(arm, database, candidate_enabled, scenario, repetition, warmup=False
         except Exception:
             workload_summary, db_summary = {}, []
         record = {
-            "arm": arm, "candidateEnabled": candidate_enabled,
+            "arm": arm, "candidateTopologyEnabled": True,
+            "taskIdHintsEnabled": task_id_hints_enabled,
             "scenario": scenario, "repetition": repetition,
             "workloadExit": workload.returncode,
             "metricsExit": metric_result.returncode,

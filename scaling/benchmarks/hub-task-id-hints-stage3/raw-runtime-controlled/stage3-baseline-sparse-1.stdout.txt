@@ -1,0 +1,1 @@
+{"run_id": "stage3-baseline-sparse-1", "completed": 8, "requested": 8, "duration_seconds": 24.929370699988795, "output": "F:\\Project\\orca-workspaces\\feat-hub-remote-processor-scheduler\\hub-memory-candidates-luna\\scaling\\benchmarks\\hub-task-id-hints-stage3\\raw-runtime-controlled\\stage3-baseline-sparse-1.json"}

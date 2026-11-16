@@ -1,0 +1,775 @@
+{
+  "arm": "baseline",
+  "candidateTopologyEnabled": true,
+  "taskIdHintsEnabled": false,
+  "scenario": "sparse",
+  "repetition": 3,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-baseline-sparse-3",
+    "workflowCount": 8,
+    "completedWorkflows": 8,
+    "completedTasks": 80,
+    "taskCount": 80,
+    "tasksWithStartTime": 80,
+    "scheduleStartP50Ms": 189.452,
+    "scheduleStartP95Ms": 270.8436999999999,
+    "scheduleStartP99Ms": 309.9343699999999,
+    "endToEndP95Ms": 4194.701249999998,
+    "endToEndP99Ms": 4828.393049999999,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 31519,
+      "executionMs": 630.693858,
+      "sharedHit": 87490,
+      "sharedRead": 0,
+      "sharedDirtied": 109,
+      "sharedWritten": 79,
+      "sharedReadMs": 0,
+      "sharedWriteMs": 2.87413,
+      "tempRead": 0,
+      "tempWritten": 0,
+      "walRecords": 6141,
+      "walBytes": 1137760
+    },
+    [
+      {
+        "class": "candidate-discovery-page",
+        "calls": 12136,
+        "rows": 80,
+        "executionMs": 105.9198400000001,
+        "sharedHit": 17946,
+        "sharedRead": 0,
+        "walBytes": 1864
+      },
+      {
+        "class": "notification-notify-producer",
+        "calls": 678,
+        "rows": 160,
+        "executionMs": 16.030289000000014,
+        "sharedHit": 1271,
+        "sharedRead": 0,
+        "walBytes": 17634
+      },
+      {
+        "class": "notification-outbox-producer",
+        "calls": 160,
+        "rows": 160,
+        "executionMs": 2.7384569999999995,
+        "sharedHit": 562,
+        "sharedRead": 0,
+        "walBytes": 33324
+      },
+      {
+        "class": "other",
+        "calls": 17213,
+        "rows": 1471,
+        "executionMs": 273.3272059999994,
+        "sharedHit": 9509,
+        "sharedRead": 0,
+        "walBytes": 407027
+      },
+      {
+        "class": "task-other",
+        "calls": 1333,
+        "rows": 992,
+        "executionMs": 232.89023100000003,
+        "sharedHit": 58203,
+        "sharedRead": 0,
+        "walBytes": 677911
+      }
+    ],
+    [
+      {
+        "queryId": -158737896665793404,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         due_at AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $9=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$10 AND due_at<=$4 AND (due_at,sequence)>($5,$6)\r\n  ORDER BY due_at,sequence LIMIT $7\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $11) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SELECT c.task_id, arr",
+        "calls": 5888,
+        "rows": 80,
+        "executionMs": 54.50049900000001,
+        "sharedHit": 8946,
+        "sharedRead": 0,
+        "walBytes": 1232
+      },
+      {
+        "queryId": -4663709788275009443,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         lease_until AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $9=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$10 AND lease_until<$4 AND (lease_until,sequence)>($5,$6)\r\n  ORDER BY lease_until,sequence LIMIT $7\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $11) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SE",
+        "calls": 5556,
+        "rows": 0,
+        "executionMs": 46.540757000000085,
+        "sharedHit": 8070,
+        "sharedRead": 0,
+        "walBytes": 454
+      },
+      {
+        "queryId": -3381025935046837458,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         due_at AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $8=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$9 AND due_at<=$4 AND sequence>$5\r\n  ORDER BY sequence LIMIT $6\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $10) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SELECT c.task_id, array_agg(c.resource_key ",
+        "calls": 692,
+        "rows": 0,
+        "executionMs": 4.878584000000005,
+        "sharedHit": 930,
+        "sharedRead": 0,
+        "walBytes": 178
+      },
+      {
+        "queryId": 8337707147040631944,
+        "query": "WITH picked AS MATERIALIZED (\r\n    SELECT id FROM wfc_scale.hub_notification_outbox ORDER BY id\r\n    LIMIT $1 FOR UPDATE SKIP LOCKED\r\n), removed AS (\r\n    DELETE FROM wfc_scale.hub_notification_outbox o USING picked p\r\n    WHERE o.id=p.id RETURNING o.hub_id,o.matching_payload,o.created_at\r\n)\r\nSELECT pg_notify($2,hub_id),\r\n       pg_notify($3,matching_payload),\r\n       extract($4 FROM (clock_timestamp()-created_at))::double precision\r\nFROM removed",
+        "calls": 678,
+        "rows": 160,
+        "executionMs": 16.030289000000014,
+        "sharedHit": 1271,
+        "sharedRead": 0,
+        "walBytes": 17634
+      },
+      {
+        "queryId": -4156241320892535744,
+        "query": "SELECT COALESCE(max(sequence),$1), clock_timestamp()\r\nFROM wfc_scale.hub_task",
+        "calls": 174,
+        "rows": 174,
+        "executionMs": 2.6253249999999997,
+        "sharedHit": 698,
+        "sharedRead": 0,
+        "walBytes": 56
+      },
+      {
+        "queryId": 8407982565987358036,
+        "query": "INSERT INTO wfc_scale.hub_notification_outbox(hub_id,matching_payload)\n                VALUES (NEW.hub_id,payload)",
+        "calls": 160,
+        "rows": 160,
+        "executionMs": 2.7384569999999995,
+        "sharedHit": 562,
+        "sharedRead": 0,
+        "walBytes": 33324
+      },
+      {
+        "queryId": -5902821197407510828,
+        "query": "SELECT DISTINCT candidates.id,candidates.hub_id FROM (\r\n  SELECT w.id,w.hub_id\r\n  FROM wfc_scale.hub_native_subscription s\r\n  JOIN wfc_scale.hub_workflow w ON w.id=s.workflow_id\r\n  JOIN wfc_scale.hub_native_event e ON e.hub_id=w.hub_id AND e.event_name=s.event_name AND e.event_key=s.event_key\r\n  WHERE w.execution_mode=$2 AND w.native_status IN ($3,$4)\r\n    AND e.effective_at>=s.as_of AND e.effective_at<=now()\r\n    AND NOT EXISTS(SELECT $5 FROM wfc_scale.hub_native_inbox i WHERE i.workflow_id=w.id\r\n      AND i.pointer_id=s.pointer_id AND i.kind=$6 AND (NOT i.consumed OR i.source_key=e.id::text)",
+        "calls": 98,
+        "rows": 0,
+        "executionMs": 2.314882,
+        "sharedHit": 606,
+        "sharedRead": 0,
+        "walBytes": 622
+      },
+      {
+        "queryId": 2941545203197895549,
+        "query": "UPDATE wfc_scale.hub_task\r\nSET state = $4, owner = $1, last_owner = $1,\r\n    epoch = epoch + $5, attempts = attempts + $6,\r\n    lease_until = now() + $2, updated_at = now()\r\nWHERE id = $3\r\nRETURNING epoch, lease_until",
+        "calls": 80,
+        "rows": 80,
+        "executionMs": 24.546364999999998,
+        "sharedHit": 2272,
+        "sharedRead": 0,
+        "walBytes": 87586
+      },
+      {
+        "queryId": -8969340771373560749,
+        "query": "SELECT $2 FROM ONLY \"wfc_scale\".\"hub_task\" x WHERE \"id\" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x",
+        "calls": 80,
+        "rows": 80,
+        "executionMs": 0.7735869999999999,
+        "sharedHit": 322,
+        "sharedRead": 0,
+        "walBytes": 1812
+      },
+      {
+        "queryId": 5645189275364011393,
+        "query": "UPDATE wfc_scale.hub_task SET state=$5,owner=$6,lease_until=$7,result_json=$1::jsonb,updated_at=now()\r\nWHERE id=$2 AND owner=$3 AND epoch=$4\r\n  AND CASE state WHEN $8 THEN lease_until>clock_timestamp() ELSE $9 END",
+        "calls": 80,
+        "rows": 80,
+        "executionMs": 32.98532899999999,
+        "sharedHit": 2839,
+        "sharedRead": 0,
+        "walBytes": 249553
+      },
+      {
+        "queryId": 4207756503835649042,
+        "query": "SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,\r\n       payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)\r\nFROM wfc_scale.hub_task t WHERE id = $1\r\n  AND ($2 = $9 OR (t.hub_id = $3 AND t.epoch = $4\r\n    AND EXISTS (SELECT $10 FROM jsonb_to_recordset($5)\r\n        AS capability(hub text, task_type text, version integer)\r\n        WHERE capability.hub = t.hub_id AND capability.task_type = t.task_type\r\n          AND capability.version = t.task_version)))\r\n  AND partition_id % $6 = $7\r\n  AND (task_type NOT IN ($11,$12) OR $8 IS NULL OR EXISTS(\r\n    SELECT $13 F",
+        "calls": 80,
+        "rows": 80,
+        "executionMs": 4.694176999999998,
+        "sharedHit": 633,
+        "sharedRead": 0,
+        "walBytes": 4500
+      },
+      {
+        "queryId": 4471210434899276794,
+        "query": "SELECT c.resource_key, r.capacity, r.strict_fifo\r\nFROM wfc_scale.hub_task_constraint c\r\nJOIN wfc_scale.hub_resource r ON r.resource_key = c.resource_key\r\nWHERE c.task_id = $1 ORDER BY c.resource_key",
+        "calls": 80,
+        "rows": 56,
+        "executionMs": 1.5931349999999997,
+        "sharedHit": 355,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 2488358458720309906,
+        "query": "INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)\r\nVALUES ($1,$2)",
+        "calls": 56,
+        "rows": 56,
+        "executionMs": 10.511886999999998,
+        "sharedHit": 1107,
+        "sharedRead": 0,
+        "walBytes": 41893
+      },
+      {
+        "queryId": 9174270338186973632,
+        "query": "UPDATE wfc_scale.hub_task_attempt a SET outcome=$2,finished_at=clock_timestamp()\r\nFROM wfc_scale.hub_task t WHERE a.task_id=t.id AND t.workflow_id=$1\r\n  AND a.workflow_id=$1\r\n  AND t.last_error=$3 AND a.finished_at IS NULL",
+        "calls": 56,
+        "rows": 0,
+        "executionMs": 0.756277,
+        "sharedHit": 152,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -7780779095114130492,
+        "query": "SELECT count(*) FILTER (WHERE t.state = $3 AND t.lease_until > now()),\r\n       count(*) FILTER (WHERE t.sequence < $1 AND t.state IN ($4,$5))\r\nFROM wfc_scale.hub_task_constraint c\r\nJOIN wfc_scale.hub_task t ON t.id = c.task_id\r\nWHERE c.resource_key = $2",
+        "calls": 56,
+        "rows": 56,
+        "executionMs": 82.489206,
+        "sharedHit": 29971,
+        "sharedRead": 0,
+        "walBytes": 60
+      },
+      {
+        "queryId": 1229848752411209535,
+        "query": "SELECT state,owner,last_owner,epoch,lease_until,result_json::text\r\nFROM wfc_scale.hub_task WHERE id=$1 AND workflow_id=$2\r\n  AND task_type=$3 FOR UPDATE",
+        "calls": 56,
+        "rows": 56,
+        "executionMs": 1.236292,
+        "sharedHit": 284,
+        "sharedRead": 0,
+        "walBytes": 3024
+      },
+      {
+        "queryId": -5863606162039426006,
+        "query": "UPDATE wfc_scale.hub_task SET state=$3,owner=$4,lease_until=$5,\r\n  last_error=$6,updated_at=now()\r\nWHERE workflow_id=$1 AND dispatch_key IS NOT NULL AND state IN ($7,$8)\r\n  AND NOT (dispatch_key=ANY($2))",
+        "calls": 56,
+        "rows": 0,
+        "executionMs": 0.68896,
+        "sharedHit": 243,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 874710674216968174,
+        "query": "INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload)\r\nSELECT $1,$2,$3,$5,$6,$4,$7::jsonb\r\nFROM wfc_scale.hub_workflow WHERE id=$4 AND native_status=$8\r\nON CONFLICT DO NOTHING",
+        "calls": 56,
+        "rows": 56,
+        "executionMs": 16.394003,
+        "sharedHit": 1998,
+        "sharedRead": 0,
+        "walBytes": 143642
+      },
+      {
+        "queryId": 6661701810529962074,
+        "query": "WITH RECURSIVE ready AS (\r\n    (SELECT hub_id FROM wfc_scale.hub_task\r\n     WHERE state=$1 AND due_at<=now()\r\n     ORDER BY hub_id LIMIT $2)\r\n    UNION ALL\r\n    SELECT next.hub_id\r\n    FROM ready previous\r\n    CROSS JOIN LATERAL (\r\n        SELECT hub_id FROM wfc_scale.hub_task\r\n        WHERE hub_id>previous.hub_id AND state=$3 AND due_at<=now()\r\n        ORDER BY hub_id LIMIT $4\r\n    ) next\r\n), expired AS (\r\n    (SELECT hub_id FROM wfc_scale.hub_task\r\n     WHERE state=$5 AND lease_until<now() AND attempts<max_attempts\r\n     ORDER BY hub_id LIMIT $6)\r\n    UNION ALL\r\n    SELECT next.hub_id\r\n    F",
+        "calls": 26,
+        "rows": 12,
+        "executionMs": 0.8568360000000002,
+        "sharedHit": 183,
+        "sharedRead": 0,
+        "walBytes": 52
+      },
+      {
+        "queryId": -3898308412557691860,
+        "query": "WITH expired AS (UPDATE wfc_scale.hub_task SET state=$1, owner=$2, lease_until=$3,\r\n    updated_at=now(), last_error=coalesce(last_error,$4)\r\nWHERE state=$5 AND lease_until<now() AND attempts>=max_attempts RETURNING id),\r\nclosed AS (\r\n  UPDATE wfc_scale.hub_task_attempt a SET finished_at=clock_timestamp(),outcome=$6\r\n  FROM expired e WHERE a.task_id=e.id AND a.finished_at IS NULL RETURNING a.task_id\r\n) SELECT count(*) FROM expired",
+        "calls": 26,
+        "rows": 26,
+        "executionMs": 0.29599000000000003,
+        "sharedHit": 26,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 2461380383874331228,
+        "query": "UPDATE wfc_scale.hub_workflow w\r\nSET state=$1,completed_at=now(),updated_at=now(),\r\n    last_error=$2\r\nWHERE w.state IN ($3,$4) AND EXISTS (\r\n    SELECT $5 FROM wfc_scale.hub_task t\r\n    WHERE t.workflow_id=w.id AND t.workflow_step IS NOT NULL\r\n      AND t.state=$6\r\n)",
+        "calls": 26,
+        "rows": 0,
+        "executionMs": 0.793924,
+        "sharedHit": 156,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -3316585461435732610,
+        "query": "SELECT $3 FROM wfc_scale.hub_task WHERE workflow_id=$1 AND dispatch_key=$2",
+        "calls": 24,
+        "rows": 0,
+        "executionMs": 0.28134899999999996,
+        "sharedHit": 48,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 1502822494400516257,
+        "query": "INSERT INTO wfc_scale.hub_task_attempt\r\n    (task_id,epoch,workflow_id,step_index,attempt_number,worker_id)\r\nVALUES ($1,$2,$3,$4,$5,$6)",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 5.417166,
+        "sharedHit": 456,
+        "sharedRead": 0,
+        "walBytes": 9976
+      },
+      {
+        "queryId": 1120805089600065976,
+        "query": "UPDATE wfc_scale.hub_task_attempt SET outcome=$3,finished_at=clock_timestamp()\r\nWHERE task_id=$1 AND epoch=$2 AND finished_at IS NULL",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 1.357549,
+        "sharedHit": 147,
+        "sharedRead": 0,
+        "walBytes": 2206
+      },
+      {
+        "queryId": -4781613053022268404,
+        "query": "UPDATE wfc_scale.hub_task_attempt\r\nSET finished_at=clock_timestamp(), outcome=$2\r\nWHERE task_id=$1 AND finished_at IS NULL",
+        "calls": 24,
+        "rows": 0,
+        "executionMs": 0.172509,
+        "sharedHit": 48,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -6228291267884267900,
+        "query": "SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id\r\nFROM wfc_scale.hub_workflow w JOIN wfc_scale.hub_task t ON t.workflow_id=w.id\r\nWHERE t.id=$1 AND w.execution_mode=$2 AND t.dispatch_key IS NOT NULL FOR UPDATE OF w",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 13.554162,
+        "sharedHit": 11697,
+        "sharedRead": 0,
+        "walBytes": 1296
+      },
+      {
+        "queryId": 4662843380596484644,
+        "query": "INSERT INTO wfc_scale.hub_task\r\n(id,hub_id,partition_id,task_type,task_version,workflow_id,\r\n workflow_step,payload)\r\nVALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 10.498388,
+        "sharedHit": 672,
+        "sharedRead": 0,
+        "walBytes": 83927
+      },
+      {
+        "queryId": -2886730416395885033,
+        "query": "SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=$1 FOR UPDATE",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 0.41816299999999995,
+        "sharedHit": 96,
+        "sharedRead": 0,
+        "walBytes": 1296
+      },
+      {
+        "queryId": -5407078905680629930,
+        "query": "UPDATE wfc_scale.hub_task SET execution_pointer_id=$1,dispatch_key=$2,native_step_id=$3,\r\n  due_at=COALESCE($4::timestamptz,due_at) WHERE id=$5",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 5.708172,
+        "sharedHit": 706,
+        "sharedRead": 0,
+        "walBytes": 46410
+      },
+      {
+        "queryId": -4282012053888306764,
+        "query": "SELECT t.hub_id,\r\n       CASE WHEN t.dispatch_key IS NOT NULL THEN $2\r\n            WHEN w.execution_mode=$3 AND t.workflow_step IS NOT NULL\r\n                 AND t.task_type<>$4 THEN $5\r\n            WHEN t.workflow_step IS NOT NULL THEN $6\r\n            ELSE $7 END\r\nFROM wfc_scale.hub_task t\r\nLEFT JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id\r\nWHERE t.id=$1",
+        "calls": 24,
+        "rows": 24,
+        "executionMs": 0.697539,
+        "sharedHit": 146,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -6675332504614927620,
+        "query": "SELECT (SELECT count(*) FROM pg_stat_activity\r\n        WHERE datname=current_database()),\r\n       (SELECT count(*) FROM pg_stat_activity\r\n        WHERE datname=current_database() AND state=$1),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$2 AND due_at<=now()),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$3 AND lease_until>now()),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$4)",
+        "calls": 10,
+        "rows": 10,
+        "executionMs": 7.595696,
+        "sharedHit": 1287,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 7932484857810479347,
+        "query": "UPDATE wfc_scale.hub_task SET state=$2,owner=$3,lease_until=$4,last_error=$5,updated_at=now()\r\nWHERE workflow_id=$1 AND state IN ($6,$7)",
+        "calls": 8,
+        "rows": 0,
+        "executionMs": 0.050704,
+        "sharedHit": 16,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 2809298347141988854,
+        "query": "UPDATE wfc_scale.hub_task_attempt a SET outcome=$2,finished_at=clock_timestamp()\r\nFROM wfc_scale.hub_task t WHERE t.id=a.task_id AND t.workflow_id=$1\r\n  AND a.workflow_id=$1\r\n  AND t.last_error=$3 AND a.finished_at IS NULL",
+        "calls": 8,
+        "rows": 0,
+        "executionMs": 0.10644000000000002,
+        "sharedHit": 24,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -2403498140185049578,
+        "query": "SELECT hub_id,task_type,task_version,partition_id\r\nFROM wfc_scale.hub_task\r\nWHERE attempts < max_attempts AND\r\n      ((state=$6 AND due_at<=now()) OR\r\n      (state=$7 AND lease_until<now()))\r\n  AND ($1 OR (hub_id,task_type,task_version,partition_id) >\r\n      ($2,$3,$4,$5))\r\nGROUP BY hub_id,task_type,task_version,partition_id\r\nORDER BY hub_id,task_type,task_version,partition_id\r\nLIMIT $8",
+        "calls": 4,
+        "rows": 1,
+        "executionMs": 0.08796999999999999,
+        "sharedHit": 17,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 7577418186404948493,
+        "query": "WITH workflows AS (\r\n  SELECT * FROM wfc_scale.hub_workflow WHERE run_id=$1\r\n), tasks AS (\r\n  SELECT t.* FROM wfc_scale.hub_task t JOIN workflows w ON w.id=t.workflow_id\r\n), claim_events AS (\r\n  SELECT e.task_id, min(e.occurred_at) AS claimed_at\r\n  FROM wfc_scale.hub_workflow_event e JOIN workflows w ON w.id=e.workflow_id\r\n  WHERE e.event_type=$2 GROUP BY e.task_id\r\n), attempts AS (\r\n  SELECT a.task_id, min(a.claimed_at) AS claimed_at\r\n  FROM wfc_scale.hub_task_attempt a JOIN workflows w ON w.id=a.workflow_id GROUP BY a.task_id\r\n), starts AS (\r\n  SELECT t.id, t.created_at, LEAST(a.claimed_at, ",
+        "calls": 1,
+        "rows": 1,
+        "executionMs": 3.388249,
+        "sharedHit": 998,
+        "sharedRead": 0,
+        "walBytes": 0
+      }
+    ],
+    {
+      "tasksInserted": 80,
+      "outboxInserted": 160,
+      "outboxDeleted": 160
+    }
+  ],
+  "durationSeconds": 24.367016499993042,
+  "sharedTenant": false,
+  "staggerMs": 1500,
+  "load": {
+    "run_id": "stage3-baseline-sparse-3",
+    "vus": 1,
+    "requested": 8,
+    "duration_seconds": 24.367016499993042,
+    "shared_tenant": false,
+    "stagger_ms": 1500,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794862509.210035,
+        "poll_errors": 0,
+        "workflow_id": "e86ce2fb-e97d-484e-99f8-04e9d9f93f1b",
+        "state": "Complete",
+        "elapsed_ms": 3086.706600006437
+      },
+      {
+        "index": 1,
+        "start_unix": 1794862512.2967885,
+        "poll_errors": 0,
+        "workflow_id": "3af8bb69-a210-4471-bedd-cfb7dda975bf",
+        "state": "Complete",
+        "elapsed_ms": 3042.9374999948777
+      },
+      {
+        "index": 2,
+        "start_unix": 1794862515.3397563,
+        "poll_errors": 0,
+        "workflow_id": "47161e46-60c0-4143-bab1-6e991c837d39",
+        "state": "Complete",
+        "elapsed_ms": 3026.559800011455
+      },
+      {
+        "index": 3,
+        "start_unix": 1794862518.3663638,
+        "poll_errors": 0,
+        "workflow_id": "36de20d0-9091-4f0d-8cb5-59e54ffafcda",
+        "state": "Complete",
+        "elapsed_ms": 3029.219899995951
+      },
+      {
+        "index": 4,
+        "start_unix": 1794862521.3956304,
+        "poll_errors": 0,
+        "workflow_id": "3fa20ba6-f3b5-4028-acd8-4a7eb7bb73ac",
+        "state": "Complete",
+        "elapsed_ms": 3028.7758999911603
+      },
+      {
+        "index": 5,
+        "start_unix": 1794862524.4244335,
+        "poll_errors": 0,
+        "workflow_id": "97b7e119-a5f5-4f79-8419-dadb3af82a53",
+        "state": "Complete",
+        "elapsed_ms": 3040.2648000017507
+      },
+      {
+        "index": 6,
+        "start_unix": 1794862527.464723,
+        "poll_errors": 0,
+        "workflow_id": "ed52616e-3c3e-4178-99e8-ae6b9ecce9e3",
+        "state": "Complete",
+        "elapsed_ms": 3041.2666000047466
+      },
+      {
+        "index": 7,
+        "start_unix": 1794862530.506025,
+        "poll_errors": 0,
+        "workflow_id": "61ec277b-24ef-4524-92cb-a8075600e773",
+        "state": "Complete",
+        "elapsed_ms": 3029.1693000035593
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794862509.1683013,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 61.41,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862512.433048,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 10,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 69.69,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862515.839203,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 22,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 67.76,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862518.9900336,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 32,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 69.2,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862522.1882381,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 43,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 53.48,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862525.5691626,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 54,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 49.74,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862528.7224514,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 65,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 55.3,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794862531.9379206,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 128,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 75,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 54.77,
+        "docker_exit": 0
+      }
+    ]
+  },
+  "benchmarkManifest": {
+    "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+    "candidateSourceHeadAtRun": "75144b93632093454ad45e54f702b97450fccfcb",
+    "baselineHubBinarySha256": "e15ef4db4a19072ba9cb6fbcd6ec9207fe7fa78bfe2b7ca8d548bb2fed5697f8",
+    "baselineWorkerBinarySha256": "45c4dd959fe1bb5d547dacb7b2536abcea8d89550fd1962279c4b7502687df30",
+    "candidateHubBinarySha256": "ef855c817fe6a60a4b1cb33d1cfc6dbd43d9b16f2313382d26558b7de8a990cf",
+    "candidateWorkerBinarySha256": "66f3db92071544307d67784ebda6a896ebb3167c071411e61f49d5709897a3a6",
+    "runtimeSourceSha256": {
+      "HubTaskStore.cs": {
+        "baseline": "ab5c17417f058ad2d8e12be945e80977e0935c4beb027b5fd98fd7dbc028235d",
+        "candidate": "70a5ac09a654b43830e5ae30376a7f0ed9f09baa5ac3826208e872f1cae8ca18"
+      },
+      "HubCandidateReader.cs": {
+        "baseline": "8cb7f6a7fb179749ea63cdd8c927a55247c249841ac9957e21ee0bde5e7ce67c",
+        "candidate": "144610b23de8b3eaaaa8eb993b9f0cdb2e281dbdd58bc6916d0c4e933ad11830"
+      },
+      "HubPartitionCandidateRegistry.cs": {
+        "baseline": "7d6809c73529340085528d96e6c316834f308923738db347e4b5699bf41299e0",
+        "candidate": "3f5ec6519ae8e4d10c12a4aafbcf7e8581ecb3c7a7e6f669a830f437c76199ba"
+      },
+      "HubCandidateAcquisition.cs": {
+        "baseline": "6987a163207e8bbfc24b1b56d914be960115681e0434b0acd9cef49ec540a8ac",
+        "candidate": "2a8eef02d590dba4d458cbebe03b29a97751b024995cc0ea5cad7130f1e682ed"
+      },
+      "HubMatchingOwnership.cs": {
+        "baseline": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81",
+        "candidate": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81"
+      },
+      "PostgresHubNotificationListener.cs": {
+        "baseline": "adbaf0bb64a8c5c15786011a0a6ed433b1dc0a1a8fc9b92ade88972598509a19",
+        "candidate": "5e2ab2d9c4fdd3ebab9018282c7311f55295398ad319ec149e2f6e0c6381a03d"
+      },
+      "HubReadinessBroadcaster.cs": {
+        "baseline": "321240d3cfcd935090d9e0cca05ec01957056db0d9119fe34ae78bce01124bed",
+        "candidate": "8ea370a9d925db09b2595eed7cf31eb8a05210cd77aa403f801479e72c4bbddb"
+      },
+      "HubGatewayEndpoints.cs": {
+        "baseline": "f2bd8623d41844d58a81a5c29bbe4d2f3ac55738f7b10143644d94e719b18470",
+        "candidate": "44b3c4def43ad1598cc783fb6c62dfe719bfa071a8623025d6d29154756b82be"
+      }
+    },
+    "candidateMigrationSha256": "519317b0eb8e0f511389ef86ab77d4b3c0ba95240e171351b280757835369ed9",
+    "runtimeFlags": {
+      "hubOwners": 2,
+      "matchingPartitions": 2,
+      "matchingEnabled": true,
+      "candidateTopologyBaseline": true,
+      "candidateTopologyFinal": true,
+      "taskIdHintsBaseline": false,
+      "taskIdHintsFinal": true,
+      "workerLaneInstances": 4,
+      "workflowAndActivityWorkersPerLane": 1,
+      "pushEnabled": true,
+      "claimAdmission": "queue, limit 3",
+      "candidateBackpressure": false,
+      "candidateBatchSize": 32,
+      "outboxEnabled": true,
+      "writerOutboxSetting": "database-level wfc.hub_notification_outbox=on for isolated paired DBs",
+      "outboxDispatcher": true,
+      "historyTemplateRows": 20000
+    },
+    "databaseMeasurement": {
+      "postgresMajor": 17,
+      "pgStatStatementsTrack": "all (including nested trigger statements)",
+      "trackIoTiming": true,
+      "workloadSize": "20 workflows/200 tasks burst and steady; 8 workflows/80 tasks sparse and shared-resource strict FIFO",
+      "rawRepetitionsPerArmAndScenario": 5,
+      "isolation": "dedicated disposable PostgreSQL 17 container; paired databases start with equal 20,000 terminal-task history rows and zero workflows",
+      "baselineDatabase": "stage3baseid",
+      "candidateDatabase": "stage3candid",
+      "bufferTiming": "track_io_timing=on",
+      "serverCpu": "not directly available; pg_stat_statements execution time includes wait time and is not CPU time"
+    }
+  }
+}

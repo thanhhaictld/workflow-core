@@ -1,0 +1,1428 @@
+{
+  "arm": "candidate",
+  "candidateTopologyEnabled": true,
+  "taskIdHintsEnabled": true,
+  "scenario": "steady",
+  "repetition": 5,
+  "workloadExit": 0,
+  "metricsExit": 0,
+  "workload": {
+    "runId": "stage3-candidate-steady-5",
+    "workflowCount": 20,
+    "completedWorkflows": 20,
+    "completedTasks": 200,
+    "taskCount": 200,
+    "tasksWithStartTime": 200,
+    "scheduleStartP50Ms": 70.4675,
+    "scheduleStartP95Ms": 29358.495949999982,
+    "scheduleStartP99Ms": 32219.81177,
+    "endToEndP95Ms": 35287.83545,
+    "endToEndP99Ms": 35445.67909,
+    "tasksRetried": 0,
+    "extraClaims": 0,
+    "leaseExpiries": 0,
+    "deadTasks": 0
+  },
+  "database": [
+    {
+      "statements": 52985,
+      "executionMs": 1513.6883369999991,
+      "sharedHit": 299234,
+      "sharedRead": 0,
+      "sharedDirtied": 444,
+      "sharedWritten": 209,
+      "sharedReadMs": 0,
+      "sharedWriteMs": 6.4414489999999995,
+      "tempRead": 0,
+      "tempWritten": 0,
+      "walRecords": 17808,
+      "walBytes": 3367527
+    },
+    [
+      {
+        "class": "candidate-discovery-page",
+        "calls": 14230,
+        "rows": 352,
+        "executionMs": 164.73985799999986,
+        "sharedHit": 54325,
+        "sharedRead": 0,
+        "walBytes": 2032
+      },
+      {
+        "class": "id-hydration",
+        "calls": 260,
+        "rows": 195,
+        "executionMs": 15.361289000000003,
+        "sharedHit": 2787,
+        "sharedRead": 0,
+        "walBytes": 2908
+      },
+      {
+        "class": "notification-notify-producer",
+        "calls": 2548,
+        "rows": 800,
+        "executionMs": 52.892042999999994,
+        "sharedHit": 8792,
+        "sharedRead": 0,
+        "walBytes": 86464
+      },
+      {
+        "class": "notification-outbox-producer",
+        "calls": 800,
+        "rows": 800,
+        "executionMs": 10.919140999999994,
+        "sharedHit": 2479,
+        "sharedRead": 0,
+        "walBytes": 227336
+      },
+      {
+        "class": "other",
+        "calls": 31726,
+        "rows": 4449,
+        "executionMs": 581.1187439999995,
+        "sharedHit": 24505,
+        "sharedRead": 0,
+        "walBytes": 1153800
+      },
+      {
+        "class": "task-other",
+        "calls": 3422,
+        "rows": 2438,
+        "executionMs": 688.9463650000002,
+        "sharedHit": 206347,
+        "sharedRead": 0,
+        "walBytes": 1894987
+      }
+    ],
+    [
+      {
+        "queryId": -158737896665793404,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         due_at AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $9=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$10 AND due_at<=$4 AND (due_at,sequence)>($5,$6)\r\n  ORDER BY due_at,sequence LIMIT $7\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $11) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SELECT c.task_id, arr",
+        "calls": 6966,
+        "rows": 315,
+        "executionMs": 89.009529,
+        "sharedHit": 27724,
+        "sharedRead": 0,
+        "walBytes": 1426
+      },
+      {
+        "queryId": -4663709788275009443,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         lease_until AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $9=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$10 AND lease_until<$4 AND (lease_until,sequence)>($5,$6)\r\n  ORDER BY lease_until,sequence LIMIT $7\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $11) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SE",
+        "calls": 6496,
+        "rows": 0,
+        "executionMs": 67.63619199999985,
+        "sharedHit": 23709,
+        "sharedRead": 0,
+        "walBytes": 606
+      },
+      {
+        "queryId": 8337707147040631944,
+        "query": "WITH picked AS MATERIALIZED (\r\n    SELECT id FROM wfc_scale.hub_notification_outbox ORDER BY id\r\n    LIMIT $1 FOR UPDATE SKIP LOCKED\r\n), removed AS (\r\n    DELETE FROM wfc_scale.hub_notification_outbox o USING picked p\r\n    WHERE o.id=p.id RETURNING o.hub_id,o.matching_payload,o.created_at\r\n)\r\nSELECT pg_notify($2,hub_id),\r\n       pg_notify($3,matching_payload),\r\n       extract($4 FROM (clock_timestamp()-created_at))::double precision\r\nFROM removed",
+        "calls": 2548,
+        "rows": 800,
+        "executionMs": 52.892042999999994,
+        "sharedHit": 8792,
+        "sharedRead": 0,
+        "walBytes": 86464
+      },
+      {
+        "queryId": 8407982565987358036,
+        "query": "INSERT INTO wfc_scale.hub_notification_outbox(hub_id,matching_payload)\n            VALUES (NEW.hub_id,payload)",
+        "calls": 800,
+        "rows": 800,
+        "executionMs": 10.919140999999994,
+        "sharedHit": 2479,
+        "sharedRead": 0,
+        "walBytes": 227336
+      },
+      {
+        "queryId": -3381025935046837458,
+        "query": "WITH page AS MATERIALIZED (\r\n  SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,\r\n         due_at AS deadline\r\n  FROM wfc_scale.hub_task\r\n  WHERE hub_id=$1 AND partition_id % $8=$2 AND attempts < max_attempts\r\n    AND sequence<=$3 AND state=$9 AND due_at<=$4 AND sequence>$5\r\n  ORDER BY sequence LIMIT $6\r\n), resource_sizes AS MATERIALIZED (\r\n  SELECT c.task_id, sum(octet_length(c.resource_key) + $10) AS bytes\r\n  FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id\r\n  GROUP BY c.task_id\r\n), resources AS (\r\n  SELECT c.task_id, array_agg(c.resource_key ",
+        "calls": 768,
+        "rows": 37,
+        "executionMs": 8.094136999999996,
+        "sharedHit": 2892,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -5902821197407510828,
+        "query": "SELECT DISTINCT candidates.id,candidates.hub_id FROM (\r\n  SELECT w.id,w.hub_id\r\n  FROM wfc_scale.hub_native_subscription s\r\n  JOIN wfc_scale.hub_workflow w ON w.id=s.workflow_id\r\n  JOIN wfc_scale.hub_native_event e ON e.hub_id=w.hub_id AND e.event_name=s.event_name AND e.event_key=s.event_key\r\n  WHERE w.execution_mode=$2 AND w.native_status IN ($3,$4)\r\n    AND e.effective_at>=s.as_of AND e.effective_at<=now()\r\n    AND NOT EXISTS(SELECT $5 FROM wfc_scale.hub_native_inbox i WHERE i.workflow_id=w.id\r\n      AND i.pointer_id=s.pointer_id AND i.kind=$6 AND (NOT i.consumed OR i.source_key=e.id::text)",
+        "calls": 418,
+        "rows": 0,
+        "executionMs": 9.728128999999996,
+        "sharedHit": 5244,
+        "sharedRead": 0,
+        "walBytes": 290
+      },
+      {
+        "queryId": 334665619159952646,
+        "query": "WITH requested AS MATERIALIZED (\r\n  SELECT unnest($1::uuid[]) AS id\r\n), page AS MATERIALIZED (\r\n  SELECT t.id,t.sequence,t.hub_id,t.partition_id,t.task_type,t.task_version,t.workflow_id,\r\n         t.epoch,t.due_at,t.lease_until,t.state\r\n  FROM requested r JOIN wfc_scale.hub_task t ON t.id=r.id\r\n  WHERE t.hub_id=$2 AND t.partition_id % $3=$4\r\n    AND t.attempts<t.max_attempts\r\n    AND ((t.state=$6 AND t.due_at<=clock_timestamp())\r\n         OR (t.state=$7 AND t.lease_until<clock_timestamp()))\r\n), budget AS MATERIALIZED (\r\n  SELECT GREATEST($8,$5/GREATEST(count(*),$9)) AS per_candidate FROM page\r",
+        "calls": 260,
+        "rows": 195,
+        "executionMs": 15.361289000000003,
+        "sharedHit": 2787,
+        "sharedRead": 0,
+        "walBytes": 2908
+      },
+      {
+        "queryId": -4156241320892535744,
+        "query": "SELECT COALESCE(max(sequence),$1), clock_timestamp()\r\nFROM wfc_scale.hub_task",
+        "calls": 203,
+        "rows": 203,
+        "executionMs": 3.662351999999999,
+        "sharedHit": 812,
+        "sharedRead": 0,
+        "walBytes": 232
+      },
+      {
+        "queryId": 5645189275364011393,
+        "query": "UPDATE wfc_scale.hub_task SET state=$5,owner=$6,lease_until=$7,result_json=$1::jsonb,updated_at=now()\r\nWHERE id=$2 AND owner=$3 AND epoch=$4\r\n  AND CASE state WHEN $8 THEN lease_until>clock_timestamp() ELSE $9 END",
+        "calls": 200,
+        "rows": 200,
+        "executionMs": 93.77675299999997,
+        "sharedHit": 7512,
+        "sharedRead": 0,
+        "walBytes": 683406
+      },
+      {
+        "queryId": 4207756503835649042,
+        "query": "SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,\r\n       payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)\r\nFROM wfc_scale.hub_task t WHERE id = $1\r\n  AND ($2 = $9 OR (t.hub_id = $3 AND t.epoch = $4\r\n    AND EXISTS (SELECT $10 FROM jsonb_to_recordset($5)\r\n        AS capability(hub text, task_type text, version integer)\r\n        WHERE capability.hub = t.hub_id AND capability.task_type = t.task_type\r\n          AND capability.version = t.task_version)))\r\n  AND partition_id % $6 = $7\r\n  AND (task_type NOT IN ($11,$12) OR $8 IS NULL OR EXISTS(\r\n    SELECT $13 F",
+        "calls": 200,
+        "rows": 200,
+        "executionMs": 10.529860000000005,
+        "sharedHit": 1553,
+        "sharedRead": 0,
+        "walBytes": 10862
+      },
+      {
+        "queryId": 4471210434899276794,
+        "query": "SELECT c.resource_key, r.capacity, r.strict_fifo\r\nFROM wfc_scale.hub_task_constraint c\r\nJOIN wfc_scale.hub_resource r ON r.resource_key = c.resource_key\r\nWHERE c.task_id = $1 ORDER BY c.resource_key",
+        "calls": 200,
+        "rows": 140,
+        "executionMs": 3.6401640000000026,
+        "sharedHit": 880,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 2941545203197895549,
+        "query": "UPDATE wfc_scale.hub_task\r\nSET state = $4, owner = $1, last_owner = $1,\r\n    epoch = epoch + $5, attempts = attempts + $6,\r\n    lease_until = now() + $2, updated_at = now()\r\nWHERE id = $3\r\nRETURNING epoch, lease_until",
+        "calls": 200,
+        "rows": 200,
+        "executionMs": 80.66321500000001,
+        "sharedHit": 6473,
+        "sharedRead": 0,
+        "walBytes": 354142
+      },
+      {
+        "queryId": -8969340771373560749,
+        "query": "SELECT $2 FROM ONLY \"wfc_scale\".\"hub_task\" x WHERE \"id\" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x",
+        "calls": 200,
+        "rows": 200,
+        "executionMs": 1.844064,
+        "sharedHit": 809,
+        "sharedRead": 0,
+        "walBytes": 4670
+      },
+      {
+        "queryId": 9174270338186973632,
+        "query": "UPDATE wfc_scale.hub_task_attempt a SET outcome=$2,finished_at=clock_timestamp()\r\nFROM wfc_scale.hub_task t WHERE a.task_id=t.id AND t.workflow_id=$1\r\n  AND a.workflow_id=$1\r\n  AND t.last_error=$3 AND a.finished_at IS NULL",
+        "calls": 140,
+        "rows": 0,
+        "executionMs": 1.8002120000000004,
+        "sharedHit": 403,
+        "sharedRead": 0,
+        "walBytes": 886
+      },
+      {
+        "queryId": 2488358458720309906,
+        "query": "INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)\r\nVALUES ($1,$2)",
+        "calls": 140,
+        "rows": 140,
+        "executionMs": 23.107509000000007,
+        "sharedHit": 2715,
+        "sharedRead": 0,
+        "walBytes": 106285
+      },
+      {
+        "queryId": -7780779095114130492,
+        "query": "SELECT count(*) FILTER (WHERE t.state = $3 AND t.lease_until > now()),\r\n       count(*) FILTER (WHERE t.sequence < $1 AND t.state IN ($4,$5))\r\nFROM wfc_scale.hub_task_constraint c\r\nJOIN wfc_scale.hub_task t ON t.id = c.task_id\r\nWHERE c.resource_key = $2",
+        "calls": 140,
+        "rows": 140,
+        "executionMs": 236.03951999999995,
+        "sharedHit": 109148,
+        "sharedRead": 0,
+        "walBytes": 372
+      },
+      {
+        "queryId": 1229848752411209535,
+        "query": "SELECT state,owner,last_owner,epoch,lease_until,result_json::text\r\nFROM wfc_scale.hub_task WHERE id=$1 AND workflow_id=$2\r\n  AND task_type=$3 FOR UPDATE",
+        "calls": 140,
+        "rows": 140,
+        "executionMs": 2.8199799999999997,
+        "sharedHit": 700,
+        "sharedRead": 0,
+        "walBytes": 7674
+      },
+      {
+        "queryId": -5863606162039426006,
+        "query": "UPDATE wfc_scale.hub_task SET state=$3,owner=$4,lease_until=$5,\r\n  last_error=$6,updated_at=now()\r\nWHERE workflow_id=$1 AND dispatch_key IS NOT NULL AND state IN ($7,$8)\r\n  AND NOT (dispatch_key=ANY($2))",
+        "calls": 140,
+        "rows": 0,
+        "executionMs": 1.6171889999999998,
+        "sharedHit": 596,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 874710674216968174,
+        "query": "INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload)\r\nSELECT $1,$2,$3,$5,$6,$4,$7::jsonb\r\nFROM wfc_scale.hub_workflow WHERE id=$4 AND native_status=$8\r\nON CONFLICT DO NOTHING",
+        "calls": 140,
+        "rows": 140,
+        "executionMs": 37.01853299999998,
+        "sharedHit": 4735,
+        "sharedRead": 0,
+        "walBytes": 350435
+      },
+      {
+        "queryId": 6661701810529962074,
+        "query": "WITH RECURSIVE ready AS (\r\n    (SELECT hub_id FROM wfc_scale.hub_task\r\n     WHERE state=$1 AND due_at<=now()\r\n     ORDER BY hub_id LIMIT $2)\r\n    UNION ALL\r\n    SELECT next.hub_id\r\n    FROM ready previous\r\n    CROSS JOIN LATERAL (\r\n        SELECT hub_id FROM wfc_scale.hub_task\r\n        WHERE hub_id>previous.hub_id AND state=$3 AND due_at<=now()\r\n        ORDER BY hub_id LIMIT $4\r\n    ) next\r\n), expired AS (\r\n    (SELECT hub_id FROM wfc_scale.hub_task\r\n     WHERE state=$5 AND lease_until<now() AND attempts<max_attempts\r\n     ORDER BY hub_id LIMIT $6)\r\n    UNION ALL\r\n    SELECT next.hub_id\r\n    F",
+        "calls": 106,
+        "rows": 102,
+        "executionMs": 3.5886049999999994,
+        "sharedHit": 934,
+        "sharedRead": 0,
+        "walBytes": 62
+      },
+      {
+        "queryId": 2461380383874331228,
+        "query": "UPDATE wfc_scale.hub_workflow w\r\nSET state=$1,completed_at=now(),updated_at=now(),\r\n    last_error=$2\r\nWHERE w.state IN ($3,$4) AND EXISTS (\r\n    SELECT $5 FROM wfc_scale.hub_task t\r\n    WHERE t.workflow_id=w.id AND t.workflow_step IS NOT NULL\r\n      AND t.state=$6\r\n)",
+        "calls": 106,
+        "rows": 0,
+        "executionMs": 0.40868699999999997,
+        "sharedHit": 106,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -3898308412557691860,
+        "query": "WITH expired AS (UPDATE wfc_scale.hub_task SET state=$1, owner=$2, lease_until=$3,\r\n    updated_at=now(), last_error=coalesce(last_error,$4)\r\nWHERE state=$5 AND lease_until<now() AND attempts>=max_attempts RETURNING id),\r\nclosed AS (\r\n  UPDATE wfc_scale.hub_task_attempt a SET finished_at=clock_timestamp(),outcome=$6\r\n  FROM expired e WHERE a.task_id=e.id AND a.finished_at IS NULL RETURNING a.task_id\r\n) SELECT count(*) FROM expired",
+        "calls": 106,
+        "rows": 106,
+        "executionMs": 0.9875750000000002,
+        "sharedHit": 106,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 1120805089600065976,
+        "query": "UPDATE wfc_scale.hub_task_attempt SET outcome=$3,finished_at=clock_timestamp()\r\nWHERE task_id=$1 AND epoch=$2 AND finished_at IS NULL",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 3.433348000000001,
+        "sharedHit": 400,
+        "sharedRead": 0,
+        "walBytes": 7378
+      },
+      {
+        "queryId": 4662843380596484644,
+        "query": "INSERT INTO wfc_scale.hub_task\r\n(id,hub_id,partition_id,task_type,task_version,workflow_id,\r\n workflow_step,payload)\r\nVALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 25.427546000000003,
+        "sharedHit": 1712,
+        "sharedRead": 0,
+        "walBytes": 208072
+      },
+      {
+        "queryId": -4781613053022268404,
+        "query": "UPDATE wfc_scale.hub_task_attempt\r\nSET finished_at=clock_timestamp(), outcome=$2\r\nWHERE task_id=$1 AND finished_at IS NULL",
+        "calls": 60,
+        "rows": 0,
+        "executionMs": 0.48105700000000007,
+        "sharedHit": 120,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -3316585461435732610,
+        "query": "SELECT $3 FROM wfc_scale.hub_task WHERE workflow_id=$1 AND dispatch_key=$2",
+        "calls": 60,
+        "rows": 0,
+        "executionMs": 0.6430590000000002,
+        "sharedHit": 120,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -6228291267884267900,
+        "query": "SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id\r\nFROM wfc_scale.hub_workflow w JOIN wfc_scale.hub_task t ON t.workflow_id=w.id\r\nWHERE t.id=$1 AND w.execution_mode=$2 AND t.dispatch_key IS NOT NULL FOR UPDATE OF w",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 49.42235,
+        "sharedHit": 46952,
+        "sharedRead": 0,
+        "walBytes": 3416
+      },
+      {
+        "queryId": -4282012053888306764,
+        "query": "SELECT t.hub_id,\r\n       CASE WHEN t.dispatch_key IS NOT NULL THEN $2\r\n            WHEN w.execution_mode=$3 AND t.workflow_step IS NOT NULL\r\n                 AND t.task_type<>$4 THEN $5\r\n            WHEN t.workflow_step IS NOT NULL THEN $6\r\n            ELSE $7 END\r\nFROM wfc_scale.hub_task t\r\nLEFT JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id\r\nWHERE t.id=$1",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 1.5660070000000001,
+        "sharedHit": 355,
+        "sharedRead": 0,
+        "walBytes": 120
+      },
+      {
+        "queryId": -2886730416395885033,
+        "query": "SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=$1 FOR UPDATE",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 0.9039420000000004,
+        "sharedHit": 240,
+        "sharedRead": 0,
+        "walBytes": 3240
+      },
+      {
+        "queryId": 1502822494400516257,
+        "query": "INSERT INTO wfc_scale.hub_task_attempt\r\n    (task_id,epoch,workflow_id,step_index,attempt_number,worker_id)\r\nVALUES ($1,$2,$3,$4,$5,$6)",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 13.473682000000002,
+        "sharedHit": 1113,
+        "sharedRead": 0,
+        "walBytes": 33459
+      },
+      {
+        "queryId": -5407078905680629930,
+        "query": "UPDATE wfc_scale.hub_task SET execution_pointer_id=$1,dispatch_key=$2,native_step_id=$3,\r\n  due_at=COALESCE($4::timestamptz,due_at) WHERE id=$5",
+        "calls": 60,
+        "rows": 60,
+        "executionMs": 15.247752000000004,
+        "sharedHit": 1829,
+        "sharedRead": 0,
+        "walBytes": 119244
+      },
+      {
+        "queryId": -6675332504614927620,
+        "query": "SELECT (SELECT count(*) FROM pg_stat_activity\r\n        WHERE datname=current_database()),\r\n       (SELECT count(*) FROM pg_stat_activity\r\n        WHERE datname=current_database() AND state=$1),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$2 AND due_at<=now()),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$3 AND lease_until>now()),\r\n       (SELECT count(*) FROM wfc_scale.hub_task WHERE state=$4)",
+        "calls": 42,
+        "rows": 42,
+        "executionMs": 35.62326100000001,
+        "sharedHit": 6994,
+        "sharedRead": 0,
+        "walBytes": 52
+      },
+      {
+        "queryId": 2809298347141988854,
+        "query": "UPDATE wfc_scale.hub_task_attempt a SET outcome=$2,finished_at=clock_timestamp()\r\nFROM wfc_scale.hub_task t WHERE t.id=a.task_id AND t.workflow_id=$1\r\n  AND a.workflow_id=$1\r\n  AND t.last_error=$3 AND a.finished_at IS NULL",
+        "calls": 20,
+        "rows": 0,
+        "executionMs": 0.237104,
+        "sharedHit": 71,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": 7932484857810479347,
+        "query": "UPDATE wfc_scale.hub_task SET state=$2,owner=$3,lease_until=$4,last_error=$5,updated_at=now()\r\nWHERE workflow_id=$1 AND state IN ($6,$7)",
+        "calls": 20,
+        "rows": 0,
+        "executionMs": 0.11332800000000001,
+        "sharedHit": 40,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -2403498140185049578,
+        "query": "SELECT hub_id,task_type,task_version,partition_id\r\nFROM wfc_scale.hub_task\r\nWHERE attempts < max_attempts AND\r\n      ((state=$6 AND due_at<=now()) OR\r\n      (state=$7 AND lease_until<now()))\r\n  AND ($1 OR (hub_id,task_type,task_version,partition_id) >\r\n      ($2,$3,$4,$5))\r\nGROUP BY hub_id,task_type,task_version,partition_id\r\nORDER BY hub_id,task_type,task_version,partition_id\r\nLIMIT $8",
+        "calls": 18,
+        "rows": 60,
+        "executionMs": 0.46774800000000005,
+        "sharedHit": 99,
+        "sharedRead": 0,
+        "walBytes": 0
+      },
+      {
+        "queryId": -5067788598953181388,
+        "query": "WITH grouped AS (\r\n  SELECT hub_id,\r\n    count(*) FILTER (WHERE state=$1 AND due_at<=now() AND attempts<max_attempts) AS ready,\r\n    count(*) FILTER (WHERE state=$2 AND lease_until>now()) AS leased,\r\n    count(DISTINCT workflow_id) FILTER (WHERE workflow_id IS NOT NULL\r\n       AND attempts<max_attempts AND\r\n       ((state=$3 AND due_at<=now()) OR (state=$4 AND lease_until<=now()))) AS runnable\r\n  FROM wfc_scale.hub_task GROUP BY hub_id\r\n), entries AS (\r\n  SELECT hub_id,ready,leased,runnable FROM grouped\r\n  UNION ALL\r\n  SELECT $5::text,sum(ready)::bigint,sum(leased)::bigint,\r\n    (SELECT count(",
+        "calls": 2,
+        "rows": 4,
+        "executionMs": 24.146137,
+        "sharedHit": 1703,
+        "sharedRead": 0,
+        "walBytes": 690
+      },
+      {
+        "queryId": 7577418186404948493,
+        "query": "WITH workflows AS (\r\n  SELECT * FROM wfc_scale.hub_workflow WHERE run_id=$1\r\n), tasks AS (\r\n  SELECT t.* FROM wfc_scale.hub_task t JOIN workflows w ON w.id=t.workflow_id\r\n), claim_events AS (\r\n  SELECT e.task_id, min(e.occurred_at) AS claimed_at\r\n  FROM wfc_scale.hub_workflow_event e JOIN workflows w ON w.id=e.workflow_id\r\n  WHERE e.event_type=$2 GROUP BY e.task_id\r\n), attempts AS (\r\n  SELECT a.task_id, min(a.claimed_at) AS claimed_at\r\n  FROM wfc_scale.hub_task_attempt a JOIN workflows w ON w.id=a.workflow_id GROUP BY a.task_id\r\n), starts AS (\r\n  SELECT t.id, t.created_at, LEAST(a.claimed_at, ",
+        "calls": 1,
+        "rows": 1,
+        "executionMs": 6.527697,
+        "sharedHit": 1873,
+        "sharedRead": 0,
+        "walBytes": 0
+      }
+    ],
+    {
+      "tasksInserted": 200,
+      "outboxInserted": 800,
+      "outboxDeleted": 800
+    }
+  ],
+  "durationSeconds": 104.04154959999141,
+  "sharedTenant": false,
+  "staggerMs": 400,
+  "load": {
+    "run_id": "stage3-candidate-steady-5",
+    "vus": 4,
+    "requested": 20,
+    "duration_seconds": 104.04154959999141,
+    "shared_tenant": false,
+    "stagger_ms": 400,
+    "items": [
+      {
+        "index": 0,
+        "start_unix": 1794863232.774357,
+        "poll_errors": 0,
+        "workflow_id": "0d4a612b-e903-4145-9b74-55e28c5158e1",
+        "state": "Complete",
+        "elapsed_ms": 35947.50189999468
+      },
+      {
+        "index": 1,
+        "start_unix": 1794863233.1264074,
+        "poll_errors": 0,
+        "workflow_id": "7b88cf75-428b-419c-bdbf-22df1872cc34",
+        "state": "Complete",
+        "elapsed_ms": 35496.339400007855
+      },
+      {
+        "index": 2,
+        "start_unix": 1794863233.526414,
+        "poll_errors": 0,
+        "workflow_id": "40ef2908-b814-44fb-ac02-9573242379d2",
+        "state": "Complete",
+        "elapsed_ms": 2056.24030000763
+      },
+      {
+        "index": 3,
+        "start_unix": 1794863233.926506,
+        "poll_errors": 0,
+        "workflow_id": "a9cc89ea-139b-4893-8287-15206c9567f1",
+        "state": "Complete",
+        "elapsed_ms": 34955.51379999961
+      },
+      {
+        "index": 4,
+        "start_unix": 1794863235.5826864,
+        "poll_errors": 0,
+        "workflow_id": "655c5daa-8397-4966-8ca8-40b2e692de5c",
+        "state": "Complete",
+        "elapsed_ms": 2024.3641999986721
+      },
+      {
+        "index": 5,
+        "start_unix": 1794863237.6070828,
+        "poll_errors": 0,
+        "workflow_id": "eb260c4d-4154-4793-b13b-cb0d4b2b6e89",
+        "state": "Complete",
+        "elapsed_ms": 31466.535700004897
+      },
+      {
+        "index": 6,
+        "start_unix": 1794863268.6227744,
+        "poll_errors": 0,
+        "workflow_id": "2bcb885f-85f6-4b45-bf11-6a7ba58a5959",
+        "state": "Complete",
+        "elapsed_ms": 33930.357200006256
+      },
+      {
+        "index": 7,
+        "start_unix": 1794863268.7218845,
+        "poll_errors": 0,
+        "workflow_id": "867718d2-7367-4f1b-bf66-e229e5a95f43",
+        "state": "Complete",
+        "elapsed_ms": 1534.8737000022084
+      },
+      {
+        "index": 8,
+        "start_unix": 1794863268.8820524,
+        "poll_errors": 0,
+        "workflow_id": "ecc7c6ca-247a-4448-bffb-4b03937d7f30",
+        "state": "Complete",
+        "elapsed_ms": 1518.096499989042
+      },
+      {
+        "index": 9,
+        "start_unix": 1794863269.0736573,
+        "poll_errors": 0,
+        "workflow_id": "b22ebe5f-011d-4b91-804d-b7023465e8f0",
+        "state": "Complete",
+        "elapsed_ms": 33993.24070000148
+      },
+      {
+        "index": 10,
+        "start_unix": 1794863270.2567852,
+        "poll_errors": 0,
+        "workflow_id": "8c60659c-1e8e-40b6-94b2-a33672cefb81",
+        "state": "Complete",
+        "elapsed_ms": 32968.38809999463
+      },
+      {
+        "index": 11,
+        "start_unix": 1794863270.4001694,
+        "poll_errors": 0,
+        "workflow_id": "4ecb715a-6aa6-4ff4-b8e2-52ea0aed31eb",
+        "state": "Complete",
+        "elapsed_ms": 1515.5516999948304
+      },
+      {
+        "index": 12,
+        "start_unix": 1794863271.9157386,
+        "poll_errors": 0,
+        "workflow_id": "be923fd1-e1ff-4ce3-b718-fbe29625d0c5",
+        "state": "Complete",
+        "elapsed_ms": 31446.34349999251
+      },
+      {
+        "index": 13,
+        "start_unix": 1794863302.553163,
+        "poll_errors": 0,
+        "workflow_id": "c2a088d2-22d8-4e5f-8604-c7b2ea4232ea",
+        "state": "Complete",
+        "elapsed_ms": 33963.61900000193
+      },
+      {
+        "index": 14,
+        "start_unix": 1794863303.0669253,
+        "poll_errors": 0,
+        "workflow_id": "8a81a265-7b49-4930-b06c-2312f5836fc9",
+        "state": "Complete",
+        "elapsed_ms": 1517.612800002098
+      },
+      {
+        "index": 15,
+        "start_unix": 1794863303.2252,
+        "poll_errors": 0,
+        "workflow_id": "e2e6fdec-74de-4efd-8a37-149269b51463",
+        "state": "Complete",
+        "elapsed_ms": 1515.4578999936348
+      },
+      {
+        "index": 16,
+        "start_unix": 1794863303.362115,
+        "poll_errors": 0,
+        "workflow_id": "966dd557-1976-4bd4-a543-50aea18e28cb",
+        "state": "Complete",
+        "elapsed_ms": 1526.916800008621
+      },
+      {
+        "index": 17,
+        "start_unix": 1794863304.5845687,
+        "poll_errors": 0,
+        "workflow_id": "637dc485-7aa3-465f-b31c-f7d25149d2a2",
+        "state": "Complete",
+        "elapsed_ms": 31867.99539999629
+      },
+      {
+        "index": 18,
+        "start_unix": 1794863304.740678,
+        "poll_errors": 0,
+        "workflow_id": "eaf26ff0-41dd-4586-a897-aa0be9733daa",
+        "state": "Complete",
+        "elapsed_ms": 31565.892400001758
+      },
+      {
+        "index": 19,
+        "start_unix": 1794863304.8890545,
+        "poll_errors": 0,
+        "workflow_id": "3aac1dd7-454e-4403-ad8a-f2a2ae42db5f",
+        "state": "Complete",
+        "elapsed_ms": 31878.348600002937
+      }
+    ],
+    "samples": [
+      {
+        "time": 1794863232.7259321,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 0,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 0,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 67.91,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863236.6262605,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 3,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 22,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 67.32,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863239.7780488,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 17.06,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863243.0169623,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 2.75,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863246.2929978,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 17.79,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863249.3860488,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 2.16,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863252.5792198,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 2.95,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863255.973057,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 13.29,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863259.14641,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 2.41,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863262.3339725,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 28,
+          "pushEndedSessions": 0
+        },
+        "postgres_cpu_percent": 16.45,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863265.8147259,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 132,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 34,
+          "pushEndedSessions": 4
+        },
+        "postgres_cpu_percent": 18.47,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863269.0026395,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 129,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 66,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 82.81,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863272.2754676,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 132,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 15.25,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863275.6027286,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 7.63,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863278.741547,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 132,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 4.05,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863281.817064,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 13.26,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863285.1124732,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 2.37,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863288.2667544,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 14.79,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863291.4571762,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 17.68,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863294.9610114,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 2.22,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863298.1403072,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 98,
+          "pushEndedSessions": 8
+        },
+        "postgres_cpu_percent": 16.22,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863301.3236063,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 132,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 106,
+          "pushEndedSessions": 13
+        },
+        "postgres_cpu_percent": 69.4,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863304.8632631,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 130,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 166,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 30.59,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863308.036854,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 14.39,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863311.1940756,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 2.34,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863314.6033428,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 13.82,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863317.706696,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 12.45,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863320.823106,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 132,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 2.32,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863324.240772,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 14.22,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863327.40245,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 2.08,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863330.5408418,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 2.47,
+        "docker_exit": 0
+      },
+      {
+        "time": 1794863334.3019965,
+        "transport": {
+          "pushConnected": 8,
+          "readinessConnected": 0,
+          "candidateEnabled": true,
+          "candidateCredits": 8,
+          "candidateReservations": 0,
+          "candidateUncertain": 0,
+          "candidateBuffered": 4,
+          "candidateAdmissionsActive": 0,
+          "pullClaims": 0,
+          "pullEmptyClaims": 0,
+          "pullFailedClaims": 0,
+          "pushClaims": 0,
+          "pushEmptyClaims": 0,
+          "pushDeliveries": 168,
+          "pushEndedSessions": 16
+        },
+        "postgres_cpu_percent": 64.59,
+        "docker_exit": 0
+      }
+    ]
+  },
+  "benchmarkManifest": {
+    "baselineSourceCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+    "candidateSourceHeadAtRun": "75144b93632093454ad45e54f702b97450fccfcb",
+    "baselineHubBinarySha256": "e15ef4db4a19072ba9cb6fbcd6ec9207fe7fa78bfe2b7ca8d548bb2fed5697f8",
+    "baselineWorkerBinarySha256": "45c4dd959fe1bb5d547dacb7b2536abcea8d89550fd1962279c4b7502687df30",
+    "candidateHubBinarySha256": "ef855c817fe6a60a4b1cb33d1cfc6dbd43d9b16f2313382d26558b7de8a990cf",
+    "candidateWorkerBinarySha256": "66f3db92071544307d67784ebda6a896ebb3167c071411e61f49d5709897a3a6",
+    "runtimeSourceSha256": {
+      "HubTaskStore.cs": {
+        "baseline": "ab5c17417f058ad2d8e12be945e80977e0935c4beb027b5fd98fd7dbc028235d",
+        "candidate": "70a5ac09a654b43830e5ae30376a7f0ed9f09baa5ac3826208e872f1cae8ca18"
+      },
+      "HubCandidateReader.cs": {
+        "baseline": "8cb7f6a7fb179749ea63cdd8c927a55247c249841ac9957e21ee0bde5e7ce67c",
+        "candidate": "144610b23de8b3eaaaa8eb993b9f0cdb2e281dbdd58bc6916d0c4e933ad11830"
+      },
+      "HubPartitionCandidateRegistry.cs": {
+        "baseline": "7d6809c73529340085528d96e6c316834f308923738db347e4b5699bf41299e0",
+        "candidate": "3f5ec6519ae8e4d10c12a4aafbcf7e8581ecb3c7a7e6f669a830f437c76199ba"
+      },
+      "HubCandidateAcquisition.cs": {
+        "baseline": "6987a163207e8bbfc24b1b56d914be960115681e0434b0acd9cef49ec540a8ac",
+        "candidate": "2a8eef02d590dba4d458cbebe03b29a97751b024995cc0ea5cad7130f1e682ed"
+      },
+      "HubMatchingOwnership.cs": {
+        "baseline": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81",
+        "candidate": "07426fe251307f0d0a6a1da0a055a7f379e2a1d3129eacd410cefa57398a7e81"
+      },
+      "PostgresHubNotificationListener.cs": {
+        "baseline": "adbaf0bb64a8c5c15786011a0a6ed433b1dc0a1a8fc9b92ade88972598509a19",
+        "candidate": "5e2ab2d9c4fdd3ebab9018282c7311f55295398ad319ec149e2f6e0c6381a03d"
+      },
+      "HubReadinessBroadcaster.cs": {
+        "baseline": "321240d3cfcd935090d9e0cca05ec01957056db0d9119fe34ae78bce01124bed",
+        "candidate": "8ea370a9d925db09b2595eed7cf31eb8a05210cd77aa403f801479e72c4bbddb"
+      },
+      "HubGatewayEndpoints.cs": {
+        "baseline": "f2bd8623d41844d58a81a5c29bbe4d2f3ac55738f7b10143644d94e719b18470",
+        "candidate": "44b3c4def43ad1598cc783fb6c62dfe719bfa071a8623025d6d29154756b82be"
+      }
+    },
+    "candidateMigrationSha256": "519317b0eb8e0f511389ef86ab77d4b3c0ba95240e171351b280757835369ed9",
+    "runtimeFlags": {
+      "hubOwners": 2,
+      "matchingPartitions": 2,
+      "matchingEnabled": true,
+      "candidateTopologyBaseline": true,
+      "candidateTopologyFinal": true,
+      "taskIdHintsBaseline": false,
+      "taskIdHintsFinal": true,
+      "workerLaneInstances": 4,
+      "workflowAndActivityWorkersPerLane": 1,
+      "pushEnabled": true,
+      "claimAdmission": "queue, limit 3",
+      "candidateBackpressure": false,
+      "candidateBatchSize": 32,
+      "outboxEnabled": true,
+      "writerOutboxSetting": "database-level wfc.hub_notification_outbox=on for isolated paired DBs",
+      "outboxDispatcher": true,
+      "historyTemplateRows": 20000
+    },
+    "databaseMeasurement": {
+      "postgresMajor": 17,
+      "pgStatStatementsTrack": "all (including nested trigger statements)",
+      "trackIoTiming": true,
+      "workloadSize": "20 workflows/200 tasks burst and steady; 8 workflows/80 tasks sparse and shared-resource strict FIFO",
+      "rawRepetitionsPerArmAndScenario": 5,
+      "isolation": "dedicated disposable PostgreSQL 17 container; paired databases start with equal 20,000 terminal-task history rows and zero workflows",
+      "baselineDatabase": "stage3baseid",
+      "candidateDatabase": "stage3candid",
+      "bufferTiming": "track_io_timing=on",
+      "serverCpu": "not directly available; pg_stat_statements execution time includes wait time and is not CPU time"
+    }
+  }
+}

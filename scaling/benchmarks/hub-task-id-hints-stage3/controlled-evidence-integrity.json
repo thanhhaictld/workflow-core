@@ -1,0 +1,92 @@
+{
+  "baselineCommit": "ca190584e1f84bf952223cff95731d914d0a5280",
+  "candidateRuntimeCommit": "c2bc2c566271b5ba99a4839d98969a5ae884a6d1",
+  "comparisonFlags": {
+    "WFC_HUB_MATCHING_CANDIDATES_ENABLED": {
+      "baseline": true,
+      "treatment": true
+    },
+    "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED": {
+      "baseline": false,
+      "treatment": true
+    }
+  },
+  "fullPostgreSqlSuite": {
+    "database": "stage3suite2",
+    "passed": 341,
+    "failed": 0,
+    "skipped": 0
+  },
+  "artifacts": [
+    {
+      "path": "raw-runtime-controlled/records.json",
+      "sha256": "03dcc612c0edf80ea4d240bcc53da22f40f3a3888941f5783aca6b00b11fee97",
+      "bytes": 1705407
+    },
+    {
+      "path": "raw-runtime-controlled/summary.json",
+      "sha256": "e2e0bf64fffe424c78317e583033f7994a1a5250c5899546d80fff1a712ea93a",
+      "bytes": 21056
+    },
+    {
+      "path": "raw-runtime-controlled/paired-summary.json",
+      "sha256": "0cf00a91bee48bac22ba371a6c97f57a524c9a3d3697273611d3b49809e57870",
+      "bytes": 116953
+    },
+    {
+      "path": "raw-runtime-controlled/manifest.json",
+      "sha256": "65ddfe1b0bcaf0961b95e1732d25b8cc034804f2edc8ca1ac2671638d1546b30",
+      "bytes": 4621
+    },
+    {
+      "path": "recovery-baseline.json",
+      "sha256": "53a0f8935e89d99f84e6e34fdfe5020749b5e6b9a017eef8ae5c1f19c2ed5673",
+      "bytes": 13147
+    },
+    {
+      "path": "recovery-final.json",
+      "sha256": "cdad4cd732d47a0ae7324f1514f1f90c312b49ddb1af3af35e04570c46b8f65b",
+      "bytes": 13103
+    },
+    {
+      "path": "recovery-final-controlled-off.json",
+      "sha256": "ef0175e36a04c357d560c1a62b1a655c6c0e19ca28c546b00588168e1d699d2e",
+      "bytes": 12993
+    },
+    {
+      "path": "recovery-final-controlled-on.json",
+      "sha256": "db5270faa324c4ece5f942a0733e55a7bf7279873938bfa2bae4cc35ee3e6a1a",
+      "bytes": 12967
+    },
+    {
+      "path": "recovery-summary.json",
+      "sha256": "654112eee9808a5d46d121d1b6744d805b4ec2c39e713f0fcba0166a351ebc51",
+      "bytes": 34377
+    },
+    {
+      "path": "recovery-context.json",
+      "sha256": "2f5ed6e9da266b05d2a9596db2d4d9e37a74dfde6546f78e839a9140bf21bac7",
+      "bytes": 2639
+    },
+    {
+      "path": "report.md",
+      "sha256": "307d87700f12c7e502461986f7a99a6c734dcf9e18f94f55e56195396fd337cc",
+      "bytes": 14595
+    },
+    {
+      "path": "scaling/benchmarks/results/stage3-candidate-topology-taskids-off/ha-after-claim-fe88cf2b-result.json",
+      "sha256": "1ce55410096da76273c99c17e224d8a91d7924b77faa0eef07e8dab1ef5c1c4d",
+      "bytes": 2624
+    },
+    {
+      "path": "scaling/benchmarks/results/stage3-candidate-topology-taskids-off/ha-before-claim-10690abe-result.json",
+      "sha256": "7e93a7569ceab437c846d7827c4a2137bb7bc51d2f52e9ff1fadecfe9f0002ab",
+      "bytes": 2430
+    },
+    {
+      "path": "scaling/benchmarks/results/stage3-candidate-topology-taskids-off/ha-during-execution-35e2297c-result.json",
+      "sha256": "e4524faaef94376e5f47e60d19b6175791e57c9e3fc150f4fcf743927eeec9da",
+      "bytes": 2633
+    }
+  ]
+}

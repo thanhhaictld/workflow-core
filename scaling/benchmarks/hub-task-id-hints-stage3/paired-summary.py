@@ -1,10 +1,15 @@
 """Create paired per-repetition runtime summaries without pooling latency tails."""
 import json
+import argparse
 import pathlib
 import statistics
 
-root = pathlib.Path(__file__).resolve().parent
-records = json.loads((root / "raw-runtime-qualified/records.json").read_text())
+parser = argparse.ArgumentParser()
+parser.add_argument("records", type=pathlib.Path)
+args = parser.parse_args()
+records_path = args.records.resolve()
+root = records_path.parent
+records = json.loads(records_path.read_text())
 samples = []
 for row in records:
     if row["repetition"] == 0:
@@ -71,8 +76,9 @@ for scenario in sorted({row["scenario"] for row in samples}):
     group["paired"] = paired
     summary.append(group)
 
-out = {"sourceRecords": "raw-runtime-qualified/records.json",
+out = {"sourceRecords": records_path.name,
        "method": "five paired interleaved repetitions per arm after one warmup per scenario and arm; latency summaries are per-repetition medians/ranges, not pooled tails",
        "groups": summary}
-(root / "paired-summary.json").write_text(json.dumps(out, indent=2))
-print(root / "paired-summary.json")
+summary_path = root / "paired-summary.json"
+summary_path.write_text(json.dumps(out, indent=2))
+print(summary_path)

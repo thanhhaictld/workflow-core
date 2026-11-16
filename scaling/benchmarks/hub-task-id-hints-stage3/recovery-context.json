@@ -1,0 +1,45 @@
+{
+  "note": "Raw historical observations were retained unchanged; this sidecar identifies the existing candidate topology separately from the experimental exact task-ID path. Corrected focused artifacts use the committed corrective source tree.",
+  "artifacts": [
+    {
+      "artifact": "recovery-baseline.json",
+      "arm": "baseline",
+      "sourceCommitOrEquivalentTree": "ca190584e1f84bf952223cff95731d914d0a5280",
+      "candidateTopologyEnabled": true,
+      "taskIdHintsEnabled": false,
+      "rawFieldCorrection": "Historical candidateIdHints field conflates topology and task-ID state; this independent flag mapping is the corrected interpretation. Raw observations are retained byte-for-byte.",
+      "testAssemblySha256": "8522E38FF04330FBFAC91298A3167AB92E53F2E574C11DED225B41FC9BB5D7FB",
+      "observations": 24
+    },
+    {
+      "artifact": "recovery-final.json",
+      "arm": "stage2-final",
+      "sourceCommitOrEquivalentTree": "190c72b0c43bc4e2ed80c1c748df74d528b3b913",
+      "candidateTopologyEnabled": true,
+      "taskIdHintsEnabled": true,
+      "rawFieldCorrection": "Historical candidateIdHints field conflates topology and task-ID state; this independent flag mapping is the corrected interpretation. Raw observations are retained byte-for-byte.",
+      "testAssemblySha256": "E276298159729052A32CCC76C6E34D260B8DDF2348D73C8D8D1D4FBAF3DB2508",
+      "observations": 24
+    },
+    {
+      "artifact": "recovery-final-controlled-off.json",
+      "arm": "corrected-final-off",
+      "sourceCommitOrEquivalentTree": "c2bc2c566271b5ba99a4839d98969a5ae884a6d1",
+      "candidateTopologyEnabled": true,
+      "taskIdHintsEnabled": false,
+      "rawFieldCorrection": "Historical candidateIdHints field conflates topology and task-ID state; this independent flag mapping is the corrected interpretation. Raw observations are retained byte-for-byte.",
+      "testAssemblySha256": "83037F9CC7663D5E38865E3EF83696A9E89AC39C3A4CCD0BA123B22252765C9D",
+      "observations": 24
+    },
+    {
+      "artifact": "recovery-final-controlled-on.json",
+      "arm": "corrected-final-on",
+      "sourceCommitOrEquivalentTree": "c2bc2c566271b5ba99a4839d98969a5ae884a6d1",
+      "candidateTopologyEnabled": true,
+      "taskIdHintsEnabled": true,
+      "rawFieldCorrection": "Historical candidateIdHints field conflates topology and task-ID state; this independent flag mapping is the corrected interpretation. Raw observations are retained byte-for-byte.",
+      "testAssemblySha256": "83037F9CC7663D5E38865E3EF83696A9E89AC39C3A4CCD0BA123B22252765C9D",
+      "observations": 24
+    }
+  ]
+}
