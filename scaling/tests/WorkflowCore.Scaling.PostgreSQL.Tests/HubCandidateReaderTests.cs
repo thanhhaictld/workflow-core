@@ -43,6 +43,38 @@ public sealed class HubCandidateReaderTests
     }
 
     [Fact]
+    public async Task HydrationLoadsOnlyRequestedCurrentEligibleIdsAndKeepsOversizedConstraintsUnknown()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
+        var hub = "candidate-hydrate-" + Guid.NewGuid().ToString("N");
+        var eligible = Guid.NewGuid(); var terminal = Guid.NewGuid(); var otherPartition = Guid.NewGuid();
+        var key = new string('k', 512) + eligible;
+        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            VALUES (@eligible,@hub,0,'activity',1,'{}'),(@terminal,@hub,0,'activity',1,'{}'),
+                   (@other,@hub,1,'activity',1,'{}');
+            UPDATE wfc_scale.hub_task SET state=2 WHERE id=@terminal;
+            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,false);
+            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@eligible,@key);
+            """, db))
+        {
+            command.Parameters.AddWithValue("eligible", eligible); command.Parameters.AddWithValue("terminal", terminal);
+            command.Parameters.AddWithValue("other", otherPartition); command.Parameters.AddWithValue("hub", hub);
+            command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
+        }
+        await using var tasks = new HubTaskStore(database);
+        var reader = new HubCandidateReader(tasks);
+        var page = await reader.HydrateAsync(hub, 0, 64, [eligible, terminal, otherPartition], 256, default);
+        var item = Assert.Single(page.Items);
+        Assert.Equal(eligible, item.Id);
+        Assert.False(item.ResourceKeysComplete);
+        Assert.Empty(item.ResourceKeys);
+        Assert.Equal(0, page.Oversized);
+    }
+
+    [Fact]
     public async Task ExpiredPagesUseDeadlineAndSequenceCursor()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")

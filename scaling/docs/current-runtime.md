@@ -54,8 +54,12 @@ span these matching partitions and are *always* rechecked transactionally.
 ## End-to-end assignment
 
 1. **Task becomes ready:** the workflow engine or timer scheduler commits the
-   durable task. PostgreSQL notifications are latency hints, not durable
-   messages; the candidate reader periodically reconciles missed hints.
+   durable task. Migration 032 emits a transaction-committed task-ID hint for
+   immediately ready inserts and task state/epoch/readiness changes. The owner
+   hydrates current task metadata in bounded ID batches; hints are advisory and
+   may be duplicated, reordered, or lost. The indexed candidate reader still
+   reconciles startup, ownership takeover, overflow, eviction, missed hints,
+   due tasks and expired leases.
 2. **Discover once, share across workers:** the current owner reads paginated,
    index-backed metadata (ID, epoch, type/version, partition, due time and
    advisory resource keys). It holds bounded candidate buffers and cursors per
@@ -88,6 +92,53 @@ or lease-retirement bookkeeping. `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY`
 controls the maximum number of local admission groups (default 2). The
 existing PostgreSQL claim gate still applies and should not be configured
 higher than the available connection budget.
+
+### Task-ID hint coverage and recovery
+
+Migration `032_hub_candidate_task_id_hints.sql` replaces the 014/030 trigger
+function and expands its trigger to observe task state, due-time and lease-epoch
+changes. Exact hints route by hub, task ID and task partition; each owner reads
+the row's current state and bounded workflow/resource metadata before adding,
+updating or safely removing the advisory entry. Lease-heartbeat updates do not
+emit hints. Future tasks becoming due and leases expiring without a task-row
+update remain indexed PostgreSQL discovery streams; no future-task timer heap
+or sequence-watermark feed is used. Deletes and out-of-band resource writes
+also rely on authoritative admission and periodic recovery.
+
+An exact hint is emitted per immediately ready insert and relevant state/epoch
+transition, so workflow fan-out, claims, retries and completions produce
+per-task notifications; a permit release also emits a hub-wide hint. Outbox
+mode stores each notification separately and the dispatcher deletes those rows
+in the notification transaction. Heartbeats do not add event rows. The bounded
+`workflow_hub_candidate_task_hints_received`, `..._deduped`, `..._dropped`,
+`workflow_hub_candidate_hydration_calls`, and `..._rows` counters report the
+fast path without task or hub labels.
+
+Exact ID hints are deduplicated in bounded listener and owner queues. Queue
+overflow, malformed payloads and hydration failures request recovery; bounded
+periodic scans remain the fallback if even that recovery hint is lost. A
+hub-wide permit-release hint still wakes every owner because resource scopes
+can span matching partitions. Activity policy capacity updates publish the
+same conservative hub-wide invalidation after their database transaction.
+Coarse permit/policy hints can still cause full paged rescans. Local Gateway
+commits and the existing two-second ready-hub sweep continue to wake legacy
+matchers/SSE consumers without dirtying candidate discovery; transaction-coupled
+task-ID hints populate the candidate registry, and the registry's indexed
+ten-second recovery remains the fallback. The separate typed recovery hints
+continue to serve the legacy matcher. Old-schema coarse notifications can still
+request a candidate rescan, so the metadata-discovery reduction is workload and
+rollout dependent.
+
+The 030 notification outbox is transactionally populated and dispatches
+notifications while deleting rows in the same transaction. It is not a
+replayable task feed: a disconnected listener can miss an already-dispatched
+ID, so bootstrap/takeover and periodic indexed recovery remain required.
+Install additive migration 032 before deploying the new listener. Old listeners
+ignore the added JSON field and fall back to typed readiness scans; the new
+listener accepts old coarse payloads. Rolling back the application does not
+require reversing 032 or touching task data; retaining 032 preserves the old
+notification contract. If reverting the migration is required, restore the
+030 function/trigger only after old application instances are running.
 
 ## SSE sessions and capacity
 
@@ -290,8 +341,9 @@ non-unique compatibility claim indexes with `DROP INDEX CONCURRENTLY IF EXISTS`:
 - `ix_hub_task_ready_capability_bucket_sequence`
 
 Compose, `scripts/dev.ps1 db-schema` and current CI setup skip their original
-index-only migrations (023 and 025–027), then apply 031 after 030. Run 031 with
-autocommit, never inside a transaction block. Repeated application is safe.
+index-only migrations (023 and 025–027), then apply 031 after 030 with
+autocommit, never inside a transaction block, followed by additive migration
+032 for task-ID hints. Repeated application of 032 is safe.
 Task data, unique indexes, the three candidate discovery indexes, the global
 claim-sequence index, readiness/expiry, operations and reconciliation indexes
 are retained. Migration 028 remains in the repository for databases where it

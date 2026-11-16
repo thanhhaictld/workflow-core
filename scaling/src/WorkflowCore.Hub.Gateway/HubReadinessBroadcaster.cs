@@ -26,11 +26,34 @@ public sealed class HubReadinessBroadcaster(
 
     // Optional in-process matching subscriber; SSE remains available for fallback.
     public event Action<string, string?, int, int?>? TaskReady;
+    public event Action<string, string?, int, int?>? CandidateRescanRequested;
+    public event Action<string, Guid, int, string?, int>? CandidateTaskChanged;
+    public event Action? CandidateRecoveryRequired;
 
     public void Publish(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
         if (!string.IsNullOrEmpty(hub))
+        {
             TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
+            CandidateRescanRequested?.Invoke(hub, taskType, version, taskPartitionId);
+        }
+        PublishLegacy(hub);
+    }
+
+    /// <summary>
+    /// Wake legacy matchers and SSE subscribers after a local commit. Candidate
+    /// discovery receives the transaction-coupled task-ID hint; its indexed
+    /// safety sweep remains the fallback when notification delivery is disabled.
+    /// </summary>
+    public void PublishFallback(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
+    {
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
+        PublishLegacy(hub);
+    }
+
+    private void PublishRecoveryHub(string hub)
+    {
+        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, null, 0, null);
         PublishLegacy(hub);
     }
 
@@ -45,8 +68,29 @@ public sealed class HubReadinessBroadcaster(
     /// <summary>In-process hint for a task capability or a permit-release rescan.</summary>
     public void PublishMatchingHint(string hub, string? type, int version, int? taskPartitionId = null)
     {
+        if (!string.IsNullOrEmpty(hub))
+        {
+            TaskReady?.Invoke(hub, type, version, taskPartitionId);
+            CandidateRescanRequested?.Invoke(hub, type, version, taskPartitionId);
+        }
+    }
+
+    private void PublishMatchingFallbackHint(string hub, string? type, int version, int? taskPartitionId)
+    {
         if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, type, version, taskPartitionId);
     }
+
+    public void PublishCandidateTaskChanged(string hub, Guid taskId, int taskPartitionId,
+        string? type, int version)
+    {
+        if (!string.IsNullOrEmpty(hub))
+        {
+            TaskReady?.Invoke(hub, type, version, taskPartitionId);
+            CandidateTaskChanged?.Invoke(hub, taskId, taskPartitionId, type, version);
+        }
+    }
+
+    public void PublishCandidateRecoveryRequired() => CandidateRecoveryRequired?.Invoke();
 
     public async IAsyncEnumerable<string> Subscribe(
         IReadOnlyCollection<string> hubs, [EnumeratorCancellation] CancellationToken ct)
@@ -80,7 +124,7 @@ public sealed class HubReadinessBroadcaster(
     public async Task ReconcileReadyAsync(CancellationToken ct)
     {
         foreach (var hub in await store.ReadyHubsAsync(ct))
-            Publish(hub);
+            PublishRecoveryHub(hub);
         if (!_pushEnabled) return;
 
         // Recovery must not turn into a worker *SQL-claim storm*: every
@@ -104,7 +148,7 @@ public sealed class HubReadinessBroadcaster(
             {
                 var ready = await store.ReadyMatchingHintsAsync(ct, _recoveryCursor);
                 foreach (var hint in ready)
-                    PublishMatchingHint(hint.Hub, hint.TaskType, hint.Version, hint.Partition);
+                    PublishMatchingFallbackHint(hint.Hub, hint.TaskType, hint.Version, hint.Partition);
                 _recoveryCursor = ready.Count < 512 ? null : ready[^1];
                 if (_recoveryCursor is null) break;
             }

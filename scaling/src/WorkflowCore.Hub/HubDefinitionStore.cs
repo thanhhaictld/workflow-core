@@ -119,6 +119,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             """,db,tx);
         BindActivity(cmd, policy);
         var inserted = (bool)(await cmd.ExecuteScalarAsync(ct))!;
+        await NotifyPolicyChangeAsync(db, tx, policy.HubId, ct);
         await tx.CommitAsync(ct);
         return inserted;
     }
@@ -291,6 +292,7 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             update.Parameters.AddWithValue("resourcecap",request.ResourceCapacity);
             await update.ExecuteNonQueryAsync(ct);
         }
+        await NotifyPolicyChangeAsync(db, tx, request.HubId, ct);
         await tx.CommitAsync(ct);
         return revision+1;
     }
@@ -425,6 +427,19 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             return new(hub, activity, version, Partitions,
                 rules.OrderBy(x => x.Key,StringComparer.Ordinal).ToArray(), ordering);
         }
+    }
+
+    private static async Task NotifyPolicyChangeAsync(NpgsqlConnection db, NpgsqlTransaction tx,
+        string hub, CancellationToken ct)
+    {
+        await using var setting = new NpgsqlCommand(
+            "SELECT COALESCE(current_setting('wfc.hub_notification_outbox', true), 'off') = 'on'", db, tx);
+        var useOutbox = (bool)(await setting.ExecuteScalarAsync(ct))!;
+        await using var command = useOutbox
+            ? new NpgsqlCommand("INSERT INTO wfc_scale.hub_notification_outbox(hub_id,matching_payload) VALUES (@hub,json_build_object('hub',@hub,'kind','policy-change')::text)", db, tx)
+            : new NpgsqlCommand("SELECT pg_notify('wfc_hub_matching_ready',json_build_object('hub',@hub,'kind','policy-change')::text)", db, tx);
+        command.Parameters.AddWithValue("hub", hub);
+        await command.ExecuteNonQueryAsync(ct);
     }
 
     private static string Digest(string value) =>

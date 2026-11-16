@@ -121,7 +121,7 @@ Cancellation cannot undo an external effect that already happened.
 
 ## Deploy without changing existing runs
 
-Apply migrations in order through `031_hub_retire_compatibility_claim_indexes.sql`, matching
+Apply migrations in order through `032_hub_candidate_task_id_hints.sql`, matching
 the current Compose and development scripts, which skip retired index-only
 migrations 023 and 025–027. Run 031 with autocommit, outside a transaction block;
 see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 012 adds

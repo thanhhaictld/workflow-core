@@ -2,10 +2,12 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For current Hub deployments, apply migrations through `031_hub_retire_compatibility_claim_indexes.sql`
+For current Hub deployments, apply migrations through `032_hub_candidate_task_id_hints.sql`
 as configured in Compose and the development script, skipping retired index-only
 migrations 023 and 025–027. Migration 031 requires autocommit, outside a transaction
-block; see [task index cleanup](current-runtime.md#task-index-cleanup). Start with the
+block; see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 032
+only changes advisory readiness hints and trigger coverage; it does not rewrite
+task history. Start with the
 [current runtime guide](current-runtime.md) and
 follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012
 preserves existing sequential runs. The procedure below describes the direct
