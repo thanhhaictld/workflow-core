@@ -24,30 +24,18 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 if ($Task -eq 'help') {
     Write-Host @'
-Owner recovery on the existing Grafana/Prometheus/Tempo/Loki observability stack:
-  make obs-up                         Build/start validated defaults (4 processors)
-  make obs-up OBS_PROCESSORS=8        Override processor count
-  make obs-config                     Inspect the validated Compose configuration
-  make obs-test-4k                     Run 4,000 workflows / 100 VUs + durable audit
+Owner recovery on the existing observability stack:
+  make ups-16                         Build/start the primary 16-processor stack
+  make obs-config                     Inspect the resolved Compose configuration
   make obs-ps / obs-logs / obs-down   Inspect, log or stop the same stack (keep data)
-  make obs-owner-recovery-setup        Create OBS_ENV_FILE if missing
-  make obs-owner-recovery-up           Build/start base stack + HA/shards/recovery overlays
-  make obs-owner-recovery-up-off-metric-sampler  Same stack, without Hub SQL metric sampling
-  make obs-owner-recovery-test         Run k6 smoke on the running stack (unordered/keyed)
-  make obs-owner-recovery-test-4k      Run 4,000 workflows with 100 VUs on the running stack
-  make obs-owner-recovery-stress-test  Existing k6-policy workload + durable audit
-  make obs-owner-recovery-db-test      Isolated test project, base postgres/migrate definitions
-  make obs-owner-recovery-fault-test   Either owner, idle/busy, continuous tracing (85s each)
-  make obs-owner-recovery-ps           Inspect the existing observability project
-  make obs-owner-recovery-logs         Recent logs
-  make obs-owner-recovery-down         Remove containers/networks; retain all data volumes
-Config uses OBS_COMPOSE_FILE and OBS_ENV_FILE; the project matches compose.ps1.
-K6_POLICY_MODE=unordered|partition|keyed K6_POLICY_COUNT=300 K6_POLICY_VUS=60
-OWNER_PORT_BASE=0 keeps .env ports; a nonzero base assigns distinct loopback ports.
-OWNER_FAULT_VICTIM=hub|hub-2|both OWNER_FAULT_MODE=idle|busy|both OWNER_FAULT_REPEAT=2
-Without Make: pwsh -NoProfile -File scripts/owner-recovery.ps1 test
-Direct startup: pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 4
-The validated feature-flag preset is exported by the short Make targets.
+  make obs-test-4k                    Run 4,000 workflows / 100 VUs + durable audit
+  make obs-test                       Run the 16,000-workflow durable audit
+  make obs-matcher-failover            Run candidate/SSE owner-failure windows
+
+Create the env file with make obs-setup. Additional tasks are available directly:
+  pwsh -NoProfile -File scripts/owner-recovery.ps1 smoke-test
+  pwsh -NoProfile -File scripts/owner-recovery.ps1 fault-test
+Use -Processors, -ComposeFile, -EnvFile, and other script parameters as needed.
 '@
     exit 0
 }
@@ -60,7 +48,7 @@ if ($Task -eq 'setup') {
     }
     exit 0
 }
-if (!(Test-Path -LiteralPath $EnvFile)) { throw 'Run make obs-setup or make obs-owner-recovery-setup first' }
+if (!(Test-Path -LiteralPath $EnvFile)) { throw 'Run make obs-setup first' }
 $baseFile = (Resolve-Path -LiteralPath $ComposeFile).Path
 if (!$Project) {
     # Same worktree identity as scaling/observability/compose.ps1: one runtime stack.
@@ -149,7 +137,7 @@ function Wait-LabReady {
         } catch { }
         Start-Sleep -Seconds 1
     }
-    if (!$ready) { throw 'Policy benchmark definitions did not become ready; run make obs-owner-recovery-up and inspect processor logs' }
+    if (!$ready) { throw 'Policy benchmark definitions did not become ready; start with make ups-16 and inspect processor logs' }
 }
 function Start-Lab {
     Invoke-Compose build hub hub-2 processor monitor

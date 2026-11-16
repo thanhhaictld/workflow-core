@@ -21,7 +21,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
         var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL",
             "WFC_HUB_MATCHING_PEERS", "WFC_HUB_MATCHING_PARTITIONS",
-            "WFC_HUB_MATCHING_ADMISSION_CONCURRENCY" };
+            "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         try
         {

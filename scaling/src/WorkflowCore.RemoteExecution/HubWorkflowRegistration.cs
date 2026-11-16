@@ -28,10 +28,6 @@ public sealed class HubRuntimeOptions
         int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE"),
             out var laneCap) ? laneCap : 0;
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
-    // Only enable against matching-capable, load-balanced Hub replicas.
-    // Polls wait server-side; failed long-poll requests retry with backoff.
-    public bool LongPollingEnabled { get; set; } =
-        Environment.GetEnvironmentVariable("WFC_HUB_LONG_POLL_ENABLED") is "true" or "1" or "True";
     public bool PushEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     public string[] PushTrustedOwners { get; set; } =

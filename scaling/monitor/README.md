@@ -55,26 +55,17 @@ pwsh -NoProfile -File ./scripts/dev.ps1 up
 pwsh -NoProfile -File ./scripts/dev.ps1 seed
 ```
 
-If you have GNU Make installed, these are equivalent:
+Use the PowerShell runner for these tasks:
 
 
 ```bash
-make bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + pnpm packages
-make dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
+pwsh -NoProfile -File ./scripts/dev.ps1 bootstrap   # PostgreSQL 17 + EF migrations + SQL 002–005 + pnpm packages
+pwsh -NoProfile -File ./scripts/dev.ps1 dev         # API on 127.0.0.1:5000, dashboard on 127.0.0.1:3000
 # In another terminal, optionally create example executions:
-make seed
+pwsh -NoProfile -File ./scripts/dev.ps1 seed
 ```
 
-The root [Makefile](../../Makefile) only delegates to
-[the PowerShell script](../../scripts/dev.ps1); there are no Unix-only shell
-recipes. Commands include `make help`, `make up`, `make test`, `make build`,
-`make api`, `make ui`,
-`make db-down`, and `make db-reset CONFIRM=reset` (deletes local data).
-PostgreSQL listens on **127.0.0.1:55432** by default to avoid conflicts with
-existing installations. The named Docker volume preserves data after shutdown.
-Override `PG_PORT`, `API_PORT`, or `UI_PORT` in the Make invocation, e.g.
-`make up PG_PORT=55433 API_PORT=5001 UI_PORT=3001`. Without Make, use
-`pwsh ./scripts/dev.ps1 up -PgPort 55433 -ApiPort 5001 -UiPort 3001`.
+The root [Makefile](../../Makefile) is reserved for the observability owner-recovery stack. Use `pwsh ./scripts/dev.ps1 help` to list local development commands and pass settings as script parameters, for example `pwsh ./scripts/dev.ps1 up -PgPort 55433 -ApiPort 5001 -UiPort 3001`.
 Windows PowerShell (`powershell.exe`) version 5.1 is **not** supported; use
 PowerShell 7 (`pwsh`). The script works without Git Bash or WSL.
 Development credentials are **not suitable for production**. Docker is only

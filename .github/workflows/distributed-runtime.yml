@@ -126,9 +126,7 @@ jobs:
         run: |
           pwsh -NoProfile -File scripts/dev.ps1 help
           pwsh -NoProfile -File scripts/dev.ps1 check-tools -SkipDocker
-          make help
-          make -n bootstrap
-          make -n dev
+          make -n help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-test-4k obs-test obs-matcher-failover
           docker compose -f scaling/compose.monitor.yaml config --quiet
       - name: Bootstrap complete local stack
         run: pwsh -NoProfile -File scripts/dev.ps1 bootstrap
@@ -191,7 +189,7 @@ jobs:
           fi
       - name: Stop local PostgreSQL
         if: always()
-        run: make db-down
+        run: pwsh -NoProfile -File scripts/dev.ps1 db-down
 
   powershell-windows-check:
     name: PowerShell 7 validation (Windows)

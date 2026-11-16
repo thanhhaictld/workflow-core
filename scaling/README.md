@@ -52,8 +52,7 @@ recommended design.
 
 ```bash
 make obs-setup
-make obs-up
-make ups-16              # 16 processor containers
+make ups-16              # primary owner-recovery stack, 16 processors
 make obs-matcher-failover # three owner-crash windows, isolated test databases
 ```
 
@@ -80,7 +79,7 @@ flowchart LR
 
 For a complete cross-platform local database + API + monitoring UI bootstrap,
 run `pwsh -NoProfile -File ./scripts/dev.ps1 up` from the repository root.
-GNU Make remains an optional shortcut (`make up`). See the
+Use `pwsh -NoProfile -File ./scripts/dev.ps1 up` for the local development stack. See the
 [monitor setup guide](monitor/README.md) and `pwsh ./scripts/dev.ps1 help`.
 
 1. Provide PostgreSQL 17 or newer. Apply EF migrations from the original
@@ -97,8 +96,8 @@ GNU Make remains an optional shortcut (`make up`). See the
    compatibility claim indexes without changing task data. Run 031 with
    autocommit, outside a transaction block. Migrations 015–019 add activity
    ordering and matching ownership/hints; 020–024 add reconciliation and claim indexes.
-   The experimental 028 index is installed only when
-   `WFC_HUB_INSTALL_SHARD4_READY_INDEX=true`; it is not removed by 031.
+   Migration 028 remains in the ordered migration history for databases where
+   it was previously installed; normal setup does not install it.
    See the [ordered merge experiment](docs/hub-ordered-capability-merge-experiment.md)
    and [snapshot contract reuse investigation](docs/snapshot-contract-reuse-throughput.md).
    Migration 014 enables transaction-committed cross-pod work-ready hints;

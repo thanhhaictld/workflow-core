@@ -30,8 +30,6 @@ services:
       PG_USER: ${PG_USER:-workflow}
       PG_PASSWORD: ${PG_PASSWORD:-workflow_dev_only}
       PG_DATABASE: ${PG_DATABASE:-workflow}
-      # Installing the experimental index is independent of query selection.
-      WFC_HUB_INSTALL_SHARD4_READY_INDEX: "${WFC_HUB_INSTALL_SHARD4_READY_INDEX:-false}"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -57,9 +55,6 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/021_hub_active_task_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/022_hub_claim_index_selectivity.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/024_hub_native_reconcile_tasks.sql
-        if [ "$$WFC_HUB_INSTALL_SHARD4_READY_INDEX" = "true" ]; then
-          PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/028_hub_claim_shard4_ready.sql
-        fi
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/029_hub_partition_candidate_indexes.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/030_hub_notification_outbox.sql
         # Retired index-only migrations 023 and 025-027 are skipped on replay.
@@ -110,8 +105,6 @@ services:
       WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS: "${WFC_HUB_CLAIM_ADMISSION_MAX_WAITERS:-1}"
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: "${WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS:-false}"
       WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES: "${WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES:-true}"
-      WFC_HUB_ORDERED_CAPABILITY_MERGE: "${WFC_HUB_ORDERED_CAPABILITY_MERGE:-false}"
-      WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED: "${WFC_HUB_FIFO_HEAD_PREFILTER_ENABLED:-false}"
       WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS: "${WFC_HUB_MATCHING_INDEXED_BUCKET_CLAIMS:-true}"
       WFC_HUB_PUSH_ENABLED: "${WFC_HUB_PUSH_ENABLED:-true}"
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: "${WFC_HUB_MATCHING_CANDIDATES_ENABLED:-true}"
@@ -124,8 +117,6 @@ services:
       WFC_HUB_OUTBOX_BATCH_SIZE: "${WFC_HUB_OUTBOX_BATCH_SIZE:-128}"
       WFC_HUB_OUTBOX_MIN_DELAY_MS: "${WFC_HUB_OUTBOX_MIN_DELAY_MS:-10}"
       WFC_HUB_OUTBOX_MAX_DELAY_MS: "${WFC_HUB_OUTBOX_MAX_DELAY_MS:-1000}"
-      WFC_HUB_MATCHING_SCOPED_CLAIMS: "${WFC_HUB_MATCHING_SCOPED_CLAIMS:-false}"
-      WFC_HUB_MATCHING_DEFER_OWNER_CHECK: "${WFC_HUB_MATCHING_DEFER_OWNER_CHECK:-false}"
       WFC_HUB_COMPLETION_FAST_PATH_ENABLED: "${WFC_HUB_COMPLETION_FAST_PATH_ENABLED:-true}"
       # Benchmark-only control: default is the new batched event journal.
       WFC_HUB_BATCH_HISTORY_ENABLED: "${WFC_HUB_BATCH_HISTORY_ENABLED:-true}"

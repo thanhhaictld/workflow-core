@@ -5,7 +5,7 @@
 > distributed execution model. PostgreSQL is the authoritative task/lease,
 > concurrency-policy, FIFO, workflow-history and result store.
 >
-> This is the selected architecture for the `make obs-up` and `make ups-16`
+> This is the selected architecture for the `make ups-16`
 > development/benchmark presets. It remains under correctness and failover
 > validation; enabling a development preset is not a production readiness claim.
 > This document supersedes the alternative transport proposals listed in
@@ -84,8 +84,8 @@ span these matching partitions and are *always* rechecked transactionally.
 
 The candidate reader runs independently of bounded admission workers and the
 uncertainty reaper. This prevents a slow resource lock from blocking discovery
-or lease-retirement bookkeeping. `WFC_HUB_MATCHING_ADMISSION_CONCURRENCY`
-controls the maximum number of local admission groups (default 3). The
+or lease-retirement bookkeeping. `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY`
+controls the maximum number of local admission groups (default 2). The
 existing PostgreSQL claim gate still applies and should not be configured
 higher than the available connection budget.
 
@@ -143,8 +143,6 @@ and matching shards together:
 
 ```bash
 make obs-setup
-make obs-up
-# For 16 processor containers:
 make ups-16
 ```
 
@@ -158,11 +156,12 @@ important environment settings are:
 | `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `true` on Hub replicas |
 | `WFC_HUB_PUSH_ENABLED` | `true` on Hub replicas and workers |
 | `WFC_HUB_MATCHING_PARTITIONS` | `4`, consistent on Hub and worker |
-| `WFC_HUB_MATCHING_ADMISSION_CONCURRENCY` | `3` (per Hub) |
+| `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY` | `2` (per Hub) |
 | `WFC_HUB_CLAIM_ADMISSION_LIMIT` | `3`, DB-pool protection |
 | `WFC_HUB_MATCHING_ADVERTISE_URL`, `WFC_HUB_MATCHING_PEERS` | Direct reachable and trusted owner URLs |
 | `WFC_HUB_PUSH_TRUSTED_OWNERS` | Exact permitted worker-to-owner origins |
-| `WFC_HUB_LONG_POLL_ENABLED`, `WFC_HUB_TASK_SSE_PUSH`, `WFC_HUB_MATCHING_EVENT_GATED` | `false` in the primary preset; not competing push implementations |
+| `WFC_HUB_TASK_SSE_PUSH`, `WFC_HUB_WORKER_CAPACITY_FANOUT` | `false` in the primary preset; retained worker modes are independent, with SSE taking precedence |
+| `WFC_HUB_OUTBOX_ENABLED` | `true` (dispatcher; database outbox writes remain separately configured) |
 
 For a two-Hub stack, verify both instances have the same partition count,
 migration 029 is installed, direct owner URLs resolve from processors, and
@@ -202,7 +201,8 @@ index-only migrations (023 and 025–027), then apply 031 after 030. Run 031 wit
 autocommit, never inside a transaction block. Repeated application is safe.
 Task data, unique indexes, the three candidate discovery indexes, the global
 claim-sequence index, readiness/expiry, operations and reconciliation indexes
-are retained. Optional migration 028 is unchanged.
+are retained. Migration 028 remains in the repository for databases where it
+was previously installed; active setup does not apply or reverse it.
 
 Compatibility SQL claims and the capacity fallback remain available, but their
 performance without these indexes requires workload validation. To restore the
@@ -235,10 +235,10 @@ The feature should be benchmarked against the existing baseline at 8, 16,
 
 ## Other code paths and historical work
 
-Adaptive HTTP claims and long polling remain in source for compatibility,
-emergency rollback and mixed-capability lanes; they are **not competing
-target architectures**. Multi-Hub-capability lanes still use the supported
-adaptive fallback until per-Hub session fan-out is implemented. The original
+Adaptive HTTP claims remain for fenced pull fallback and mixed-capability
+lanes; the former single rotating long-poll worker mode has been removed.
+Multi-Hub-capability lanes use the supported adaptive fallback until per-Hub
+session fan-out is implemented. The original
 upstream engine and direct-PostgreSQL `DistributedWorkPump` are separate
 projects and are not part of this Hub-native architecture. Do not run legacy
 background consumers against the same workflow state.

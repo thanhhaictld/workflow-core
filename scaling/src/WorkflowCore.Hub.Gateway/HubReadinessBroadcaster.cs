@@ -17,8 +17,6 @@ public sealed class HubReadinessBroadcaster(
 {
     private sealed record Subscriber(HashSet<string> Hubs, Channel<string> Channel);
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
-    private readonly bool _eventGated =
-        Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_EVENT_GATED") is "true" or "1" or "True";
     private readonly bool _pushEnabled =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     private long _lastMatchingRecoveryAt;
@@ -31,10 +29,7 @@ public sealed class HubReadinessBroadcaster(
 
     public void Publish(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
-        // In event-gated mode, committed PostgreSQL task notifications carry
-        // the authoritative task type and partition. Gateway-side generic
-        // publishes are only hints for legacy SSE, not 4 speculative SQL claims.
-        if (!_eventGated && !string.IsNullOrEmpty(hub))
+        if (!string.IsNullOrEmpty(hub))
             TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
         PublishLegacy(hub);
     }
@@ -84,13 +79,9 @@ public sealed class HubReadinessBroadcaster(
     /// <summary>Catch up after LISTEN/reconnect; also used by the periodic safety sweep.</summary>
     public async Task ReconcileReadyAsync(CancellationToken ct)
     {
-        // Legacy SSE still gets its 2-second safety sweep.
         foreach (var hub in await store.ReadyHubsAsync(ct))
-        {
-            if (_eventGated) PublishLegacy(hub);
-            else Publish(hub);
-        }
-        if (!_eventGated && !_pushEnabled) return;
+            Publish(hub);
+        if (!_pushEnabled) return;
 
         // Recovery must not turn into a worker *SQL-claim storm*: every
         // 10 seconds one Hub-wide query yields task type + partition hints.
