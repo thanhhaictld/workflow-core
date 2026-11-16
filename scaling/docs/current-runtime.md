@@ -185,6 +185,99 @@ expiries, attempt exhaustion, owner epoch changes, admission wait, resource
 locks, active PostgreSQL connections and activity completion p95/p99. Avoid
 treating reduced HTTP calls alone as throughput proof.
 
+Candidate matcher attribution is available through
+`workflow_hub_candidate_match_lock_duration_seconds`,
+`workflow_hub_candidate_match_entries_checked`,
+`workflow_hub_candidate_match_compatibility_checks` and
+`workflow_hub_candidate_match_unmatched_credits`. These describe work in
+already indexed task-type/version queues, including workflow-pin, reservation,
+resource-block and deferred-entry checks, as well as the broader scan in
+`AddMatchedCredit`; they do not mean every worker scans every buffered
+candidate. Demand-to-admission latency and batch fill are recorded separately
+from PostgreSQL claim duration. The repeatable in-memory 400/4,000
+lane profile is `HubCandidateMatcherProfileTests`; its timings are diagnostic,
+not unit-test thresholds. SQL discovery and admission remain competing costs;
+see the [15 November PostgreSQL review](postgresql-4k-review-2026-11-15.md).
+
+One local Release profile run (16 credits against one indexed workflow task
+type/version queue; no PostgreSQL) recorded:
+
+| Candidate entries | Workflow pins | Matching time | Reservations |
+| ---: | --- | ---: | ---: |
+| 400 | compatible | 0.09 ms | 16 |
+| 400 | mismatched | 7.89 ms | 0 |
+| 4,000 | compatible | 4.68 ms | 16 |
+| 4,000 | mismatched | 87.05 ms | 0 |
+
+This is a single synthetic sample, sensitive to JIT and cache state. It
+confirms that mismatched workflow-pin work can grow with entries in a shared
+type/version queue; it is not a production workload comparison or evidence of
+an end-to-end throughput gain. Repeat with warmup and multiple samples when
+using it to compare matcher changes.
+
+The golden preset baseline has candidate backpressure, concurrent admission,
+and cross-worker batching enabled, admission concurrency 2 per Hub, and batch
+cap 32. Vary cross-worker batching separately from admission concurrency when
+profiling. The fact that one partition admits at a time and its owner row is
+locked through commit leaves a testable admission-ceiling hypothesis, not a
+proven bottleneck. Four admission groups are not four executing tasks: each
+group can contain multiple leases, and task execution continues after commit.
+Any experiment with concurrent admission for one partition must be opt-in and
+retain owner fencing, SQL claim gating, renewal/takeover safety, FIFO/resource
+ordering, cancellation and uncertain-commit quarantine. No such concurrency
+change is enabled by this instrumentation.
+
+For a controlled follow-up, use an isolated PostgreSQL 17 database and compare
+the unchanged golden preset against `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY=1`
+and `=2` with the same fixed workflow/task mix, pool 12, claim gate 3, batch cap
+32 and cross-worker batching enabled. Repeat with cross-worker batching
+disabled as a separate factor, with warmup and multiple measured runs. Capture
+completed tasks/s, queue and admission p95/p99, claim-gate wait, matcher lock
+and scan histograms, SQL statement calls/time/buffer hits, lease uncertainty,
+attempt/history conservation and resource/FIFO outcomes. Compare SQL discovery
+and admission costs because the 15 November review found them to be competing
+cost explanations. If these runs still indicate per-partition owner-row
+serialization, prototype a concurrent-per-partition owner-fenced variant only
+in a separate opt-in branch. Include owner renewal during admission, takeover
+at expiry, lock order, cancellation and ambiguous commit tests before any
+performance comparison; `FOR SHARE` is only a candidate lock-mode experiment
+if those cases prove it safe. No isolated per-partition variant has been
+measured or qualified here, so the admission ceiling remains unresolved.
+
+### Delivery-attempt accounting follow-up
+
+PostgreSQL currently increments `attempts` and persists attempt history when it
+grants a lease, before SSE delivery. A failed send or missing receipt is an
+unknown outcome: the worker may have received and started the task. Do not
+refund the attempt or treat a missing acknowledgement as proof of non-execution.
+The follow-up protocol should add separate bounded delivery and execution
+observability while retaining the lease and stale-worker fencing:
+
+1. Persist an append-only delivery record tied to `(task_id, lease_epoch)` with
+   `Pending`, `Sent`, `Received`, `Started`, `RejectedBeforeStart`,
+   `LeaseExpired` or `Unknown` transitions. Keep task attempt/history rows as
+   the execution lease-grant record for backwards compatibility.
+2. Add idempotent, epoch-fenced `received` and `started` receipts. `received`
+   is diagnostic only; `started` records worker intent but cannot prove that
+   external side effects did or did not happen. Completion remains the durable
+   execution outcome.
+3. Bound resend to the same live `(task_id, epoch)` and delivery ID while its
+   lease remains valid. Never create a new epoch just because a send or receipt
+   timed out. After lease expiry, the existing authoritative reaper/takeover
+   decides whether the task is retryable; keep a separate bounded delivery
+   churn limit for operator visibility rather than consuming execution retry
+   budget silently.
+4. On ambiguous send, disconnect, cancellation or lost acknowledgement, mark
+   delivery outcome `Unknown`, quarantine the matching credit until durable
+   lease retirement is confirmed, and expose both delivery uncertainty and
+   execution attempts. A fenced explicit `RejectedBeforeStart` may be recorded
+   but must not bypass the authoritative lease/owner checks.
+
+This needs an additive migration and failure-injection tests for lost SSE,
+lost receipts, duplicate receipts, same-epoch resend, expiry, takeover,
+attempt/history conservation and stale completion. It is a protocol design
+follow-up, not a counter-only adjustment.
+
 ### Task index cleanup
 
 Migration `031_hub_retire_compatibility_claim_indexes.sql` drops these five

@@ -85,11 +85,7 @@ public sealed class HubTaskMatcher
 
     private bool ShouldProbe(HubClaimRequest request)
     {
-        var key = request.Hubs[0] + "#" + (request.MatchingPartition ?? 0) + "|" +
-            string.Join(",",
-            request.Capabilities
-                .Select(c => c.TaskType + ":" + c.Version)
-                .OrderBy(x => x, StringComparer.Ordinal));
+        var key = HubClaimProbeIdentity.Create(request);
         var now = Stopwatch.GetTimestamp();
         while (true)
         {

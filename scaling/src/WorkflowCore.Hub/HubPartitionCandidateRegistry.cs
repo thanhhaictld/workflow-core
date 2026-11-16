@@ -229,10 +229,25 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         {
             if (!GetLocked(hub, partition, epoch, out var p)) return false;
             var now = _clock.GetUtcNow();
-            if (!p.Entries.Values.Any(e => e.Reservation is null && e.DeferredUntil <= now &&
-                !_reservedTasks.Contains((hub, e.Candidate.Id)) &&
-                (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)) &&
-                Compatible(credit, e.Candidate))) return false;
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var checkedEntries = 0;
+            var compatibilityChecks = 0;
+            var matched = false;
+            foreach (var e in p.Entries.Values)
+            {
+                checkedEntries++;
+                if (e.Reservation is not null || e.DeferredUntil > now ||
+                    _reservedTasks.Contains((hub, e.Candidate.Id)) ||
+                    (e.Candidate.ResourceKeysComplete && e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
+                    continue;
+                compatibilityChecks++;
+                if (Compatible(credit, e.Candidate)) { matched = true; break; }
+            }
+            HubTelemetry.CandidateMatcherLockDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+            HubTelemetry.CandidateMatcherEntriesChecked.Record(checkedEntries);
+            HubTelemetry.CandidateMatcherCompatibilityChecks.Record(compatibilityChecks);
+            if (!matched) HubTelemetry.CandidateMatcherUnmatchedCredits.Record(1);
+            if (!matched) return false;
             if (!AddCredit(hub, partition, epoch, credit)) return false;
             var item = _credits[credit.Id].Credit;
             if (item.Reservation is not null) return true;
@@ -564,6 +579,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private void MatchLocked(Partition p, DateTimeOffset now)
     {
         if (!p.Active) return;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var checkedEntries = 0;
+        var compatibilityChecks = 0;
+        var unmatchedCredits = 0;
         foreach (var key in p.Blocked.Where(x => x.Value <= now).Select(x => x.Key).ToArray()) RemoveBlockedLocked(p,key);
         foreach (var credit in p.Credits.ToArray())
         {
@@ -574,21 +593,29 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 if (capability.HubId != p.Owner.HubId || !p.Capabilities.TryGetValue((capability.TaskType,capability.Version), out var queue)) continue;
                 foreach (var (_, taskId) in queue)
                 {
+                    checkedEntries++;
                     var e = p.Entries[taskId];
                     if (entry is not null && e.Candidate.Sequence >= entry.Candidate.Sequence) break;
                     if (e.Reservation is null && e.DeferredUntil <= now &&
                         !_reservedTasks.Contains((p.Owner.HubId,e.Candidate.Id)) &&
-                        (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)) && Compatible(credit.Value,e.Candidate))
-                    { entry = e; break; }
+                        (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
+                    {
+                        compatibilityChecks++;
+                        if (Compatible(credit.Value,e.Candidate)) { entry = e; break; }
+                    }
                 }
             }
-            if (entry is null) continue;
+            if (entry is null) { unmatchedCredits++; continue; }
             var id = Guid.NewGuid();
             var value = new HubCandidateReservation(id,p.Owner,p.Count,credit.Value,entry.Candidate,p.Stop.Token);
             var reservation = new Reservation(value,p,entry,credit);
             entry.Reservation = id; credit.Reservation = id; _reservedTasks.Add((p.Owner.HubId,entry.Candidate.Id));
             _reservations.Add(id,reservation); p.Pending.AddLast(id);
         }
+        HubTelemetry.CandidateMatcherLockDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        HubTelemetry.CandidateMatcherEntriesChecked.Record(checkedEntries);
+        HubTelemetry.CandidateMatcherCompatibilityChecks.Record(compatibilityChecks);
+        if (unmatchedCredits > 0) HubTelemetry.CandidateMatcherUnmatchedCredits.Record(unmatchedCredits);
     }
     private void AddBlockedLocked(Partition p, string key, DateTimeOffset until, DateTimeOffset now)
     {
