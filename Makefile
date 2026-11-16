@@ -45,8 +45,10 @@ $(GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE := 0
 $(GOLDEN_TARGETS): export WFC_HUB_WORKER_CAPACITY_FANOUT := false
 $(GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
 $(GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := http://hub:5100,http://hub-2:5100
-# Candidate-ID hydration is experimental and defaults off in normal presets.
-# Set WFC_HUB_MATCHING_CANDIDATES_ENABLED=true explicitly for A/B validation.
+# Existing partition-owned candidate matching is enabled in the standard stack.
+$(GOLDEN_TARGETS): export WFC_HUB_MATCHING_CANDIDATES_ENABLED := true
+# Exact task-ID hydration is an experimental enhancement and remains off by default.
+$(GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED := false
 # Candidate admission concurrency is configured only by the canonical setting.
 $(GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY := 2
 $(GOLDEN_TARGETS): export WFC_HUB_CANDIDATE_BACKPRESSURE := true

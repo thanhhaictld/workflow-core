@@ -433,8 +433,15 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         string hub, CancellationToken ct)
     {
         await using var setting = new NpgsqlCommand(
-            "SELECT COALESCE(current_setting('wfc.hub_notification_outbox', true), 'off') = 'on'", db, tx);
-        var useOutbox = (bool)(await setting.ExecuteScalarAsync(ct))!;
+            "SELECT COALESCE(current_setting('wfc.hub_candidate_task_id_hints', true), 'off') = 'on', COALESCE(current_setting('wfc.hub_notification_outbox', true), 'off') = 'on'", db, tx);
+        await using var reader = await setting.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        var candidateHintsEnabled = reader.GetBoolean(0);
+        var useOutbox = reader.GetBoolean(1);
+        await reader.CloseAsync();
+        // Policy invalidation events belong to the exact-ID candidate feature.
+        // With that feature off, retain the existing indexed recovery behavior.
+        if (!candidateHintsEnabled) return;
         await using var command = useOutbox
             ? new NpgsqlCommand("INSERT INTO wfc_scale.hub_notification_outbox(hub_id,matching_payload) VALUES (@hub,json_build_object('hub',@hub,'kind','policy-change')::text)", db, tx)
             : new NpgsqlCommand("SELECT pg_notify('wfc_hub_matching_ready',json_build_object('hub',@hub,'kind','policy-change')::text)", db, tx);
