@@ -18,6 +18,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
     private sealed record Hint(string Hub, string? Type, int Version, bool Legacy,
         int? Partition = null, Guid? TaskId = null, bool Recovery = false);
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
+    private const int MaxHintsPerBatch = 128;
     private int _listening;
     private int _recoveryRequired;
     public bool IsListening => Volatile.Read(ref _listening) == 1;
@@ -101,7 +102,10 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                             int? partition = null;
                             if (root.TryGetProperty("partition", out var p))
                             {
-                                if (p.ValueKind != JsonValueKind.Number || !p.TryGetInt32(out var parsedPartition) || parsedPartition is < 0 or >= 64)
+                                // This is the task's actual routing partition, not
+                                // the 0..63 discovery bucket. Ownership and bucket
+                                // routing apply their respective modulo operations.
+                                if (p.ValueKind != JsonValueKind.Number || !p.TryGetInt32(out var parsedPartition) || parsedPartition is < 0 or >= 4096)
                                 { InvalidHint(); return; }
                                 partition = parsedPartition;
                             }
@@ -177,8 +181,10 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             var typed = new HashSet<(string Hub, string? Type, int Version, int? Partition)>();
             var taskIds = new Dictionary<(string Hub, Guid Id, int Partition), Hint>();
             var recovery = false;
-            while (reader.TryRead(out var hint))
+            var drained = 0;
+            while (drained < MaxHintsPerBatch && reader.TryRead(out var hint))
             {
+                drained++;
                 if (hint.Recovery) { recovery = true; continue; }
                 if (hint.Legacy) legacy.Add(hint.Hub);
                 else if (hint.TaskId is Guid id && hint.Partition is int partition)
@@ -205,9 +211,13 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 _readiness.PublishCandidateTaskChanged(hub, id, partition, hint.Type, hint.Version);
                 HubTelemetry.PostgresHintsForwarded.Add(1);
             }
-            if (recovery || Interlocked.Exchange(ref _recoveryRequired, 0) != 0)
+            // Consume once at the publication boundary; a concurrent overflow
+            // after this exchange remains set for the next bounded batch.
+            recovery |= Interlocked.Exchange(ref _recoveryRequired, 0) != 0;
+            if (recovery)
             {
-                Interlocked.Exchange(ref _recoveryRequired, 0);
+                HubTelemetry.CandidateRecoveryRequests.Add(1,
+                    new KeyValuePair<string, object?>("reason", "listener_overflow_or_invalid_payload"));
                 _readiness.PublishCandidateRecoveryRequired();
                 HubTelemetry.CandidateHintsDropped.Add(1);
             }

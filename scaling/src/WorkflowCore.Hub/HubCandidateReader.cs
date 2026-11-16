@@ -41,20 +41,31 @@ internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDisc
             AND t.attempts<t.max_attempts
             AND ((t.state=0 AND t.due_at<=clock_timestamp())
                  OR (t.state=1 AND t.lease_until<clock_timestamp()))
+        ), budget AS MATERIALIZED (
+          SELECT GREATEST(1,@byteLimit/GREATEST(count(*),1)) AS per_candidate FROM page
         ), resource_sizes AS MATERIALIZED (
           SELECT c.task_id,sum(octet_length(c.resource_key)+24) AS bytes
           FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id GROUP BY c.task_id
+        ), base_size AS MATERIALIZED (
+          SELECT p.id,128+octet_length(p.hub_id)+octet_length(p.task_type)+
+            COALESCE(octet_length(w.definition_id),0) AS bytes,b.per_candidate
+          FROM page p LEFT JOIN wfc_scale.hub_workflow w ON w.id=p.workflow_id CROSS JOIN budget b
         ), resources AS (
           SELECT c.task_id,array_agg(c.resource_key ORDER BY c.resource_key) AS keys
           FROM wfc_scale.hub_task_constraint c JOIN resource_sizes s ON s.task_id=c.task_id
-          WHERE s.bytes<=@perCandidateLimit GROUP BY c.task_id
+          JOIN base_size b ON b.id=c.task_id
+          WHERE b.bytes<=b.per_candidate AND b.bytes+s.bytes<=b.per_candidate
+          GROUP BY c.task_id
         )
-        SELECT p.id,p.sequence,p.hub_id,p.partition_id,p.task_type,p.task_version,p.workflow_id,
-               w.definition_id,w.definition_version,p.epoch,
+        SELECT p.id,p.sequence,CASE WHEN b.bytes<=b.per_candidate THEN p.hub_id END,p.partition_id,
+               CASE WHEN b.bytes<=b.per_candidate THEN p.task_type END,p.task_version,p.workflow_id,
+               CASE WHEN b.bytes<=b.per_candidate THEN w.definition_id END,w.definition_version,p.epoch,
                CASE WHEN p.lease_until<clock_timestamp() AND p.state=1 THEN p.lease_until ELSE p.due_at END AS deadline,
                COALESCE(r.keys,ARRAY[]::text[]),COALESCE(s.bytes,0),
-               (128+octet_length(p.hub_id)+octet_length(p.task_type)+COALESCE(octet_length(w.definition_id),0))>@perCandidateLimit AS oversized
+               b.bytes>b.per_candidate AS oversized,
+               COALESCE(r.keys IS NOT NULL OR s.bytes IS NULL OR s.bytes=0,FALSE)
         FROM page p LEFT JOIN wfc_scale.hub_workflow w ON w.id=p.workflow_id
+        JOIN base_size b ON b.id=p.id
         LEFT JOIN resource_sizes s ON s.task_id=p.id LEFT JOIN resources r ON r.task_id=p.id
         ORDER BY p.sequence,p.id
         """;
@@ -191,34 +202,37 @@ internal sealed class HubCandidateReader(HubTaskStore tasks) : IHubCandidateDisc
             byteLimit is < 256 or > 16 * 1024 * 1024)
             throw new ArgumentException("Invalid candidate hydration request");
 
-        // A per-row SQL cap divided across the batch keeps server materialization,
-        // array expansion, and managed object growth within the booked page budget.
-        var perCandidateLimit = Math.Max(256, byteLimit / ids.Count);
-        var batchMetadataLimit = (long)perCandidateLimit * ids.Count;
+        var requestedIds = ids.Distinct().ToArray();
+        if (requestedIds.Length > byteLimit / 16)
+            throw new ArgumentException("Candidate hydration ID array exceeds its byte budget", nameof(ids));
+        // UUID parameters consume managed memory too; reserve their exact wire
+        // size before SQL divides the remaining metadata budget across eligible rows.
+        var batchMetadataLimit = byteLimit - requestedIds.Length * 16;
         await using var command = tasks.DataSource.CreateCommand(HydrationSql);
-        command.Parameters.AddWithValue("ids", ids.ToArray());
+        command.Parameters.AddWithValue("ids", requestedIds);
         command.Parameters.AddWithValue("hub", hub);
         command.Parameters.AddWithValue("matchingPartition", matchingPartition);
         command.Parameters.AddWithValue("partitionCount", partitionCount);
-        command.Parameters.AddWithValue("perCandidateLimit", perCandidateLimit);
+        command.Parameters.AddWithValue("byteLimit", batchMetadataLimit);
 
-        var items = new List<HubTaskCandidate>(ids.Count);
+        var items = new List<HubTaskCandidate>(requestedIds.Length);
         var bytes = 0;
         var oversized = 0;
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             if (reader.GetBoolean(13)) { oversized++; continue; }
-            var keys = reader.GetInt64(12) <= perCandidateLimit ? reader.GetFieldValue<string[]>(11) : [];
+            var keysComplete = reader.GetBoolean(14);
+            var keys = keysComplete ? reader.GetFieldValue<string[]>(11) : [];
             var item = new HubTaskCandidate(reader.GetGuid(0), reader.GetInt64(1), reader.GetString(2),
                 reader.GetInt32(3), reader.GetString(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetGuid(6),
                 reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                reader.GetInt64(9), reader.GetDateTime(10), keys, reader.GetInt64(12) <= perCandidateLimit);
+                reader.GetInt64(9), reader.GetDateTime(10), keys, keysComplete);
             var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType) +
                 (item.DefinitionId is null ? 0 : Encoding.UTF8.GetByteCount(item.DefinitionId)) +
                 keys.Sum(k => 24 + Encoding.UTF8.GetByteCount(k));
             if (bytes + size > batchMetadataLimit)
-                throw new InvalidOperationException("Candidate hydration exceeded its SQL metadata budget");
+                throw new InvalidOperationException("Candidate hydration violated its bounded SQL metadata contract");
             bytes += size;
             items.Add(item);
         }

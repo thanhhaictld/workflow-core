@@ -1,0 +1,95 @@
+{
+  "scenario": "before-claim",
+  "database": "wfc_push_ha_61ca81c0",
+  "runId": "ha-before-claim-61ca81c0",
+  "started": "2026-11-16T16:43:23.9442856Z",
+  "events": [
+    {
+      "name": "both-hubs-and-sessions-ready",
+      "at": "2026-11-16T16:43:29.2689797Z"
+    },
+    {
+      "name": "owner-killed",
+      "at": "2026-11-16T16:43:29.3878172Z"
+    },
+    {
+      "name": "owner-takeover",
+      "at": "2026-11-16T16:43:39.5471677Z"
+    },
+    {
+      "name": "sessions-reconnected",
+      "at": "2026-11-16T16:43:39.5794874Z"
+    },
+    {
+      "name": "workflows-completed",
+      "at": "2026-11-16T16:44:10.6233967Z"
+    }
+  ],
+  "errors": [],
+  "initialMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 8,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 128,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 0,
+    "pushEndedSessions": 0
+  },
+  "ownerTakeoverSeconds": 10.16,
+  "ownerToReconnectSeconds": 10.19,
+  "recoveredMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 8,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 128,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 4,
+    "pushEndedSessions": 0
+  },
+  "finalMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 6,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 128,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 20,
+    "pushEndedSessions": 0
+  },
+  "taskSummary": {
+    "tasks": 20,
+    "complete": 20,
+    "retries": 0
+  },
+  "fifoOverlaps": 0,
+  "executionStarts": 20,
+  "duplicateSameEpochStarts": 0,
+  "sideEffects": 6,
+  "missingDispatchKeys": 0,
+  "duplicateSideEffects": 0,
+  "outcome": "passed",
+  "finished": "2026-11-16T16:44:11.1141631Z"
+}

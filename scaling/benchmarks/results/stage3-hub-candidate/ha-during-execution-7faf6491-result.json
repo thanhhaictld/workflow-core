@@ -1,0 +1,101 @@
+{
+  "scenario": "during-execution",
+  "database": "wfc_push_ha_7faf6491",
+  "runId": "ha-during-execution-7faf6491",
+  "started": "2026-11-16T16:45:34.7803786Z",
+  "events": [
+    {
+      "name": "both-hubs-and-sessions-ready",
+      "at": "2026-11-16T16:45:38.1039649Z"
+    },
+    {
+      "name": "owner-killed",
+      "at": "2026-11-16T16:45:39.7913367Z"
+    },
+    {
+      "name": "owner-takeover",
+      "at": "2026-11-16T16:45:49.9908290Z"
+    },
+    {
+      "name": "sessions-reconnected",
+      "at": "2026-11-16T16:45:56.5899919Z"
+    },
+    {
+      "name": "workflows-completed",
+      "at": "2026-11-16T16:46:12.1612536Z"
+    }
+  ],
+  "errors": [],
+  "initialMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 8,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 128,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 0,
+    "pushEndedSessions": 0
+  },
+  "oldTaskLease": {
+    "id": "820e55b0-1df0-4c6d-9eb4-67e054768a90",
+    "owner": "DESKTOP-3UV76P8:54f8eab54b6649a4ba90f027a17f15c6",
+    "epoch": 1
+  },
+  "ownerTakeoverSeconds": 10.2,
+  "ownerToReconnectSeconds": 16.8,
+  "recoveredMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 6,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 128,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 5,
+    "pushEndedSessions": 0
+  },
+  "finalMatching": {
+    "pushConnected": 2,
+    "readinessConnected": 0,
+    "candidateEnabled": true,
+    "candidateCredits": 6,
+    "candidateReservations": 0,
+    "candidateUncertain": 0,
+    "candidateBuffered": 0,
+    "candidateAdmissionsActive": 0,
+    "pullClaims": 0,
+    "pullEmptyClaims": 0,
+    "pullFailedClaims": 0,
+    "pushClaims": 0,
+    "pushEmptyClaims": 0,
+    "pushDeliveries": 9,
+    "pushEndedSessions": 0
+  },
+  "taskSummary": {
+    "tasks": 20,
+    "complete": 20,
+    "retries": 0
+  },
+  "fifoOverlaps": 0,
+  "executionStarts": 20,
+  "duplicateSameEpochStarts": 0,
+  "sideEffects": 6,
+  "missingDispatchKeys": 0,
+  "duplicateSideEffects": 0,
+  "staleHeartbeatStatus": 409,
+  "outcome": "passed",
+  "finished": "2026-11-16T16:46:12.5508333Z"
+}

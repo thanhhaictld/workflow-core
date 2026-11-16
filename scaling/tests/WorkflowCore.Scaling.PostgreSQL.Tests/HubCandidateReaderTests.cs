@@ -75,6 +75,54 @@ public sealed class HubCandidateReaderTests
     }
 
     [Fact]
+    public async Task HydrationEnforcesCombinedUtf8BudgetAndSuppressesOversizedBaseText()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
+        var hub = "candidate-hydrate-budget-" + Guid.NewGuid().ToString("N");
+        var combined = Guid.NewGuid(); var oversized = Guid.NewGuid(); var unicode = Guid.NewGuid();
+        var combinedKey = new string('k', 220) + "-" + combined;
+        var unicodeKey = string.Concat(Enumerable.Repeat("🧪", 70)) + unicode;
+        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            VALUES (@combined,@hub,0,@base,1,'{}'),(@oversized,@hub,0,@large,1,'{}'),(@unicode,@hub,0,'activity',1,'{}');
+            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
+            VALUES (@combinedKey,1,false),(@unicodeKey,1,false);
+            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
+            VALUES (@combined,@combinedKey),(@unicode,@unicodeKey);
+            """, db))
+        {
+            command.Parameters.AddWithValue("combined", combined); command.Parameters.AddWithValue("oversized", oversized);
+            command.Parameters.AddWithValue("unicode", unicode); command.Parameters.AddWithValue("hub", hub);
+            command.Parameters.AddWithValue("base", new string('b', 180));
+            command.Parameters.AddWithValue("large", new string('z', 4096));
+            command.Parameters.AddWithValue("combinedKey", combinedKey); command.Parameters.AddWithValue("unicodeKey", unicodeKey);
+            await command.ExecuteNonQueryAsync();
+        }
+        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
+        var page = await reader.HydrateAsync(hub, 0, 64, [combined, combined], 512, default);
+        var combinedItem = Assert.Single(page.Items);
+        Assert.Equal(combined, combinedItem.Id);
+        Assert.False(combinedItem.ResourceKeysComplete);
+        Assert.Empty(combinedItem.ResourceKeys);
+        Assert.InRange(page.MetadataBytes, 0, 512);
+        var unicodePage = await reader.HydrateAsync(hub, 0, 64, [unicode], 512, default);
+        Assert.False(Assert.Single(unicodePage.Items).ResourceKeysComplete);
+        Assert.Empty(unicodePage.Items[0].ResourceKeys);
+        Assert.InRange(unicodePage.MetadataBytes, 0, 512);
+        var oversizedPage = await reader.HydrateAsync(hub, 0, 64, [oversized], 512, default);
+        Assert.Empty(oversizedPage.Items);
+        Assert.Equal(1, oversizedPage.Oversized);
+
+        // A minimum legal byte budget with duplicate requested IDs is still
+        // bounded and does not duplicate result rows.
+        var minimum = await reader.HydrateAsync(hub, 0, 64, [unicode, unicode], 256, default);
+        Assert.Equal(unicode, Assert.Single(minimum.Items).Id);
+        Assert.InRange(minimum.MetadataBytes, 0, 256);
+    }
+
+    [Fact]
     public async Task ExpiredPagesUseDeadlineAndSequenceCursor()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")

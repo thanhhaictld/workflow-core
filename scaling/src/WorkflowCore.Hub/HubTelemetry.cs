@@ -102,6 +102,8 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_candidate_hydration_rows", "{row}");
     public static readonly Counter<long> CandidateHydrationOversized =
         Meter.CreateCounter<long>("workflow_hub_candidate_hydration_oversized", "{row}");
+    public static readonly Counter<long> CandidateRecoveryRequests =
+        Meter.CreateCounter<long>("workflow_hub_candidate_recovery_requests", "{request}");
     // Matcher work is recorded per lock-held matching pass, with no task or
     // worker labels. Checks count entries visited in already type/version-indexed queues.
     public static readonly Histogram<double> CandidateMatcherLockDuration =

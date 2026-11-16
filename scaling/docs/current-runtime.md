@@ -112,7 +112,9 @@ mode stores each notification separately and the dispatcher deletes those rows
 in the notification transaction. Heartbeats do not add event rows. The bounded
 `workflow_hub_candidate_task_hints_received`, `..._deduped`, `..._dropped`,
 `workflow_hub_candidate_hydration_calls`, and `..._rows` counters report the
-fast path without task or hub labels.
+fast path without task or hub labels. Recovery requests carry only a bounded
+reason tag (`listener_overflow_or_invalid_payload`, `exact_queue_memory_pressure`
+or `hydration_failure`).
 
 Exact ID hints are deduplicated in bounded listener and owner queues. Queue
 overflow, malformed payloads and hydration failures request recovery; bounded
@@ -121,19 +123,46 @@ hub-wide permit-release hint still wakes every owner because resource scopes
 can span matching partitions. Activity policy capacity updates publish the
 same conservative hub-wide invalidation after their database transaction.
 Coarse permit/policy hints can still cause full paged rescans. Local Gateway
-commits and the existing two-second ready-hub sweep continue to wake legacy
-matchers/SSE consumers without dirtying candidate discovery; transaction-coupled
-task-ID hints populate the candidate registry, and the registry's indexed
-ten-second recovery remains the fallback. The separate typed recovery hints
-continue to serve the legacy matcher. Old-schema coarse notifications can still
-request a candidate rescan, so the metadata-discovery reduction is workload and
-rollout dependent.
+durable mutations publish a conservative candidate rescan after commit. The
+existing two-second ready-hub reconciliation also requests recovery for each
+currently ready hub, preserving the previous missed-hint and disabled-LISTEN
+wakeup envelope; it does not run for every exact ID event. The registry keeps
+recovery pages bounded and shares service between exact batches and indexed
+pages. Its ten-second sweep remains the backstop for due-time passage, expired
+leases and work missed between ready-hub reconciliations. The separate typed
+recovery hints continue to serve the legacy matcher. Old-schema coarse
+notifications can still request a candidate rescan, so metadata-discovery
+reduction depends on workload and rollout.
+
+The listener channel holds at most 512 hints and each coalescing pass reads at
+most 128 hints; matching JSON is capped at 512 UTF-8 bytes, so one pass holds
+at most 64 KiB of payload plus bounded set/object overhead. Overflow sets an
+atomic recovery flag; the publisher consumes it once at the pass
+boundary so concurrent overflow remains visible for the next pass. Invalid JSON
+and failed hydration also request recovery. Exact batch failures count toward
+the recovery turn budget, and if exact queue memory blocks a page reservation,
+advisory IDs are released to make room for indexed recovery. Existing reservations
+and uncertain claims remain pinned.
+
+Hydration is a bounded primary-key probe over requested IDs. SQL suppresses
+oversized text before returning it and includes resource arrays only when their
+UTF-8 metadata plus base strings fit the share of the actual eligible-result
+budget. When base metadata fits but resource keys do not, the entry carries
+`ResourceKeysComplete=false`; claim admission remains authoritative and reloads
+constraints transactionally. Requested IDs are deduplicated and their parameter
+array is bounded by the wire-byte budget.
+With default coordinator limits, pending exact IDs are capped at 1,024 per
+owner and 16,384 process-wide, charged at 64 bytes each; one hydration batch is
+at most 128 IDs and 64 KiB of metadata. Persistent candidate entries remain
+under the existing 4 MiB per-partition and 64 MiB process budgets.
 
 The 030 notification outbox is transactionally populated and dispatches
 notifications while deleting rows in the same transaction. It is not a
 replayable task feed: a disconnected listener can miss an already-dispatched
 ID, so bootstrap/takeover and periodic indexed recovery remain required.
-Install additive migration 032 before deploying the new listener. Old listeners
+Install additive migration 032 in every schema setup path before deploying the
+new listener. CI fixtures, the development script and Compose initialization
+apply it after 031. Old listeners
 ignore the added JSON field and fall back to typed readiness scans; the new
 listener accepts old coarse payloads. Rolling back the application does not
 require reversing 032 or touching task data; retaining 032 preserves the old
