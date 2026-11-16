@@ -464,8 +464,23 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 var recoveryTurnDue = p.Dirty || p.Horizon is not null || now >= p.NextSweep;
                 if (p.ExactIds.Count > 0 && !(p.ExactHydrationsSinceRecovery >= 8 && recoveryTurnDue))
                 {
-                    if (!BookPageLocked(p)) return false;
-                    var count = Math.Min(_options.PageSize, p.ExactIds.Count);
+                    if (!BookPageLocked(p))
+                    {
+                        // Exact IDs are advisory and recovery is authoritative.
+                        // Release their queue budget so a bounded indexed page
+                        // can make progress when the process is under pressure.
+                        var droppedIds = p.ExactSet.Count;
+                        p.ExactIds.Clear(); p.ExactSet.Clear();
+                        var released = (long)droppedIds * 64;
+                        p.Bytes -= released; _bytes -= released; _pendingExactIds -= droppedIds;
+                        p.Dirty = true; p.HeadRequested = true;
+                        HubTelemetry.CandidateHintsDropped.Add(1);
+                        HubTelemetry.CandidateRecoveryRequests.Add(1,
+                            new KeyValuePair<string, object?>("reason", "exact_queue_memory_pressure"));
+                        return false;
+                    }
+                    var maxIdsByWireBudget = Math.Max(1, _options.PageWireBytes / 256);
+                    var count = Math.Min(Math.Min(_options.PageSize, maxIdsByWireBudget), p.ExactIds.Count);
                     hydrateIds = new Guid[count];
                     for (var i = 0; i < count; i++)
                     {
@@ -474,9 +489,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                         p.Bytes -= 64; _bytes -= 64; _pendingExactIds--;
                         hydrateIds[i] = id;
                     }
+                    p.ExactHydrationsSinceRecovery++;
                     booked = true;
                 }
-                else if (p.Horizon is null) { capture = true; p.Dirty = false; p.HeadRequested = false; p.ForwardSinceHead = 0; p.ExactHydrationsSinceRecovery = 0; }
+                else if (p.Horizon is null) { capture = true; p.Dirty = false; p.HeadRequested = false; p.ForwardSinceHead = 0; }
                 else
                 {
                     // One bounded head catch-up for every eight forward pages
@@ -509,8 +525,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     hydrateIds, _options.PageWireBytes, linked.Token);
                 HubTelemetry.CandidateHydrationRows.Add(hydrated.Items.Count);
                 HubTelemetry.CandidateHydrationOversized.Add(hydrated.Oversized);
-                lock (_sync) if (p.Active)
-                { p.ExactHydrationsSinceRecovery++; ApplyHydratedLocked(p, hydrateIds, hydrated.Items, now); }
+                lock (_sync) if (p.Active) ApplyHydratedLocked(p, hydrateIds, hydrated.Items, now);
                 return true;
             }
             if (capture)
@@ -567,6 +582,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     stream.Cursor = page.Next;
                     stream.Done = page.EndOfStream;
                     p.ForwardSinceHead++;
+                    p.ExactHydrationsSinceRecovery = 0;
                     if (p.Streams.All(x => x.Done)) EndSweepLocked(p, now);
                 }
             }
@@ -578,7 +594,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             if (p is not null) lock (_sync) if (p.Active)
             {
                 if (capture || hydrateIds is not null) p.Dirty = true;
+                if (hydrateIds is not null) p.ExactHydrationsSinceRecovery = Math.Max(8, p.ExactHydrationsSinceRecovery);
                 if (hydrateIds is not null) RequeueExactLocked(p, hydrateIds);
+                if (hydrateIds is not null) HubTelemetry.CandidateRecoveryRequests.Add(1,
+                    new KeyValuePair<string, object?>("reason", "hydration_failure"));
                 if (head) { p.HeadRequested = true; p.ForwardSinceHead = 8; }
             }
             throw;

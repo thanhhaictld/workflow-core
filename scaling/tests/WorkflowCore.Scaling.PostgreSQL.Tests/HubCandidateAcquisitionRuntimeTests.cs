@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Npgsql;
 using Microsoft.Extensions.Logging.Abstractions;
 using WorkflowCore.Hub;
 using WorkflowCore.Hub.Gateway;
@@ -21,7 +22,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
         var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL",
             "WFC_HUB_MATCHING_PEERS", "WFC_HUB_MATCHING_PARTITIONS",
-            "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY" };
+            "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY", "WFC_HUB_CANDIDATE_BACKPRESSURE" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         try
         {
@@ -92,5 +93,88 @@ public sealed class HubCandidateAcquisitionRuntimeTests
         {
             foreach (var key in keys) Environment.SetEnvironmentVariable(key, original[key]);
         }
+    }
+
+    [Fact]
+    public async Task ListenerRoutesActualPartitionsAboveDiscoveryBucketRangeToTheirOwner()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required");
+        var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
+            "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL", "WFC_HUB_MATCHING_PEERS",
+            "WFC_HUB_MATCHING_PARTITIONS", "WFC_HUB_CANDIDATE_BACKPRESSURE" };
+        var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(keys[0], "true"); Environment.SetEnvironmentVariable(keys[1], "true");
+            Environment.SetEnvironmentVariable(keys[2], "candidate-partition-route"); Environment.SetEnvironmentVariable(keys[3], "http://localhost:5100");
+            Environment.SetEnvironmentVariable(keys[4], "http://localhost:5100"); Environment.SetEnvironmentVariable(keys[5], "64");
+            Environment.SetEnvironmentVariable(keys[6], "false");
+            var hub = "candidate-part-route-" + Guid.NewGuid().ToString("N");
+            using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using var tasks = new HubTaskStore(database, 12);
+            var readiness = new HubReadinessBroadcaster(tasks,
+                new HubWorkflowStore(tasks, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+                NullLogger<HubReadinessBroadcaster>.Instance);
+            var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(tasks),
+                new HubMatchingPartitionLeaseStore(tasks), NullLogger<HubMatchingOwnership>.Instance);
+            var matcher = new HubCandidateAcquisition(tasks, ownership, readiness,
+                NullLogger<HubCandidateAcquisition>.Instance);
+            var listener = new PostgresHubNotificationListener(database, readiness,
+                NullLogger<PostgresHubNotificationListener>.Instance);
+            var exact = new System.Collections.Concurrent.ConcurrentDictionary<int, Guid>();
+            var coarse = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+            var recovery = 0;
+            readiness.CandidateTaskChanged += (observed, id, partition, _, _) =>
+            { if (observed == hub) exact[partition] = id; };
+            readiness.CandidateRescanRequested += (observed, _, _, partition) =>
+            { if (observed == hub && partition is int value) coarse[value] = 0; };
+            readiness.CandidateRecoveryRequired += () => Interlocked.Increment(ref recovery);
+            await ownership.StartAsync(lifetime.Token); await matcher.StartAsync(lifetime.Token);
+            try
+            {
+                var owner = await ownership.AcquirePartitionAsync(hub, 0, lifetime.Token);
+                var highOwner = await ownership.AcquirePartitionAsync(hub, 63, lifetime.Token);
+                Assert.True(ownership.IsLocal(owner));
+                Assert.True(ownership.IsLocal(highOwner));
+                await listener.StartAsync(lifetime.Token);
+                while (!listener.IsListening) await Task.Delay(25, lifetime.Token);
+                var ids = new Dictionary<int, Guid> { [64] = Guid.NewGuid(), [4095] = Guid.NewGuid() };
+                await using var db = new NpgsqlConnection(database); await db.OpenAsync(lifetime.Token);
+                foreach (var (partition, id) in ids)
+                {
+                    await using var insert = new NpgsqlCommand("""
+                        INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+                        VALUES (@id,@hub,@partition,'route-test',1,'{}')
+                        """, db);
+                    insert.Parameters.AddWithValue("id", id); insert.Parameters.AddWithValue("hub", hub);
+                    insert.Parameters.AddWithValue("partition", partition); await insert.ExecuteNonQueryAsync(lifetime.Token);
+                }
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                while (!ids.All(pair => exact.TryGetValue(pair.Key, out var observed) && observed == pair.Value))
+                    await Task.Delay(25, timeout.Token);
+                while (matcher.CandidateBuffered < 2) await Task.Delay(25, timeout.Token);
+                Assert.Equal(ids[64], exact[64]); Assert.Equal(ids[4095], exact[4095]);
+                Assert.Equal(2, matcher.GenerationCount);
+                Assert.Equal(0, Volatile.Read(ref recovery));
+                // Old 014/030 typed payloads remain valid with task partitions
+                // above the 0..63 candidate discovery bucket range.
+                foreach (var partition in ids.Keys)
+                {
+                    await using var oldHint = new NpgsqlCommand("SELECT pg_notify('wfc_hub_matching_ready',json_build_object('hub',@hub,'type','route-test','version',1,'partition',@partition)::text)", db);
+                    oldHint.Parameters.AddWithValue("hub", hub); oldHint.Parameters.AddWithValue("partition", partition);
+                    await oldHint.ExecuteNonQueryAsync(lifetime.Token);
+                }
+                using var coarseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (ids.Keys.Any(partition => !coarse.ContainsKey(partition))) await Task.Delay(25, coarseTimeout.Token);
+            }
+            finally
+            {
+                await listener.StopAsync(CancellationToken.None); listener.Dispose();
+                await matcher.StopAsync(CancellationToken.None); matcher.Dispose();
+                await ownership.StopAsync(CancellationToken.None); ownership.Dispose();
+            }
+        }
+        finally { foreach (var key in keys) Environment.SetEnvironmentVariable(key, original[key]); }
     }
 }

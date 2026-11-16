@@ -16,6 +16,7 @@ public sealed class HubPartitionCandidateRegistryTests
         public readonly Dictionary<(string, int, HubCandidateStream), List<HubTaskCandidate>> Data = new();
         public readonly List<(string Hub,int Bucket,HubCandidateStream Stream,long? Cursor)> Calls = [];
         public int Active, MaxActive, Captures;
+        public bool AlwaysFailHydration;
         public int HydrationCalls;
         public TaskCompletionSource? Entered, Release, PageEntered, PageRelease;
         public TaskCompletionSource? HydrationEntered, HydrationRelease;
@@ -37,6 +38,7 @@ public sealed class HubPartitionCandidateRegistryTests
             IReadOnlyList<Guid> ids,int byteLimit,CancellationToken ct)
         {
             Interlocked.Increment(ref HydrationCalls);
+            if (AlwaysFailHydration) throw new InvalidOperationException("synthetic hydration failure");
             if (HydrationEntered is not null)
             {
                 HydrationEntered.TrySetResult();
@@ -126,6 +128,32 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
         await registry.RunOneTurnAsync(clock.Now, default);
         Assert.Equal(0, registry.Snapshot().Entries);
+    }
+
+    [Fact]
+    public async Task RepeatedHydrationFailuresYieldToIndexedRecoveryAndLaterExactWork()
+    {
+        var clock = new Clock(); var source = new Discovery { AlwaysFailHydration = true }; var hub = "exact-fail-fairness";
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        var first = Candidate(hub, 1);
+        Assert.True(registry.NotifyTask(hub, 0, 1, first.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.RunOneTurnAsync(clock.Now, default));
+        await registry.RunOneTurnAsync(clock.Now, default); // a failed hydration yields to horizon capture
+        await registry.RunOneTurnAsync(clock.Now, default); // indexed page
+        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.RunOneTurnAsync(clock.Now, default));
+        await registry.RunOneTurnAsync(clock.Now, default); // another failure cannot block forward recovery
+        Assert.Equal(1, source.Captures);
+        Assert.NotEmpty(source.Calls);
+
+        // Reset the retry budget on every recovery page, so exact work keeps
+        // receiving bounded service during a long paged sweep.
+        source.AlwaysFailHydration = false;
+        var second = Candidate(hub, 2); source.Add(hub, 0, HubCandidateStream.ReadyDue, second);
+        Assert.True(registry.NotifyTask(hub, 0, 1, second.Id));
+        for (var i = 0; i < 24; i++) await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.True(source.HydrationCalls > 2);
+        Assert.True(source.Calls.Count > 1);
     }
 
     [Fact]

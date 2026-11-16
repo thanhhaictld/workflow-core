@@ -41,19 +41,27 @@ public sealed class HubReadinessBroadcaster(
     }
 
     /// <summary>
-    /// Wake legacy matchers and SSE subscribers after a local commit. Candidate
-    /// discovery receives the transaction-coupled task-ID hint; its indexed
-    /// safety sweep remains the fallback when notification delivery is disabled.
+    /// Wake legacy matchers and SSE subscribers after a local durable mutation,
+    /// and request bounded indexed recovery. Exact PostgreSQL task-ID events use
+    /// PublishCandidateTaskChanged and do not dirty every owner bucket.
     /// </summary>
     public void PublishFallback(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
-        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
+        if (!string.IsNullOrEmpty(hub))
+        {
+            TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
+            CandidateRescanRequested?.Invoke(hub, taskType, version, taskPartitionId);
+        }
         PublishLegacy(hub);
     }
 
     private void PublishRecoveryHub(string hub)
     {
-        if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, null, 0, null);
+        if (!string.IsNullOrEmpty(hub))
+        {
+            TaskReady?.Invoke(hub, null, 0, null);
+            CandidateRescanRequested?.Invoke(hub, null, 0, null);
+        }
         PublishLegacy(hub);
     }
 
