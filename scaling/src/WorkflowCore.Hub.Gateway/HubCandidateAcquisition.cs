@@ -260,12 +260,10 @@ public sealed class HubCandidateAcquisition : BackgroundService
                             snapshot.Entries,snapshot.Bytes);
                         if(++reaper%20==0)
                         {
-                            if (_concurrentAdmission)
-                            {
-                                if (_reconciliationTask is null || _reconciliationTask.IsCompleted)
-                                    _reconciliationTask = ReapWithLoggingAsync(stoppingToken);
-                            }
-                            else await ReapAsync(stoppingToken);
+                            // Lease reconciliation uses its own bounded DB batches and must
+                            // not hold discovery or serialized admission while querying.
+                            if (_reconciliationTask is null || _reconciliationTask.IsCompleted)
+                                _reconciliationTask = ReapWithLoggingAsync(stoppingToken);
                         }
                         if(!progressed) break;
                     }
@@ -393,6 +391,9 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 r.Candidate.Id, r.Candidate.Epoch, x.Demand.Request.WorkerId,
                 x.Demand.Request.Capabilities, x.Demand.Request.Workflows))).ToArray();
             HubTelemetry.CandidateBatchFill.Record(items.Length);
+            foreach (var (demand, _) in active)
+                HubTelemetry.CandidateDemandToAdmissionDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(demand.CreatedAt).TotalSeconds);
             result = await _tasks.ClaimCandidateBatchAsync(new(items, firstRequest.WorkerId, first.Owner.HubId,
                 first.Owner.Partition, first.PartitionCount, firstRequest.Capabilities, firstRequest.Workflows,
                 first.Owner, TimeSpan.FromSeconds(45)), ct);
@@ -456,6 +457,9 @@ public sealed class HubCandidateAcquisition : BackgroundService
             { foreach(var r in reservations) _registry.AbandonBeforeAdmission(r.Id); return; }
             demand.Admitting=true;
         }
+        HubTelemetry.CandidateBatchFill.Record(reservations.Count);
+        HubTelemetry.CandidateDemandToAdmissionDuration.Record(
+            System.Diagnostics.Stopwatch.GetElapsedTime(demand.CreatedAt).TotalSeconds);
         var first=reservations[0]; var request=demand.Request;
         HubCandidateClaimStatus status; IReadOnlyList<HubLeasedTask> leases; string? blocked=null;
         try
@@ -511,7 +515,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
     private async Task ReapAsync(CancellationToken ct)
     {
         var expired = _retained.ToArray().Where(x => DateTime.UtcNow >= x.Value.Lease.LeaseUntil).ToArray();
-        foreach(var chunk in expired.Chunk(_backpressure ? 256 : 1))
+        foreach(var chunk in expired.Chunk(256))
         {
             var retired = await _tasks.RetirableCandidateLeasesAsync(chunk.Select(x => (x.Value.Lease,x.Value.Worker)).ToArray(), ct);
             foreach(var pair in chunk)

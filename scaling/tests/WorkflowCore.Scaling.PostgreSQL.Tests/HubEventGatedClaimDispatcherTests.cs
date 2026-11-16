@@ -173,6 +173,75 @@ public sealed class HubEventGatedClaimDispatcherTests
     }
 
     [Fact]
+    public async Task WorkflowDefinitionPinsHaveIndependentCatchupProbes()
+    {
+        var claims = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (_, _) =>
+            {
+                Interlocked.Increment(ref claims);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([]);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(70));
+
+        HubClaimRequest Pinned(string definition, int version) => new(
+            "worker", ["test-hub"], [new HubCapability("test-hub", "__workflow__", 1)],
+            MaxTasks: 1,
+            Workflows: [new HubWorkflowCapability("test-hub", definition, version)],
+            MatchingPartition: 0, MatchingPartitionCount: 4);
+
+        await dispatcher.LongPollAsync(Pinned("flow-a", 1), CancellationToken.None);
+        await dispatcher.LongPollAsync(Pinned("flow-b", 1), CancellationToken.None);
+        await dispatcher.LongPollAsync(Pinned("flow-a", 2), CancellationToken.None);
+
+        Assert.Equal(3, claims);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
+    [Fact]
+    public async Task EquivalentReorderedWorkflowPinsCoalesceCatchupProbe()
+    {
+        var claims = 0;
+        var dispatcher = new HubEventGatedClaimDispatcher(
+            (_, _) =>
+            {
+                Interlocked.Increment(ref claims);
+                return Task.FromResult<IReadOnlyList<HubLeasedTask>>([]);
+            },
+            (_, _) => Task.FromResult(true),
+            sharded: true, partitionCount: 4,
+            pollTimeout: TimeSpan.FromMilliseconds(70));
+        var pins = new[] {
+            new HubWorkflowCapability("test-hub", "flow-a", 1),
+            new HubWorkflowCapability("test-hub", "flow-b", 2)
+        };
+        HubClaimRequest Request(HubWorkflowCapability[] workflows) => new(
+            "worker", ["test-hub"], [new HubCapability("test-hub", "__workflow__", 1)],
+            MaxTasks: 1, Workflows: workflows,
+            MatchingPartition: 0, MatchingPartitionCount: 4);
+
+        await dispatcher.LongPollAsync(Request(pins), CancellationToken.None);
+        await dispatcher.LongPollAsync(Request(pins.Reverse().ToArray()), CancellationToken.None);
+
+        Assert.Equal(1, claims);
+        Assert.Equal(0, dispatcher.PendingWaiters);
+    }
+
+    [Fact]
+    public void ProbeIdentityPreservesUnrestrictedVersusExplicitlyEmptyWorkflowPins()
+    {
+        var baseRequest = new HubClaimRequest("worker", ["test-hub"],
+            [new HubCapability("test-hub", "__workflow__", 1)],
+            MatchingPartition: 0, MatchingPartitionCount: 4);
+        var unrestricted = HubClaimProbeIdentity.Create(baseRequest with { Workflows = null });
+        var restrictedToNone = HubClaimProbeIdentity.Create(baseRequest with { Workflows = [] });
+
+        Assert.NotEqual(unrestricted, restrictedToNone);
+    }
+
+    [Fact]
     public async Task AdmissionDeferralRetainsHintAndRetriesWithoutAnotherNotification()
     {
         var attempts = 0;

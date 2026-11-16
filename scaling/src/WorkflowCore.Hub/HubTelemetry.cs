@@ -82,12 +82,24 @@ public static class HubTelemetry
         Meter.CreateHistogram<int>("workflow_hub_candidate_batch_fill", "{task}");
     public static readonly Histogram<double> CandidateAdmissionLatency =
         Meter.CreateHistogram<double>("workflow_hub_candidate_admission_seconds", "s");
+    public static readonly Histogram<double> CandidateDemandToAdmissionDuration =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_demand_to_admission_seconds", "s");
     public static readonly UpDownCounter<long> CandidateWaitingSessions =
         Meter.CreateUpDownCounter<long>("workflow_hub_candidate_waiting_sessions", "{session}");
     public static readonly Histogram<double> CandidateCapacityWait =
         Meter.CreateHistogram<double>("workflow_hub_candidate_capacity_wait_seconds", "s");
     public static readonly Counter<long> CandidateDiscoveryRows =
         Meter.CreateCounter<long>("workflow_hub_candidate_discovery_rows", "{row}");
+    // Matcher work is recorded per lock-held matching pass, with no task or
+    // worker labels. Checks count entries visited in already type/version-indexed queues.
+    public static readonly Histogram<double> CandidateMatcherLockDuration =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_match_lock_duration_seconds", "s");
+    public static readonly Histogram<int> CandidateMatcherEntriesChecked =
+        Meter.CreateHistogram<int>("workflow_hub_candidate_match_entries_checked", "{entry}");
+    public static readonly Histogram<int> CandidateMatcherCompatibilityChecks =
+        Meter.CreateHistogram<int>("workflow_hub_candidate_match_compatibility_checks", "{check}");
+    public static readonly Histogram<int> CandidateMatcherUnmatchedCredits =
+        Meter.CreateHistogram<int>("workflow_hub_candidate_match_unmatched_credits", "{credit}");
     public static readonly Counter<long> CandidateLeased =
         Meter.CreateCounter<long>("workflow_hub_candidate_leased", "{task}");
     public static void PublishCandidateSnapshot(int credits, int reservations, int entries, long bytes)
