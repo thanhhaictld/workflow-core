@@ -20,7 +20,8 @@ internal sealed record HubCandidatePage(IReadOnlyList<HubTaskCandidate> Items,
     HubCandidateCursor? Next, bool EndOfStream, int MetadataBytes,
     IReadOnlyList<HubCandidateOversized>? Oversized = null);
 internal sealed record HubCandidateHydrationPage(IReadOnlyList<HubTaskCandidate> Items,
-    int Oversized, int MetadataBytes, Exception? WorkflowMetadataError = null);
+    int Oversized, int MetadataBytes, Exception? WorkflowMetadataError = null,
+    IReadOnlyList<Guid>? OversizedIds = null);
 
 internal interface IHubCandidateDiscovery
 {
@@ -253,61 +254,98 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         // UUID parameters consume managed memory too; reserve their exact wire
         // size and split the remaining batch budget into conservative per-row guards.
         var batchMetadataLimit = HydrationMetadataBudget(byteLimit, requestedIds.Length);
-        var resourceBudget = batchMetadataLimit;
-        await using var command = tasks.DataSource.CreateCommand(HydrationSql);
-        command.Parameters.AddWithValue("ids", requestedIds);
-        command.Parameters.AddWithValue("hub", hub);
-        command.Parameters.AddWithValue("matchingPartition", matchingPartition);
-        command.Parameters.AddWithValue("partitionCount", partitionCount);
-        command.Parameters.AddWithValue("perCandidateByteLimit", Math.Max(0, resourceBudget / requestedIds.Length));
-
-        var items = new List<HubTaskCandidate>(requestedIds.Length);
-        long bytes = 0;
-        var oversized = 0;
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        var result = await HydrateBatchAsync(requestedIds, batchMetadataLimit);
+        var items = result.Items.ToList();
+        var bytes = result.MetadataBytes;
+        var metadataError = result.WorkflowMetadataError;
+        var pending = result.OversizedIds?.ToArray() ?? [];
+        // The first pass shares a conservative row cap across the full page.
+        // Retry rows that only exceeded that share in successively smaller,
+        // bounded batches, charging each retry to the remaining page budget.
+        var retryBatchSize = Math.Max(1, pending.Length / 2);
+        while (pending.Length > 0 && retryBatchSize > 0)
         {
-            if (reader.GetBoolean(11)) { oversized++; continue; }
-            var keysComplete = reader.GetBoolean(12);
-            var keys = keysComplete ? reader.GetFieldValue<string[]>(9) : [];
-            var item = new HubTaskCandidate(reader.GetGuid(0), reader.GetInt64(1), reader.GetString(2),
-                reader.GetInt32(3), reader.GetString(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetGuid(6),
-                null, null, reader.GetInt64(7), reader.GetDateTime(8), keys, keysComplete,
-                WorkflowMetadataComplete: !IsWorkflowTask(reader.GetString(4)), EnrichmentLoaded: true,
-                WorkflowMetadataExpiresAt: IsWorkflowTask(reader.GetString(4))
-                    ? DateTimeOffset.UtcNow + _workflowCacheTtl : default);
-            var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType) +
-                keys.Sum(k => 24 + Encoding.UTF8.GetByteCount(k));
-            if (bytes + size > resourceBudget)
-                throw new InvalidOperationException("Candidate hydration violated its bounded SQL metadata contract");
-            bytes += size;
-            items.Add(item);
-        }
-        // DataSource.CreateCommand owns the automatically opened connection;
-        // explicitly release both reader and command before the workflow lookup
-        // opens its next connection (important when the pool size is one).
-        await reader.DisposeAsync();
-        await command.DisposeAsync();
-        var workflowBudget = Math.Max(0, batchMetadataLimit - checked((int)bytes));
-        var workflowResolution = await ResolveWorkflowMetadataAsync(hub, matchingPartition,
-            items.Where(x => x.WorkflowId.HasValue && IsWorkflowTask(x.TaskType))
-                .Select(x => x.WorkflowId!.Value).Distinct().ToArray(),
-            workflowBudget, ct);
-        for (var i = 0; i < items.Count; i++)
-        {
-            var item = items[i];
-            if (item.WorkflowId is not { } workflowId || !IsWorkflowTask(item.TaskType)) continue;
-            if (workflowResolution.Values.TryGetValue(workflowId, out var metadata) && bytes + metadata.WireBytes <= batchMetadataLimit)
+            var nextPending = new List<Guid>();
+            var recovered = 0;
+            for (var offset = 0; offset < pending.Length; offset += retryBatchSize)
             {
-                items[i] = item with { DefinitionId = metadata.DefinitionId,
-                    DefinitionVersion = metadata.DefinitionVersion, WorkflowMetadataComplete = metadata.Complete,
-                    WorkflowMetadataExpiresAt = metadata.ExpiresAt };
-                bytes += metadata.WireBytes;
+                var batch = pending.Skip(offset).Take(retryBatchSize).ToArray();
+                var remaining = batchMetadataLimit - bytes;
+                if (remaining < 240) { nextPending.AddRange(batch); continue; }
+                var retried = await HydrateBatchAsync(batch, remaining);
+                items.AddRange(retried.Items);
+                bytes = checked(bytes + retried.MetadataBytes);
+                metadataError ??= retried.WorkflowMetadataError;
+                var oversizedIds = retried.OversizedIds ?? [];
+                nextPending.AddRange(oversizedIds);
+                recovered += batch.Length - oversizedIds.Count;
             }
+            if (nextPending.Count == 0) { pending = []; break; }
+            if (recovered == 0)
+            {
+                if (retryBatchSize == 1) { pending = nextPending.ToArray(); break; }
+                retryBatchSize = Math.Max(1, retryBatchSize / 2);
+            }
+            pending = nextPending.ToArray();
         }
         if (bytes > batchMetadataLimit)
             throw new InvalidOperationException("Candidate hydration exceeded its combined metadata budget");
-        return new(items, oversized, checked((int)bytes), workflowResolution.Error);
+        return new(items, pending.Length, checked((int)bytes), metadataError, pending);
+
+        async Task<HubCandidateHydrationPage> HydrateBatchAsync(Guid[] batchIds, int metadataBudget)
+        {
+            var resourceBudget = metadataBudget;
+            var batchItems = new List<HubTaskCandidate>(batchIds.Length);
+            long batchBytes = 0;
+            var oversizedIds = new List<Guid>();
+            {
+                await using var command = tasks.DataSource.CreateCommand(HydrationSql);
+                command.Parameters.AddWithValue("ids", batchIds);
+                command.Parameters.AddWithValue("hub", hub);
+                command.Parameters.AddWithValue("matchingPartition", matchingPartition);
+                command.Parameters.AddWithValue("partitionCount", partitionCount);
+                command.Parameters.AddWithValue("perCandidateByteLimit", Math.Max(0, resourceBudget / batchIds.Length));
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    if (reader.GetBoolean(11)) { oversizedIds.Add(reader.GetGuid(0)); continue; }
+                    var keysComplete = reader.GetBoolean(12);
+                    var keys = keysComplete ? reader.GetFieldValue<string[]>(9) : [];
+                    var item = new HubTaskCandidate(reader.GetGuid(0), reader.GetInt64(1), reader.GetString(2),
+                        reader.GetInt32(3), reader.GetString(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetGuid(6),
+                        null, null, reader.GetInt64(7), reader.GetDateTime(8), keys, keysComplete,
+                        WorkflowMetadataComplete: !IsWorkflowTask(reader.GetString(4)), EnrichmentLoaded: true,
+                        WorkflowMetadataExpiresAt: IsWorkflowTask(reader.GetString(4))
+                            ? DateTimeOffset.UtcNow + _workflowCacheTtl : default);
+                    var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType) +
+                        keys.Sum(k => 24 + Encoding.UTF8.GetByteCount(k));
+                    if (batchBytes + size > resourceBudget)
+                        throw new InvalidOperationException("Candidate hydration violated its bounded SQL metadata contract");
+                    batchBytes += size;
+                    batchItems.Add(item);
+                }
+            }
+            var workflowBudget = Math.Max(0, metadataBudget - checked((int)batchBytes));
+            var workflowResolution = await ResolveWorkflowMetadataAsync(hub, matchingPartition,
+                batchItems.Where(x => x.WorkflowId.HasValue && IsWorkflowTask(x.TaskType))
+                .Select(x => x.WorkflowId!.Value).Distinct().ToArray(),
+                workflowBudget, ct);
+            for (var i = 0; i < batchItems.Count; i++)
+            {
+                var item = batchItems[i];
+                if (item.WorkflowId is not { } workflowId || !IsWorkflowTask(item.TaskType)) continue;
+                if (workflowResolution.Values.TryGetValue(workflowId, out var metadata) && batchBytes + metadata.WireBytes <= metadataBudget)
+                {
+                    batchItems[i] = item with { DefinitionId = metadata.DefinitionId,
+                        DefinitionVersion = metadata.DefinitionVersion, WorkflowMetadataComplete = metadata.Complete,
+                        WorkflowMetadataExpiresAt = metadata.ExpiresAt };
+                    batchBytes += metadata.WireBytes;
+                }
+            }
+            if (batchBytes > metadataBudget)
+                throw new InvalidOperationException("Candidate hydration exceeded its combined metadata budget");
+            return new(batchItems, oversizedIds.Count, checked((int)batchBytes), workflowResolution.Error, oversizedIds);
+        }
     }
 
     private async Task<WorkflowMetadataResolution> ResolveWorkflowMetadataAsync(string hub,
