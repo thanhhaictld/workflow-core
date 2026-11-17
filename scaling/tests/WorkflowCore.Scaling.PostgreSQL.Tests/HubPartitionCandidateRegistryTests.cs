@@ -167,7 +167,7 @@ public sealed class HubPartitionCandidateRegistryTests
         await registry.RunOneTurnAsync(clock.Now, default); // capture horizon
         var errors = new List<Exception>();
         await registry.RunOneTurnAsync(clock.Now, default, errors.Add); // bounded hydration fails
-        Assert.Equal("Injected hydration failure", Assert.Single(errors).Message);
+        Assert.Equal("synthetic hydration failure", Assert.Single(errors).Message);
         Assert.Equal(1, source.HydrationCalls);
         Assert.Equal(0, registry.Snapshot().Entries);
 
