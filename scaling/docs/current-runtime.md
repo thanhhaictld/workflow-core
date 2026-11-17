@@ -94,6 +94,13 @@ controls the maximum number of local admission groups (default 2). The
 existing PostgreSQL claim gate still applies and should not be configured
 higher than the available connection budget.
 
+The established candidate matcher remains enabled in the normal presets via
+`WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`. Its indexed discovery query pages
+bounded task identity and routing fields; the registry accounts for page
+memory and batches advisory workflow/resource enrichment only for new entries.
+The independent experimental `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` remains
+false by default.
+
 ### Task-ID hint coverage and recovery
 
 Migration `032_hub_candidate_task_id_hints.sql` replaces the 014/030 trigger
