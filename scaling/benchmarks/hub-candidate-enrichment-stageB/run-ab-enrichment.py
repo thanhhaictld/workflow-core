@@ -193,7 +193,7 @@ def pg(database, sql, run_id=None):
     return result.stdout.strip()
 
 
-def scrape_candidate_metrics():
+def scrape_candidate_metrics(run_id):
     endpoint = os.getenv("WFC_BENCH_OTEL_METRICS", "")
     if not endpoint:
         return {}
@@ -208,6 +208,9 @@ def scrape_candidate_metrics():
             continue
         name = line.split("{", 1)[0].split(" ", 1)[0]
         if not name.startswith("workflow_hub_candidate_"):
+            continue
+        instance = re.search(r'\binstance="([^"]+)"', line)
+        if instance is None or run_id not in instance.group(1):
             continue
         try:
             value = float(line.rsplit(" ", 1)[1])
@@ -314,8 +317,8 @@ def stop():
 
 
 def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=False):
-    metrics_before = scrape_candidate_metrics()
     run_id = f"stageB-{arm}-{scenario}-{'warm' if warmup else repetition}"
+    metrics_before = scrape_candidate_metrics(run_id)
     start(arm, database, task_id_hints_enabled, run_id)
     try:
         # Reset only this isolated PG17 container's cumulative query/table stats.
@@ -350,7 +353,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
         stop()
         # PG17 may publish table counters shortly after backend transaction end.
         time.sleep(5)
-        metrics_after = scrape_candidate_metrics()
+        metrics_after = scrape_candidate_metrics(run_id)
         try:
             load = json.loads(raw_path.read_text(encoding="utf-8"))
         except Exception:
