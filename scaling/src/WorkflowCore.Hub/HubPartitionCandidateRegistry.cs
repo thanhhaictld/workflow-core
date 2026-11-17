@@ -246,7 +246,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             foreach (var e in p.Entries.Values)
             {
                 checkedEntries++;
-                if (e.Reservation is not null || e.DeferredUntil > now ||
+                if (e.Reservation is not null || e.RefreshPending || e.DeferredUntil > now ||
                     _reservedTasks.Contains((hub, e.Candidate.Id)) ||
                     (e.Candidate.ResourceKeysComplete && e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
                     continue;
@@ -303,7 +303,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             while (p.Pending.First is not null)
             {
                 var id = p.Pending.First.Value; p.Pending.RemoveFirst();
-                if (_reservations.TryGetValue(id, out var r) && !r.Dispatched)
+                if (_reservations.TryGetValue(id, out var r) && !r.Dispatched && !r.Entry.RefreshPending)
                 { r.Dispatched = true; return r.Value; }
             }
             return null;
@@ -442,10 +442,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     // task hydration and one workflow metadata fetch. Notifications set Dirty
     // but never reset a live horizon or cursor. Empty buckets consume turns too,
     // making their fanout explicit and fair between partitions.
-    internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct)
+    internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct,
+        Action<Exception>? reportError = null)
     {
         if (!await _scheduler.WaitAsync(0, ct)) return false;
-        Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null; bool capture = false; bool booked = false; bool head = false;
+        Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null; List<Guid>? pageEnrichmentIds = null;
+        bool capture = false; bool booked = false; bool head = false;
         try
         {
             lock (_sync)
@@ -525,6 +527,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 HubTelemetry.CandidateHydrationCalls.Add(1);
                 var hydrated = await _reader.HydrateAsync(p.Owner.HubId, p.Owner.Partition, p.Count,
                     hydrateIds, _options.PageWireBytes, linked.Token);
+                if (hydrated.WorkflowMetadataError is { } workflowError) reportError?.Invoke(workflowError);
                 HubTelemetry.CandidateHydrationRows.Add(hydrated.Items.Count);
                 HubTelemetry.CandidateHydrationOversized.Add(hydrated.Oversized);
                 lock (_sync) if (p.Active) ApplyHydratedLocked(p, hydrateIds, hydrated.Items, now);
@@ -554,7 +557,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
             IReadOnlyList<HubTaskCandidate> pageItems = page.Items;
             var enrichmentIds = new List<Guid>(page.Items.Count);
+            pageEnrichmentIds = enrichmentIds;
             var enrichedByCache = new Dictionary<Guid, HubTaskCandidate>(page.Items.Count);
+            var cacheReuseIds = new HashSet<Guid>();
             lock (_sync)
             {
                 if (!p.Active) return true;
@@ -564,6 +569,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                         (!existing.Candidate.WorkflowId.HasValue || existing.Candidate.WorkflowMetadataExpiresAt > now) &&
                         existing.Candidate.Epoch <= item.Epoch && SameStableMetadataIdentity(existing.Candidate, item))
                     {
+                        cacheReuseIds.Add(item.Id);
                         enrichedByCache[item.Id] = item with
                         {
                             DefinitionId = existing.Candidate.DefinitionId,
@@ -592,7 +598,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     enriched = await _reader.HydrateAsync(p.Owner.HubId, p.Owner.Partition, p.Count,
                         enrichmentIds, _options.PageWireBytes, linked.Token);
                 }
-                catch when (!linked.IsCancellationRequested)
+                catch (Exception error) when (!linked.IsCancellationRequested)
                 {
                     // Keep this bounded page from monopolizing the owner. Its
                     // cursor can advance because a dirty fresh horizon will
@@ -612,10 +618,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     }
                     HubTelemetry.CandidateRecoveryRequests.Add(1,
                         new KeyValuePair<string, object?>("reason", "page_enrichment_failure"));
+                    reportError?.Invoke(error);
                     return true;
                 }
                 HubTelemetry.CandidateHydrationRows.Add(enriched.Items.Count);
                 HubTelemetry.CandidateHydrationOversized.Add(enriched.Oversized);
+                if (enriched.WorkflowMetadataError is { } workflowError) reportError?.Invoke(workflowError);
                 foreach (var item in enriched.Items) enrichedByCache[item.Id] = item;
             }
             pageItems = enrichedByCache.Values.ToArray();
@@ -638,6 +646,22 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 {
                     if (item.HubId != p.Owner.HubId || item.PartitionId % p.Count != p.Owner.Partition || item.PartitionId % 64 != stream.Bucket)
                         throw new InvalidOperationException("Discovery returned a candidate outside its owner stream");
+                    if (cacheReuseIds.Contains(item.Id) && p.Entries.TryGetValue(item.Id, out var cached))
+                    {
+                        if (cached.Reservation is not null || cached.Candidate.Epoch > item.Epoch ||
+                            _reservedTasks.Contains((p.Owner.HubId, item.Id))) continue;
+                        var cachedSize = CandidateSize(item);
+                        var sizeDelta = cachedSize - cached.Size;
+                        if (sizeDelta > p.InFlightBytes)
+                            throw new InvalidOperationException("Cached candidate update exceeded its managed memory reservation");
+                        cached.Candidate = item;
+                        cached.Size = cachedSize;
+                        cached.RefreshPending = false;
+                        if (sizeDelta > 0) p.InFlightBytes -= sizeDelta;
+                        else if (sizeDelta < 0) p.InFlightBytes += -sizeDelta;
+                        MatchLocked(p, now);
+                        continue;
+                    }
                     var deferredUntil = default(DateTimeOffset);
                     if (p.Entries.TryGetValue(item.Id, out var old))
                     {
@@ -669,11 +693,24 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             return true;
         }
         catch (OperationCanceledException) when (p is not null && p.Stop.IsCancellationRequested && !ct.IsCancellationRequested) { return true; }
+        catch (OperationCanceledException)
+        {
+            if (p is not null) lock (_sync) if (p.Active)
+            {
+                foreach (var id in pageEnrichmentIds ?? [])
+                    if (p.Entries.TryGetValue(id, out var entry)) entry.RefreshPending = false;
+                p.Dirty = true;
+            }
+            throw;
+        }
         catch
         {
             if (p is not null) lock (_sync) if (p.Active)
             {
                 if (capture || hydrateIds is not null) p.Dirty = true;
+                foreach (var id in pageEnrichmentIds ?? [])
+                    if (p.Entries.TryGetValue(id, out var entry)) entry.RefreshPending = false;
+                if (pageEnrichmentIds is not null) p.Dirty = true;
                 if (hydrateIds is not null) p.ExactHydrationsSinceRecovery = Math.Max(8, p.ExactHydrationsSinceRecovery);
                 if (hydrateIds is not null) RequeueExactLocked(p, hydrateIds);
                 if (hydrateIds is not null) HubTelemetry.CandidateRecoveryRequests.Add(1,
@@ -756,7 +793,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             using var timer = new PeriodicTimer(turnInterval);
             while (await timer.WaitForNextTickAsync(ct))
             {
-                try { await RunOneTurnAsync(_clock.GetUtcNow(), ct); }
+                try { await RunOneTurnAsync(_clock.GetUtcNow(), ct, reportError); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception error) { reportError(error); }
             }
