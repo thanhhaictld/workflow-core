@@ -106,6 +106,8 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_calls", "{call}");
     public static readonly Counter<long> CandidateWorkflowMetadataRows =
         Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_rows", "{row}");
+    public static readonly Counter<long> CandidateWorkflowMetadataFailures =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_failures", "{failure}");
     public static readonly Counter<long> CandidateWorkflowCacheHits =
         Meter.CreateCounter<long>("workflow_hub_candidate_workflow_cache_hits", "{hit}");
     public static readonly Counter<long> CandidateWorkflowCacheMisses =
