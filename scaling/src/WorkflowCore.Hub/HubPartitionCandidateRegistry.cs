@@ -50,6 +50,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public long Order = order;
         public DateTimeOffset DeferredUntil;
         public Guid? Reservation;
+        public bool RefreshPending;
     }
     private sealed class Credit(HubCandidateCredit value, long bytes)
     {
@@ -437,9 +438,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private bool GetLocked(string hub, int partition, long epoch, out Partition p) =>
         _partitions.TryGetValue((hub, partition), out p!) && p.Active && p.Owner.Epoch == epoch;
 
-    // One bounded scheduling turn and one discovery query at most. Notifications
-    // set Dirty but never reset a live horizon or cursor. Empty buckets consume
-    // turns too, making their fanout explicit and fair between partitions.
+    // One bounded discovery-page turn at most, with no more than one batched
+    // task hydration and one workflow metadata fetch. Notifications set Dirty
+    // but never reset a live horizon or cursor. Empty buckets consume turns too,
+    // making their fanout explicit and fair between partitions.
     internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct)
     {
         if (!await _scheduler.WaitAsync(0, ct)) return false;
@@ -550,11 +552,89 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, p.Horizon!, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
+            IReadOnlyList<HubTaskCandidate> pageItems = page.Items;
+            var enrichmentIds = new List<Guid>(page.Items.Count);
+            var enrichedByCache = new Dictionary<Guid, HubTaskCandidate>(page.Items.Count);
             lock (_sync)
             {
                 if (!p.Active) return true;
-                foreach (var marker in page.Oversized ?? []) { _oversized++; _lastOversized = new(p.Owner.HubId,stream.Bucket,stream.Kind,marker); }
                 foreach (var item in page.Items)
+                {
+                    if (p.Entries.TryGetValue(item.Id, out var existing) && existing.Candidate.EnrichmentLoaded &&
+                        (!existing.Candidate.WorkflowId.HasValue || existing.Candidate.WorkflowMetadataExpiresAt > now) &&
+                        existing.Candidate.Epoch <= item.Epoch && SameStableMetadataIdentity(existing.Candidate, item))
+                    {
+                        enrichedByCache[item.Id] = item with
+                        {
+                            DefinitionId = existing.Candidate.DefinitionId,
+                            DefinitionVersion = existing.Candidate.DefinitionVersion,
+                            ResourceKeys = existing.Candidate.ResourceKeys,
+                            ResourceKeysComplete = existing.Candidate.ResourceKeysComplete,
+                            WorkflowMetadataComplete = existing.Candidate.WorkflowMetadataComplete,
+                            WorkflowMetadataExpiresAt = existing.Candidate.WorkflowMetadataExpiresAt,
+                            EnrichmentLoaded = true
+                        };
+                    }
+                    else
+                    {
+                        if (existing is not null && existing.Reservation is null &&
+                            !_reservedTasks.Contains((p.Owner.HubId, item.Id))) existing.RefreshPending = true;
+                        enrichmentIds.Add(item.Id);
+                    }
+                }
+            }
+            if (enrichmentIds.Count != 0)
+            {
+                HubTelemetry.CandidateHydrationCalls.Add(1);
+                HubCandidateHydrationPage enriched;
+                try
+                {
+                    enriched = await _reader.HydrateAsync(p.Owner.HubId, p.Owner.Partition, p.Count,
+                        enrichmentIds, _options.PageWireBytes, linked.Token);
+                }
+                catch when (!linked.IsCancellationRequested)
+                {
+                    // Keep this bounded page from monopolizing the owner. Its
+                    // cursor can advance because a dirty fresh horizon will
+                    // retry every eligible ID; meanwhile later streams/pages
+                    // and other admissions keep getting service.
+                    lock (_sync) if (p.Active)
+                    {
+                        stream.Cursor = page.Next;
+                        stream.Done = page.EndOfStream;
+                        p.Dirty = true;
+                        foreach (var id in enrichmentIds)
+                            if (p.Entries.TryGetValue(id, out var stale) && stale.Reservation is null &&
+                                !_reservedTasks.Contains((p.Owner.HubId, id))) RemoveEntryLocked(p, stale);
+                        if (head) { p.HeadRequested = true; p.ForwardSinceHead = 8; }
+                        else p.ForwardSinceHead++;
+                        if (p.Streams.All(x => x.Done)) EndSweepLocked(p, now);
+                    }
+                    HubTelemetry.CandidateRecoveryRequests.Add(1,
+                        new KeyValuePair<string, object?>("reason", "page_enrichment_failure"));
+                    return true;
+                }
+                HubTelemetry.CandidateHydrationRows.Add(enriched.Items.Count);
+                HubTelemetry.CandidateHydrationOversized.Add(enriched.Oversized);
+                foreach (var item in enriched.Items) enrichedByCache[item.Id] = item;
+            }
+            pageItems = enrichedByCache.Values.ToArray();
+            lock (_sync)
+            {
+                if (!p.Active) return true;
+                foreach (var marker in page.Oversized ?? [])
+                {
+                    _oversized++; _lastOversized = new(p.Owner.HubId,stream.Bucket,stream.Kind,marker);
+                    if (p.Entries.TryGetValue(marker.Id, out var old) && old.Reservation is null &&
+                        !_reservedTasks.Contains((p.Owner.HubId, marker.Id))) RemoveEntryLocked(p, old);
+                }
+                foreach (var unresolved in page.Items.Where(x => !enrichedByCache.ContainsKey(x.Id)))
+                {
+                    if (p.Entries.TryGetValue(unresolved.Id, out var stale) && stale.Reservation is null &&
+                        !_reservedTasks.Contains((p.Owner.HubId, unresolved.Id)) && stale.Candidate.Epoch <= unresolved.Epoch)
+                        RemoveEntryLocked(p, stale);
+                }
+                foreach (var item in pageItems)
                 {
                     if (item.HubId != p.Owner.HubId || item.PartitionId % p.Count != p.Owner.Partition || item.PartitionId % 64 != stream.Bucket)
                         throw new InvalidOperationException("Discovery returned a candidate outside its owner stream");
@@ -742,7 +822,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     checkedEntries++;
                     var e = p.Entries[taskId];
                     if (entry is not null && e.Candidate.Sequence >= entry.Candidate.Sequence) break;
-                    if (e.Reservation is null && e.DeferredUntil <= now &&
+                    if (e.Reservation is null && !e.RefreshPending && e.DeferredUntil <= now &&
                         !_reservedTasks.Contains((p.Owner.HubId,e.Candidate.Id)) &&
                         (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
                     {
@@ -786,9 +866,16 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     {
         if (!credit.Capabilities.Any(c => c.HubId == task.HubId && c.TaskType == task.TaskType && c.Version == task.Version)) return false;
         if (task.TaskType is not ("__workflow__" or "__native_workflow__") || credit.Workflows is null) return true;
+        // A missing/oversized workflow definition is advisory-unknown. Let the
+        // fenced DB admission check decide so unavailable metadata cannot strand
+        // otherwise runnable work indefinitely.
+        if (!task.WorkflowMetadataComplete) return true;
         return task.DefinitionId is not null && task.DefinitionVersion.HasValue && credit.Workflows.Any(w =>
             w.HubId == task.HubId && w.DefinitionId == task.DefinitionId && w.Version == task.DefinitionVersion);
     }
+    private static bool SameStableMetadataIdentity(HubTaskCandidate old, HubTaskCandidate current) =>
+        old.HubId == current.HubId && old.PartitionId == current.PartitionId && old.TaskType == current.TaskType &&
+        old.Version == current.Version && old.WorkflowId == current.WorkflowId && old.Sequence == current.Sequence;
     private long GroupBytes(string hub, int partition) => _accountedPartitions
         .Where(p => p.Owner.HubId == hub && p.Owner.Partition == partition).Sum(p => p.Bytes);
     private int GroupEntries(string hub, int partition) => _accountedPartitions

@@ -102,6 +102,16 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_candidate_hydration_rows", "{row}");
     public static readonly Counter<long> CandidateHydrationOversized =
         Meter.CreateCounter<long>("workflow_hub_candidate_hydration_oversized", "{row}");
+    public static readonly Counter<long> CandidateWorkflowMetadataCalls =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_calls", "{call}");
+    public static readonly Counter<long> CandidateWorkflowMetadataRows =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_rows", "{row}");
+    public static readonly Counter<long> CandidateWorkflowCacheHits =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_cache_hits", "{hit}");
+    public static readonly Counter<long> CandidateWorkflowCacheMisses =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_cache_misses", "{miss}");
+    public static readonly Counter<long> CandidateWorkflowCacheEvictions =
+        Meter.CreateCounter<long>("workflow_hub_candidate_workflow_cache_evictions", "{eviction}");
     public static readonly Counter<long> CandidateRecoveryRequests =
         Meter.CreateCounter<long>("workflow_hub_candidate_recovery_requests", "{request}");
     // Matcher work is recorded per lock-held matching pass, with no task or
