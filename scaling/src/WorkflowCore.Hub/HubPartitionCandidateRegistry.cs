@@ -566,7 +566,8 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 foreach (var item in page.Items)
                 {
                     if (p.Entries.TryGetValue(item.Id, out var existing) && existing.Candidate.EnrichmentLoaded &&
-                        (!existing.Candidate.WorkflowId.HasValue || existing.Candidate.WorkflowMetadataExpiresAt > now) &&
+                        (existing.Candidate.TaskType is not ("__workflow__" or "__native_workflow__") ||
+                            !existing.Candidate.WorkflowId.HasValue || existing.Candidate.WorkflowMetadataExpiresAt > now) &&
                         existing.Candidate.Epoch <= item.Epoch && SameStableMetadataIdentity(existing.Candidate, item))
                     {
                         cacheReuseIds.Add(item.Id);
