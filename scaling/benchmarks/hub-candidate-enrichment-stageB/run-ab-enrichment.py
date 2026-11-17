@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 LOAD = ROOT / "scaling/benchmarks/hub-push-load.py"
@@ -78,13 +79,15 @@ parser.add_argument("--baseline-database", default="stageBbase")
 parser.add_argument("--candidate-database", default="stageBcand")
 parser.add_argument("--smoke", action="store_true")
 parser.add_argument("--profile", action="store_true", help="five burst repetitions for per-query classification")
+parser.add_argument("--scenarios", nargs="+", choices=["burst", "steady", "sparse", "fifo"],
+                    default=["burst", "steady", "sparse", "fifo"])
 args = parser.parse_args()
 out = pathlib.Path(args.artifact_dir).resolve()
 out.mkdir(parents=True, exist_ok=True)
 baseline_root = pathlib.Path(args.baseline_root).resolve()
 final_root = ROOT
-baseline_hub = baseline_root / "artifacts/bin/WorkflowCore.Hub.Server/release/WorkflowCore.Hub.Server.dll"
-baseline_worker = baseline_root / "artifacts/bin/WorkflowCore.Provisioner.Host/release/WorkflowCore.Provisioner.Host.dll"
+baseline_hub = baseline_root / "scaling/src/WorkflowCore.Hub.Server/bin/Release/net10.0/WorkflowCore.Hub.Server.dll"
+baseline_worker = baseline_root / "scaling/sample/onboarding/WorkflowCore.Provisioner.Host/bin/Release/net10.0/WorkflowCore.Provisioner.Host.dll"
 final_hub = final_root / "scaling/src/WorkflowCore.Hub.Server/bin/Release/net10.0/WorkflowCore.Hub.Server.dll"
 final_worker = final_root / "scaling/sample/onboarding/WorkflowCore.Provisioner.Host/bin/Release/net10.0/WorkflowCore.Provisioner.Host.dll"
 if not all(p.exists() for p in (baseline_hub, baseline_worker, final_hub, final_worker)):
@@ -164,6 +167,8 @@ manifest = {
         "candidateDatabase": args.candidate_database,
         "bufferTiming": "track_io_timing=on",
         "serverCpu": "not directly available; pg_stat_statements execution time includes wait time and is not CPU time",
+        "candidateMetrics": "Hub counters and bounded-memory gauges exported to an isolated local OTLP collector; PostgreSQL CPU sampled from Docker stats",
+        "scenarios": args.scenarios,
     },
 }
 (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -188,7 +193,36 @@ def pg(database, sql, run_id=None):
     return result.stdout.strip()
 
 
-def environment(arm, node, database, task_id_hints_enabled):
+def scrape_candidate_metrics():
+    endpoint = os.getenv("WFC_BENCH_OTEL_METRICS", "")
+    if not endpoint:
+        return {}
+    try:
+        with urllib.request.urlopen(endpoint, timeout=3) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return {}
+    values = {}
+    for line in body.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        name = line.split("{", 1)[0].split(" ", 1)[0]
+        if not name.startswith("workflow_hub_candidate_"):
+            continue
+        try:
+            value = float(line.rsplit(" ", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        values[name] = values.get(name, 0.0) + value
+    return values
+
+
+def metric_delta(before, after):
+    return {name: after.get(name, 0.0) - before.get(name, 0.0)
+            for name in sorted(set(before) | set(after))}
+
+
+def environment(arm, node, database, task_id_hints_enabled, run_id):
     env = os.environ.copy()
     db = base_connection if arm == "baseline" else candidate_connection
     # The supplied connection string contains no Database key; database name
@@ -213,6 +247,9 @@ def environment(arm, node, database, task_id_hints_enabled):
         "WFC_HUB_CANDIDATE_BACKPRESSURE": "false",
         "WFC_HUB_CANDIDATE_BATCH_SIZE": "32",
         "WFC_HUB_WORKER_HUB": "onboarding",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv("WFC_BENCH_OTEL_EXPORTER_ENDPOINT", ""),
+        "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+        "OTEL_SERVICE_INSTANCE_ID": f"enrichment-{arm}-{node}-{run_id}",
         "Logging__LogLevel__Default": "Critical",
     })
     env["WFC_HUB_MATCHING_NODE_ID"] = "stageB-" + arm + "-" + node
@@ -220,13 +257,13 @@ def environment(arm, node, database, task_id_hints_enabled):
     return env
 
 
-def start(arm, database, task_id_hints_enabled):
+def start(arm, database, task_id_hints_enabled, run_id):
     hub = baseline_hub if arm == "baseline" else final_hub
     worker = baseline_worker if arm == "baseline" else final_worker
     for index, node in enumerate(("a", "b")):
         log = (out / f"{arm}-{node}.log").open("a", encoding="utf-8")
         logs.append(log)
-        env = environment(arm, node, database, task_id_hints_enabled)
+        env = environment(arm, node, database, task_id_hints_enabled, run_id)
         env["ASPNETCORE_URLS"] = f"http://127.0.0.1:{ports[index]}"
         processes.append(subprocess.Popen(["dotnet", str(hub)], cwd=hub.parent, env=env,
                                           stdout=log, stderr=subprocess.STDOUT))
@@ -245,7 +282,7 @@ def start(arm, database, task_id_hints_enabled):
         raise RuntimeError(f"{arm} Hub readiness timed out")
     worker_log = (out / f"{arm}-worker.log").open("a", encoding="utf-8")
     logs.append(worker_log)
-    env = environment(arm, "a", database, task_id_hints_enabled)
+    env = environment(arm, "worker", database, task_id_hints_enabled, run_id)
     env.update({
         "WFC_HUB_URL": f"http://127.0.0.1:{ports[0]}",
         "WFC_HUB_WORKER_LANE_INSTANCES": "4",
@@ -277,11 +314,12 @@ def stop():
 
 
 def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=False):
-    start(arm, database, task_id_hints_enabled)
+    metrics_before = scrape_candidate_metrics()
+    run_id = f"stageB-{arm}-{scenario}-{'warm' if warmup else repetition}"
+    start(arm, database, task_id_hints_enabled, run_id)
     try:
         # Reset only this isolated PG17 container's cumulative query/table stats.
         pg(database, "SELECT pg_stat_statements_reset(); SELECT pg_stat_reset();")
-        run_id = f"stageB-{arm}-{scenario}-{'warm' if warmup else repetition}"
         params = {
             "burst": (20, 4, 0, False),
             "steady": (20, 4, 400, False),
@@ -290,7 +328,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
         }[scenario]
         count, vus, stagger, constrained = params
         if warmup:
-            count, vus, stagger, constrained = (8, 2, 0, False)
+            count, vus, stagger, constrained = (max(4, count // 2), max(1, vus // 2), 0, constrained)
         raw_path = out / f"{run_id}.json"
         env = os.environ.copy()
         env.update({
@@ -312,6 +350,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
         stop()
         # PG17 may publish table counters shortly after backend transaction end.
         time.sleep(5)
+        metrics_after = scrape_candidate_metrics()
         try:
             load = json.loads(raw_path.read_text(encoding="utf-8"))
         except Exception:
@@ -336,6 +375,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
             "metricsExit": metric_result.returncode,
             "workload": workload_summary,
             "database": db_summary,
+            "candidateTelemetryDelta": metric_delta(metrics_before, metrics_after),
             "durationSeconds": load.get("duration_seconds"),
             "sharedTenant": constrained,
             "staggerMs": stagger,
@@ -354,9 +394,10 @@ try:
     arms = [("baseline", args.baseline_database, False),
             ("candidate", args.candidate_database, False)]
     for arm, database, enabled in arms:
-        print(f"warmup {arm}", flush=True)
-        records.append(execute(arm, database, enabled, "burst", 0, warmup=True))
-    scenarios = ["burst", "steady", "sparse", "fifo"]
+        for scenario in args.scenarios:
+            print(f"warmup {arm} {scenario}", flush=True)
+            records.append(execute(arm, database, enabled, scenario, 0, warmup=True))
+    scenarios = args.scenarios
     if args.smoke or args.profile:
         scenarios = ["burst"]
     for repetition in range(1, 6 if not args.smoke else 2):
