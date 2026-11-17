@@ -834,6 +834,10 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                 }
             }
             else if (!connected) await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            // A push lane rotates its matching owner after the 30-second
+            // session window above. Advance the shard before reconnecting so
+            // this lane eventually services every matching partition instead
+            // of repeatedly registering on its initial random shard.
             partition = (partition + 1) % options.MatchingPartitions;
         }
         Task[] remaining;
