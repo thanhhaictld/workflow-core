@@ -45,7 +45,10 @@ public sealed class HubCandidatePagePlanTests
             output.AppendLine($"--- {stream}: actual reader SQL, generic prepared parameters ({types}) ---").AppendLine(prepare).AppendLine(";");
             foreach (var bucket in new[] { 0, 1, 2 })
             {
-                var call = $"EXPLAIN (ANALYZE, BUFFERS) EXECUTE candidate_page('{hub}',{bucket},9223372036854775807,now(),0,256,1048576" + (deadline ? ",'2000-01-01 00:00:00+00'" : "") + ")";
+                // Production reserves 16 ID bytes per effective row before
+                // passing the SQL-side base-metadata budget.
+                var productionPageBudget = 1048576 - 256 * 16;
+                var call = $"EXPLAIN (ANALYZE, BUFFERS) EXECUTE candidate_page('{hub}',{bucket},9223372036854775807,now(),0,256,{productionPageBudget}" + (deadline ? ",'2000-01-01 00:00:00+00'" : "") + ")";
                 var plan = new StringBuilder(); await using var cmd = new NpgsqlCommand(call,db);
                 await using (var r = await cmd.ExecuteReaderAsync()) while (await r.ReadAsync()) plan.AppendLine(r.GetString(0));
                 output.AppendLine($"--- bucket {bucket} ---").AppendLine(call).AppendLine(plan.ToString());
