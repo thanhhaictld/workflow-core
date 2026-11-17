@@ -6,6 +6,19 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 
 public sealed class HubCandidateReaderTests
 {
+    private sealed class CountingDiscovery(IHubCandidateDiscovery inner) : IHubCandidateDiscovery
+    {
+        public int PageCalls;
+        public int HydrationCalls;
+        public Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct) => inner.CaptureHorizonAsync(hub, ct);
+        public async Task<HubCandidatePage> ReadPageAsync(string hub, int bucket, HubCandidateStream stream,
+            HubCandidateHorizon horizon, HubCandidateCursor? cursor, int pageSize, int byteLimit, CancellationToken ct)
+        { Interlocked.Increment(ref PageCalls); return await inner.ReadPageAsync(hub, bucket, stream, horizon, cursor, pageSize, byteLimit, ct); }
+        public async Task<HubCandidateHydrationPage> HydrateAsync(string hub, int matchingPartition, int partitionCount,
+            IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct)
+        { Interlocked.Increment(ref HydrationCalls); return await inner.HydrateAsync(hub, matchingPartition, partitionCount, ids, byteLimit, ct); }
+    }
+
     [Fact]
     public async Task OversizedResourcesUseUnknownConstraintFallbackWithoutLeasing()
     {
@@ -37,9 +50,13 @@ public sealed class HubCandidateReaderTests
         var page = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, horizon, null, 1, 2048, default);
         var item = Assert.Single(page.Items);
         Assert.Equal(id, item.Id);
-        Assert.Equal(key, Assert.Single(item.ResourceKeys));
-        Assert.True(item.ResourceKeysComplete);
+        Assert.Empty(item.ResourceKeys);
+        Assert.False(item.ResourceKeysComplete);
+        Assert.False(item.EnrichmentLoaded);
         Assert.Equal(0, item.Epoch);
+        var enriched = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [id], 2048, default)).Items);
+        Assert.Equal(key, Assert.Single(enriched.ResourceKeys));
+        Assert.True(enriched.ResourceKeysComplete);
     }
 
     [Fact]
@@ -120,6 +137,104 @@ public sealed class HubCandidateReaderTests
         var minimum = await reader.HydrateAsync(hub, 0, 64, [unicode, unicode], 256, default);
         Assert.Equal(unicode, Assert.Single(minimum.Items).Id);
         Assert.InRange(minimum.MetadataBytes, 0, 256);
+    }
+
+    [Fact]
+    public async Task HydrationBatchesSharedWorkflowMetadataAndKeepsMissingOrOversizedPinsUnknown()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate workflow metadata tests");
+        var hub = "candidate-workflow-meta-" + Guid.NewGuid().ToString("N");
+        var workflow = Guid.NewGuid(); var normalA = Guid.NewGuid(); var normalB = Guid.NewGuid();
+        var largeWorkflow = Guid.NewGuid(); var largeTask = Guid.NewGuid(); var missingTask = Guid.NewGuid();
+        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
+            VALUES (@workflow,@hub,'shared-flow',3,0,'{}',1),
+                   (@largeWorkflow,@hub,@largeDefinition,7,0,'{}',1);
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
+            VALUES (@a,@hub,0,'activity',1,'{}',@workflow),
+                   (@b,@hub,0,'activity',1,'{}',@workflow),
+                   (@largeTask,@hub,0,'activity',1,'{}',@largeWorkflow),
+                   (@missingTask,@hub,0,'activity',1,'{}',@missingWorkflow);
+            """, db))
+        {
+            command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
+            command.Parameters.AddWithValue("largeWorkflow", largeWorkflow); command.Parameters.AddWithValue("largeDefinition", new string('d', 5000));
+            command.Parameters.AddWithValue("a", normalA); command.Parameters.AddWithValue("b", normalB);
+            command.Parameters.AddWithValue("largeTask", largeTask); command.Parameters.AddWithValue("missingTask", missingTask);
+            command.Parameters.AddWithValue("missingWorkflow", Guid.NewGuid());
+            await command.ExecuteNonQueryAsync();
+        }
+        await using var tasks = new HubTaskStore(database);
+        var reader = new HubCandidateReader(tasks, workflowCacheEntriesPerPartition: 1,
+            workflowCacheEntriesPerProcess: 2, workflowCacheBytesPerPartition: 1024,
+            workflowCacheBytesPerProcess: 2048);
+        var shared = await reader.HydrateAsync(hub, 0, 64, [normalA, normalB], 8192, default);
+        Assert.Equal(2, shared.Items.Count);
+        Assert.All(shared.Items, item =>
+        {
+            Assert.True(item.WorkflowMetadataComplete);
+            Assert.Equal("shared-flow", item.DefinitionId);
+            Assert.Equal(3, item.DefinitionVersion);
+        });
+        var afterBatch = reader.WorkflowCacheSnapshot;
+        Assert.Equal(1, afterBatch.Entries);
+        Assert.Equal(1, afterBatch.Misses); // one workflow row for two tasks
+        Assert.Equal(0, afterBatch.Hits);
+
+        var warm = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [normalA], 4096, default)).Items);
+        Assert.True(warm.WorkflowMetadataComplete);
+        Assert.Equal("shared-flow", warm.DefinitionId);
+        Assert.Equal(1, reader.WorkflowCacheSnapshot.Hits);
+
+        var oversized = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [largeTask], 4096, default)).Items);
+        Assert.False(oversized.WorkflowMetadataComplete);
+        Assert.Null(oversized.DefinitionId);
+        var missing = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [missingTask], 4096, default)).Items);
+        Assert.False(missing.WorkflowMetadataComplete);
+        Assert.Null(missing.DefinitionId);
+        var bounded = reader.WorkflowCacheSnapshot;
+        Assert.InRange(bounded.Entries, 0, 1);
+        Assert.InRange(bounded.Bytes, 0, 1024);
+        Assert.True(bounded.Evictions >= 2);
+    }
+
+    [Fact]
+    public async Task RepeatedIndexedDiscoveryReusesOwnerMetadataAndHydratesOnlyNewTaskIds()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate enrichment reuse tests");
+        var hub = "candidate-enrichment-reuse-" + Guid.NewGuid().ToString("N");
+        var id = Guid.NewGuid(); var key = hub + ":scope";
+        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            VALUES (@id,@hub,0,'activity',1,'{}');
+            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,false);
+            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@id,@key);
+            """, db))
+        {
+            command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hub", hub);
+            command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
+        }
+        await using var tasks = new HubTaskStore(database);
+        var discovery = new CountingDiscovery(new HubCandidateReader(tasks));
+        var options = new HubCandidateCoordinatorOptions(PageSize: 1, PageWireBytes: 4096, PartitionEntries: 8,
+            ProcessEntries: 16, PartitionBytes: 65536, ProcessBytes: 131072, PartitionCredits: 4,
+            ProcessCredits: 8, ProcessPartitions: 2, RecoveryCadence: TimeSpan.FromSeconds(10));
+        using var registry = new HubPartitionCandidateRegistry(discovery, options);
+        var owner = new HubMatchingPartitionLease(hub, 0, "owner", "http://localhost:5100", 1,
+            DateTime.UtcNow.AddMinutes(5));
+        registry.StartGeneration(owner, 64);
+        for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
+        Assert.Equal(1, discovery.HydrationCalls);
+        Assert.Equal(1, registry.Snapshot().Entries);
+        registry.Notify(hub, 0, owner.Epoch);
+        for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
+        Assert.True(discovery.PageCalls >= 4);
+        Assert.Equal(1, discovery.HydrationCalls);
+        Assert.Equal(1, registry.Snapshot().Entries);
     }
 
     [Fact]
@@ -311,10 +426,11 @@ public sealed class HubCandidateReaderTests
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("oversized",oversized); cmd.Parameters.AddWithValue("ordinary",ordinary); cmd.Parameters.AddWithValue("large",new string('z',4000)); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
         var horizon = await reader.CaptureHorizonAsync(hub,default);
-        var page = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,256,default);
-        Assert.Equal(oversized,Assert.Single(page.Oversized!).Id);
-        Assert.Equal(ordinary,Assert.Single(page.Items).Id);
-        Assert.Equal(page.Items[0].Sequence,page.Next!.Sequence);
+        var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,256,default);
+        Assert.Equal(oversized,Assert.Single(first.Oversized!).Id);
+        var second = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,first.Next,10,256,default);
+        Assert.Equal(ordinary,Assert.Single(second.Items).Id);
+        Assert.Equal(second.Items[0].Sequence,second.Next!.Sequence);
     }
 
     [Fact]

@@ -12,6 +12,7 @@ This is one selected architecture, not a menu of recommended polling/streaming a
 | --- | --- |
 | [Native workflow contracts](hub-native-fluent-runtime.md) | C# workflow definitions, activity registration, supported constructs and version compatibility |
 | [Scheduler and remote hosts](hub-remote-scheduler-implementation.md) | Generic Gateway, internal scheduling module, and separate processor/provisioner hosts |
+| [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, discovery/hydration shape, and conservative unknown metadata behavior |
 | [Activity policy updates](activity-policy-update.md) | Controlled updates to concurrency and resource policy |
 | [Ordering](explicit-partition-ordering.md) | Business ordering and strict FIFO, independently of matching partition routing |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |

@@ -157,6 +157,26 @@ public sealed class HubPartitionCandidateRegistryTests
     }
 
     [Fact]
+    public async Task FailedPageEnrichmentAdvancesBoundedRecoveryAndRetriesOnFreshHorizon()
+    {
+        var clock = new Clock(); var source = new Discovery { AlwaysFailHydration = true };
+        var hub = "page-enrichment-fairness"; var item = Candidate(hub, 1);
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, item);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(entries: 8), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        await registry.RunOneTurnAsync(clock.Now, default); // capture horizon
+        await registry.RunOneTurnAsync(clock.Now, default); // bounded hydration fails
+        Assert.Equal(1, source.HydrationCalls);
+        Assert.Equal(0, registry.Snapshot().Entries);
+
+        source.AlwaysFailHydration = false;
+        for (var i = 0; i < 8; i++) await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.True(source.Calls.Count(x => x.Stream == HubCandidateStream.ReadyDue) >= 2);
+        Assert.Equal(1, registry.Snapshot().Entries);
+        Assert.Equal(2, source.HydrationCalls);
+    }
+
+    [Fact]
     public async Task ExactHintFloodIsBoundedAndFallsBackToIndexedRecovery()
     {
         var clock = new Clock(); var source = new Discovery(); var hub = "exact-flood";
@@ -282,6 +302,28 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.Equal(b.Id,reservations.Single(x => x!.Credit.Id=="p2")!.Candidate.Id);
         Assert.Equal(c.Id,reservations.Single(x => x!.Credit.Id=="activity")!.Candidate.Id);
         Assert.Null(registry.TakeReservation(hub,0,1));
+    }
+
+    [Fact]
+    public async Task UnknownWorkflowMetadataRemainsAdvisoryAndCannotStrandPinnedWork()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "unknown-pinned-workflow";
+        var unknown = Candidate(hub, 1, "__native_workflow__") with
+        {
+            WorkflowId = Guid.NewGuid(), WorkflowMetadataComplete = false,
+            EnrichmentLoaded = true
+        };
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, unknown);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(entries: 4), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("pinned", hub, "__native_workflow__",
+            [new HubWorkflowCapability(hub, "expected-definition", 5)])));
+        await Pump(registry, clock, 6);
+        var reservation = registry.TakeReservation(hub, 0, 1);
+        Assert.NotNull(reservation);
+        Assert.Equal(unknown.Id, reservation.Candidate.Id);
+        Assert.False(reservation.Candidate.WorkflowMetadataComplete);
+        Assert.Null(reservation.Candidate.DefinitionId);
     }
 
     [Fact]

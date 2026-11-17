@@ -164,6 +164,17 @@ budget. When base metadata fits but resource keys do not, the entry carries
 `ResourceKeysComplete=false`; claim admission remains authoritative and reloads
 constraints transactionally. Requested IDs are deduplicated and their parameter
 array is bounded by the wire-byte budget.
+
+Recovery discovery pages now contain bounded task identity fields only. The
+owner registry reuses matching candidate enrichment already in its bounded
+buffer and hydrates only newly seen or expired entries. A separate bounded
+workflow-definition LRU avoids repeating workflow joins across tasks that share
+a workflow; its limits, TTL, unknown-metadata behavior and query shape are
+documented in [candidate metadata enrichment](hub-candidate-metadata-enrichment.md).
+This applies with task-ID hints off and does not change the existing matcher
+default. It removes enrichment joins/aggregation from every indexed page but
+adds a bounded batched hydration for new entries, so runtime benefit remains to
+be qualified with equal candidate topology and hint flags.
 With default coordinator limits, pending exact IDs are capped at 1,024 per
 owner and 32,768 process-wide, charged at 64 bytes each; one hydration batch is
 at most 128 IDs and 64 KiB of metadata. Persistent candidate entries remain
