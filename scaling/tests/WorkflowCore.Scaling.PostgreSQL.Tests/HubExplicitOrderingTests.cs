@@ -96,20 +96,28 @@ public sealed class HubExplicitOrderingTests
     {
         var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (cs is null) return;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(cs);
         var capacity = policy == HubActivityOrdering.KeyedBounded ? 2 : 1;
-        var setup = await SetupAsync(cs, policy, partitions: 4, capacity);
-        await using var store = setup.Store;
+        var hub=NewHub(); await using var store=new HubTaskStore(fixture.ConnectionString,20);
+        var defs=new HubDefinitionStore(store);
+        await fixture.SeedRegistrationAsync(new(hub,"do-work",1,4,100,100,"resource","resourceId",capacity,false,Ordering:policy));
         for (var i = 0; i < 24; i++)
-            await Enqueue(store, setup.Route, i == 23 ? "other" : "same", i);
-        var first = await Claim(store, setup.Hub, "worker", 16);
+        {
+            var input=Input(i==23?"other":"same");
+            var route=(await defs.ResolveAsync(hub,"do-work",1,input,default))!;
+            await fixture.SeedTaskAsync(route,input.GetRawText(),"order-"+i);
+        }
+        await fixture.ApplyAsync(33);
+        var first = await Claim(store, hub, "worker", 16);
         Assert.Equal(capacity + 1, first.Count);
         Assert.Equal(capacity, first.Count(t => t.Payload.GetProperty("resourceId").GetString() == "same"));
         Assert.Single(first, t => t.Payload.GetProperty("resourceId").GetString() == "other");
         Assert.Single(first, t => t.Payload.GetProperty("resourceId").GetString() == "other");
-        Assert.Empty(await Claim(store, setup.Hub, "other", 16));
+        Assert.Empty(await Claim(store, hub, "other", 16));
         foreach (var t in first)
             Assert.True(await store.CompleteAsync(t.Id, "worker", t.Epoch, "{}", default));
-        Assert.NotEmpty(await Claim(store, setup.Hub, "other", 16));
+        Assert.NotEmpty(await Claim(store, hub, "other", 16));
+        fixture.MarkPassed();
     }
 
     [Fact]
@@ -145,15 +153,21 @@ public sealed class HubExplicitOrderingTests
     {
         var cs = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (cs is null) return;
-        var setup = await SetupAsync(cs, HubActivityOrdering.KeyedFifo, partitions: 4);
-        await using var store = setup.Store;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(cs);
+        var hub=NewHub(); await using var store=new HubTaskStore(fixture.ConnectionString,20);
+        var defs=new HubDefinitionStore(store);
+        await fixture.SeedRegistrationAsync(new(hub,"do-work",1,4,100,100,"resource","resourceId",1,false,Ordering:HubActivityOrdering.KeyedFifo));
         for (var i = 0; i < 20; i++)
-            await Enqueue(store, setup.Route, "same", i);
+        {
+            var input=Input("same"); var route=(await defs.ResolveAsync(hub,"do-work",1,input,default))!;
+            await fixture.SeedTaskAsync(route,input.GetRawText(),"order-"+i);
+        }
+        await fixture.ApplyAsync(33);
 
         var claimed = new List<HubLeasedTask>();
         for (var shard = 0; shard < 4; shard++)
             claimed.AddRange(await store.ClaimAsync(
-                "worker-" + shard, [setup.Hub], [new HubCapability(setup.Hub, "do-work", 1)],
+                "worker-" + shard, [hub], [new HubCapability(hub, "do-work", 1)],
                 16, TimeSpan.FromSeconds(60), default,
                 matchingPartition: shard, matchingPartitionCount: 4));
         Assert.Single(claimed);
@@ -164,10 +178,11 @@ public sealed class HubExplicitOrderingTests
         var next = new List<HubLeasedTask>();
         for (var shard = 0; shard < 4; shard++)
             next.AddRange(await store.ClaimAsync(
-                "next-" + shard, [setup.Hub], [new HubCapability(setup.Hub, "do-work", 1)],
+                "next-" + shard, [hub], [new HubCapability(hub, "do-work", 1)],
                 16, TimeSpan.FromSeconds(60), default,
                 matchingPartition: shard, matchingPartitionCount: 4));
         Assert.Single(next);
+        fixture.MarkPassed();
     }
 
     [Fact]

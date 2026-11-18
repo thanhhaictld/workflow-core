@@ -132,6 +132,9 @@ public sealed class HubWorkflowStore(
             }
         }
 
+        if (definition.Steps.Any(step => policies.HasBusinessPolicy(definition.HubId, step.ActivityType, step.Version)))
+            throw new ArgumentException("Business-resource policies are retired; applications must coordinate business keys");
+
         // Register/verify resources under a deterministic lock order, including
         // strict FIFO keys, before allocating sequence numbers to future tasks.
         foreach (var resource in resources)

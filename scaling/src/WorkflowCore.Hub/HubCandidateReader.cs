@@ -18,7 +18,8 @@ internal readonly record struct HubWorkflowCacheSnapshot(int Entries, long Bytes
 internal sealed record HubCandidateOversized(Guid Id, long Sequence, DateTime Deadline);
 internal sealed record HubCandidatePage(IReadOnlyList<HubTaskCandidate> Items,
     HubCandidateCursor? Next, bool EndOfStream, int MetadataBytes,
-    IReadOnlyList<HubCandidateOversized>? Oversized = null);
+    IReadOnlyList<HubCandidateOversized>? Oversized = null,
+    Exception? WorkflowMetadataError = null);
 internal sealed record HubCandidateHydrationPage(IReadOnlyList<HubTaskCandidate> Items,
     int Oversized, int MetadataBytes, Exception? WorkflowMetadataError = null,
     IReadOnlyList<Guid>? OversizedIds = null);
@@ -34,12 +35,12 @@ internal interface IHubCandidateDiscovery
 
 internal sealed class HubCandidateReader : IHubCandidateDiscovery
 {
-    private readonly record struct WorkflowKey(string Hub, int MatchingPartition, Guid WorkflowId);
+    private readonly record struct WorkflowKey(string Hub, Guid WorkflowId);
     private sealed record WorkflowMetadata(string? DefinitionId, int? DefinitionVersion, bool Complete,
         long WireBytes, long ManagedBytes, DateTimeOffset ExpiresAt);
-    private sealed record WorkflowCacheNode(WorkflowKey Key, WorkflowMetadata Metadata);
-    private sealed record WorkflowMetadataResolution(Dictionary<Guid, WorkflowMetadata> Values, Exception? Error);
+    private sealed record WorkflowCacheNode(WorkflowKey Key, WorkflowMetadata Metadata, HashSet<int> Partitions);
     private sealed class WorkflowScope { public int Entries; public long Bytes; }
+    private sealed record WorkflowMetadataResolution(Dictionary<Guid, WorkflowMetadata> Values, Exception? Error);
     private readonly HubTaskStore tasks;
     private readonly int _workflowCacheEntriesPerPartition;
     private readonly int _workflowCacheEntriesPerProcess;
@@ -48,14 +49,15 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
     private readonly TimeSpan _workflowCacheTtl;
     private const int WorkflowDefinitionMaxUtf8Bytes = 4096;
     private const long WorkflowNodeManagedBytes = 256;
-    private const long WorkflowScopeManagedBytes = 256;
+    // Charge scope bookkeeping per entry, conservatively overcounting shared scopes.
+    private const long WorkflowScopeManagedBytes = 128;
     private readonly object _workflowCacheLock = new();
     // A single bounded metadata lookup prevents concurrent cold batches from
     // duplicating the same workflow probes. The cache is checked after taking
     // the gate so a waiter observes the first batch's results.
     private readonly SemaphoreSlim _workflowFetchGate = new(1, 1);
     private readonly Dictionary<WorkflowKey, LinkedListNode<WorkflowCacheNode>> _workflowCache = [];
-    private readonly Dictionary<(string Hub, int MatchingPartition), WorkflowScope> _workflowScopes = [];
+    private readonly Dictionary<(string Hub, int Partition), WorkflowScope> _workflowScopes = [];
     private readonly LinkedList<WorkflowCacheNode> _workflowLru = [];
     private long _workflowCacheBytes;
     private long _workflowCacheHits;
@@ -63,9 +65,9 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
     private long _workflowCacheEvictions;
     private long _workflowLookupCalls;
 
-    internal HubCandidateReader(HubTaskStore tasks, int workflowCacheEntriesPerPartition = 256,
-        int workflowCacheEntriesPerProcess = 4096, long workflowCacheBytesPerPartition = 1024 * 1024,
-        long workflowCacheBytesPerProcess = 8 * 1024 * 1024, TimeSpan? workflowCacheTtl = null,
+    internal HubCandidateReader(HubTaskStore tasks, int workflowCacheEntriesPerPartition = 10000,
+        int workflowCacheEntriesPerProcess = 10000, long workflowCacheBytesPerPartition = 32 * 1024 * 1024,
+        long workflowCacheBytesPerProcess = 32 * 1024 * 1024, TimeSpan? workflowCacheTtl = null,
         bool? metadataEnrichmentEnabled = null)
     {
         if (workflowCacheEntriesPerPartition < 1 || workflowCacheEntriesPerProcess < workflowCacheEntriesPerPartition ||
@@ -78,7 +80,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         _workflowCacheEntriesPerProcess = workflowCacheEntriesPerProcess;
         _workflowCacheBytesPerPartition = workflowCacheBytesPerPartition;
         _workflowCacheBytesPerProcess = workflowCacheBytesPerProcess;
-        _workflowCacheTtl = workflowCacheTtl ?? TimeSpan.FromSeconds(30);
+        _workflowCacheTtl = workflowCacheTtl ?? TimeSpan.FromMinutes(10);
         if (_workflowCacheTtl <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(workflowCacheTtl));
     }
 
@@ -147,8 +149,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         return new(reader.GetInt64(0), reader.GetDateTime(1));
     }
 
-    // Index-only candidate eligibility and keyset paging. The registry owns
-    // the aggregate byte budget and hydrates new candidates in bounded batches.
+    // One bounded keyset page returns eligible task identity and resource keys.
     internal static string BuildPageSql(HubCandidateStream stream)
     {
         var ready = stream is HubCandidateStream.Ready or HubCandidateStream.ReadyDue;
@@ -162,14 +163,25 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
               WHERE hub_id=@hub AND partition_id % 64=@bucket AND attempts < max_attempts
                 AND sequence<=@upper AND /*predicate*/
               ORDER BY /*ordering*/ LIMIT @limit
+            ), resource_sizes AS MATERIALIZED (
+              SELECT c.task_id,sum(octet_length(c.resource_key)+24) AS bytes
+              FROM wfc_scale.hub_task_constraint c JOIN page p ON p.id=c.task_id GROUP BY c.task_id
+            ), resources AS MATERIALIZED (
+              SELECT c.task_id,array_agg(c.resource_key ORDER BY c.resource_key) AS keys
+              FROM wfc_scale.hub_task_constraint c JOIN resource_sizes s ON s.task_id=c.task_id
+              JOIN page p ON p.id=c.task_id
+              WHERE s.bytes+128+octet_length(p.hub_id)+octet_length(p.task_type)<=@perCandidateByteLimit
+              GROUP BY c.task_id
             )
             SELECT p.id,p.sequence,
                    CASE WHEN 128+octet_length(p.hub_id)+octet_length(p.task_type)<=@byteLimit THEN p.hub_id END,
                    p.partition_id,
                    CASE WHEN 128+octet_length(p.hub_id)+octet_length(p.task_type)<=@byteLimit THEN p.task_type END,
                    p.task_version,p.workflow_id,p.epoch,p.deadline,
-               128+octet_length(p.hub_id)+octet_length(p.task_type)>@byteLimit AS too_large
-            FROM page p
+                   128+octet_length(p.hub_id)+octet_length(p.task_type)>@byteLimit AS too_large,
+                   COALESCE(r.keys,ARRAY[]::text[]),COALESCE(s.bytes,0),
+                   (r.keys IS NOT NULL OR s.bytes IS NULL OR s.bytes=0) AS keys_complete
+            FROM page p LEFT JOIN resource_sizes s ON s.task_id=p.id LEFT JOIN resources r ON r.task_id=p.id
             ORDER BY /*outer_order*/
             """.Replace("/*deadline*/", ready ? "due_at" : "lease_until")
             .Replace("/*predicate*/", stream switch {
@@ -197,6 +209,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         command.Parameters.AddWithValue("after", cursor?.Sequence ?? 0L);
         command.Parameters.AddWithValue("limit", pageSize);
         command.Parameters.AddWithValue("byteLimit", byteLimit);
+        command.Parameters.AddWithValue("perCandidateByteLimit", Math.Max(256, byteLimit / pageSize));
         if (byDeadline) command.Parameters.Add("afterDeadline", NpgsqlDbType.TimestampTz).Value = cursor?.Deadline ?? DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
         var items = new List<HubTaskCandidate>();
         var oversized = new List<HubCandidateOversized>();
@@ -218,17 +231,16 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
             }
             else
             {
-                // Discovery pages transport only bounded task identity/routing
-                // fields. Workflow/resource enrichment is fetched only for new
-                // candidate IDs; cached entries are reused by the registry.
                 var hubId = reader.GetString(2);
                 var taskType = reader.GetString(4);
                 Guid? workflowId = reader.IsDBNull(6) ? null : reader.GetGuid(6);
+                var resourceKeys = reader.GetBoolean(12) ? reader.GetFieldValue<string[]>(10) : [];
                 var item = new HubTaskCandidate(reader.GetGuid(0), sequence, hubId,
                     reader.GetInt32(3), taskType, reader.GetInt32(5), workflowId,
-                    null, null, reader.GetInt64(7), deadline, [], ResourceKeysComplete: false,
-                    WorkflowMetadataComplete: !IsWorkflowTask(taskType), EnrichmentLoaded: false);
-                var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType);
+                    null, null, reader.GetInt64(7), deadline, resourceKeys, ResourceKeysComplete: reader.GetBoolean(12),
+                    WorkflowMetadataComplete: !IsWorkflowTask(taskType), EnrichmentLoaded: true);
+                var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType) +
+                    resourceKeys.Sum(k => 24 + Encoding.UTF8.GetByteCount(k));
                 if (bytes + size > byteLimit) { interrupted = true; break; }
                 items.Add(item);
                 bytes += size;
@@ -236,7 +248,29 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
             rows++;
             lastProcessed = new(sequence, byDeadline ? deadline : null);
         }
-        return new(items, lastProcessed, !interrupted && rows < pageSize, bytes, oversized);
+        // Metadata lookup may need another pooled connection. Release this
+        // reader before it starts, including when the page was interrupted.
+        await reader.CloseAsync();
+        await command.DisposeAsync();
+        Exception? workflowMetadataError = null;
+        var workflowIds = items.Where(x => x.WorkflowId.HasValue && IsWorkflowTask(x.TaskType))
+            .Select(x => x.WorkflowId!.Value).Distinct().ToArray();
+        if (workflowIds.Length > 0)
+        {
+            var resolution = await ResolveWorkflowMetadataAsync(hub, bucket, workflowIds,
+                Math.Max(0, byteLimit - bytes), ct);
+            workflowMetadataError = resolution.Error;
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (items[i].WorkflowId is not { } workflowId || !resolution.Values.TryGetValue(workflowId, out var metadata)) continue;
+                if (metadata.WireBytes > 0 && bytes + metadata.WireBytes > byteLimit) continue;
+                items[i] = items[i] with { DefinitionId = metadata.DefinitionId,
+                    DefinitionVersion = metadata.DefinitionVersion, WorkflowMetadataComplete = metadata.Complete,
+                    WorkflowMetadataExpiresAt = metadata.ExpiresAt };
+                bytes = checked(bytes + (int)metadata.WireBytes);
+            }
+        }
+        return new(items, lastProcessed, !interrupted && rows < pageSize, bytes, oversized, workflowMetadataError);
 
     }
 
@@ -271,7 +305,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
             {
                 var batch = pending.Skip(offset).Take(retryBatchSize).ToArray();
                 var remaining = batchMetadataLimit - bytes;
-                if (remaining < 240) { nextPending.AddRange(batch); continue; }
+                if (remaining < 128) { nextPending.AddRange(batch); continue; }
                 var retried = await HydrateBatchAsync(batch, remaining);
                 items.AddRange(retried.Items);
                 bytes = checked(bytes + retried.MetadataBytes);
@@ -367,9 +401,15 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         {
             foreach (var id in ids)
             {
-                var key = new WorkflowKey(hub, matchingPartition, id);
+                var key = new WorkflowKey(hub, id);
                 if (_workflowCache.TryGetValue(key, out var node) && node.Value.Metadata.ExpiresAt > now)
                 {
+                    if (!ChargeWorkflowScopeLocked(node, matchingPartition))
+                    {
+                        // Return a valid lookup without retaining an uncharged scope.
+                        result[id] = node.Value.Metadata;
+                        continue;
+                    }
                     _workflowLru.Remove(node); _workflowLru.AddFirst(node);
                     result[id] = node.Value.Metadata;
                     _workflowCacheHits++;
@@ -440,45 +480,40 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         {
             foreach (var pair in loaded)
             {
-                var key = new WorkflowKey(hub, matchingPartition, pair.Key);
-                AddWorkflowNodeLocked(key, pair.Value);
+                var key = new WorkflowKey(hub, pair.Key);
+                AddWorkflowNodeLocked(key, pair.Value, matchingPartition);
                 result[pair.Key] = pair.Value;
             }
         }
         return new(result, null);
     }
 
-    private void AddWorkflowNodeLocked(WorkflowKey key, WorkflowMetadata metadata)
+    private void AddWorkflowNodeLocked(WorkflowKey key, WorkflowMetadata metadata, int partition)
     {
-        var scopeKey = (key.Hub, key.MatchingPartition);
-        var size = metadata.ManagedBytes + WorkflowNodeManagedBytes + ManagedStringBytes(key.Hub);
+        var size = metadata.ManagedBytes + WorkflowNodeManagedBytes + WorkflowScopeManagedBytes + ManagedStringBytes(key.Hub);
         while (_workflowCache.ContainsKey(key)) RemoveWorkflowNodeLocked(_workflowCache[key]);
+        if (size > _workflowCacheBytesPerPartition || size > _workflowCacheBytesPerProcess) return;
+        var scopeKey = (key.Hub, partition);
         while (true)
         {
             _workflowScopes.TryGetValue(scopeKey, out var scope);
-            var overProcess = _workflowCache.Count >= _workflowCacheEntriesPerProcess ||
-                _workflowCacheBytes + size + (scope is null ? WorkflowScopeManagedBytes : 0) > _workflowCacheBytesPerProcess;
             var overScope = scope is not null && (scope.Entries >= _workflowCacheEntriesPerPartition ||
                 scope.Bytes + size > _workflowCacheBytesPerPartition);
-            if (scope is null && size + WorkflowScopeManagedBytes > _workflowCacheBytesPerPartition) return;
-            if (!overProcess && !overScope) break;
+            var overProcess = _workflowCache.Count >= _workflowCacheEntriesPerProcess ||
+                _workflowCacheBytes + size > _workflowCacheBytesPerProcess;
+            if (!overScope && !overProcess) break;
             var victim = _workflowLru.Last;
             if (overScope)
-                for (var candidateNode = _workflowLru.Last; candidateNode is not null; candidateNode = candidateNode.Previous)
-                    if (candidateNode.Value.Key.Hub == scopeKey.Hub && candidateNode.Value.Key.MatchingPartition == scopeKey.MatchingPartition)
-                    { victim = candidateNode; break; }
+                while (victim is not null && (victim.Value.Key.Hub != key.Hub || !victim.Value.Partitions.Contains(partition)))
+                    victim = victim.Previous;
             if (victim is null) return;
             RemoveWorkflowNodeLocked(victim);
         }
-        if (size > _workflowCacheBytesPerPartition || size > _workflowCacheBytesPerProcess) return;
-        if (!_workflowScopes.TryGetValue(scopeKey, out var targetScope))
-        {
-            _workflowScopes.Add(scopeKey, targetScope = new WorkflowScope { Bytes = WorkflowScopeManagedBytes });
-            _workflowCacheBytes += WorkflowScopeManagedBytes;
-        }
-        var node = _workflowLru.AddFirst(new WorkflowCacheNode(key, metadata));
+        if (!_workflowScopes.TryGetValue(scopeKey, out var target))
+            _workflowScopes.Add(scopeKey, target = new());
+        target.Entries++; target.Bytes += size;
+        var node = _workflowLru.AddFirst(new WorkflowCacheNode(key, metadata, [partition]));
         _workflowCache.Add(key, node); _workflowCacheBytes += size;
-        targetScope.Entries++; targetScope.Bytes += size;
     }
 
     private void RemoveWorkflowNodeLocked(LinkedListNode<WorkflowCacheNode> node)
@@ -486,18 +521,44 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         var value = node.Value;
         _workflowLru.Remove(node); _workflowCache.Remove(value.Key); _workflowCacheEvictions++;
         HubTelemetry.CandidateWorkflowCacheEvictions.Add(1);
-        var size = value.Metadata.ManagedBytes + WorkflowNodeManagedBytes + ManagedStringBytes(value.Key.Hub);
-        _workflowCacheBytes -= size;
-        var scopeKey = (value.Key.Hub, value.Key.MatchingPartition);
-        if (_workflowScopes.TryGetValue(scopeKey, out var scope))
+        var size = value.Metadata.ManagedBytes + WorkflowNodeManagedBytes + WorkflowScopeManagedBytes + ManagedStringBytes(value.Key.Hub);
+        _workflowCacheBytes -= size + (value.Partitions.Count - 1L) * WorkflowScopeManagedBytes;
+        foreach (var partition in value.Partitions)
         {
+            var scopeKey = (value.Key.Hub, partition);
+            var scope = _workflowScopes[scopeKey];
             scope.Entries--; scope.Bytes -= size;
-            if (scope.Entries == 0)
-            {
-                _workflowScopes.Remove(scopeKey);
-                _workflowCacheBytes -= WorkflowScopeManagedBytes;
-            }
+            if (scope.Entries == 0) _workflowScopes.Remove(scopeKey);
         }
+    }
+
+    private bool ChargeWorkflowScopeLocked(LinkedListNode<WorkflowCacheNode> node, int partition)
+    {
+        var value = node.Value;
+        if (value.Partitions.Contains(partition)) return true;
+        var size = value.Metadata.ManagedBytes + WorkflowNodeManagedBytes + WorkflowScopeManagedBytes + ManagedStringBytes(value.Key.Hub);
+        if (size > _workflowCacheBytesPerPartition) return false;
+        var scopeKey = (value.Key.Hub, partition);
+        while (true)
+        {
+            _workflowScopes.TryGetValue(scopeKey, out var scope);
+            var overScope = scope is not null && (scope.Entries >= _workflowCacheEntriesPerPartition ||
+                scope.Bytes + size > _workflowCacheBytesPerPartition);
+            var overProcess = _workflowCacheBytes + WorkflowScopeManagedBytes > _workflowCacheBytesPerProcess;
+            if (!overScope && !overProcess) break;
+            var victim = _workflowLru.Last;
+            while (victim is not null && (victim == node ||
+                   (overScope && (victim.Value.Key.Hub != value.Key.Hub || !victim.Value.Partitions.Contains(partition)))))
+                victim = victim.Previous;
+            if (victim is null) return false;
+            RemoveWorkflowNodeLocked(victim);
+        }
+        if (!_workflowScopes.TryGetValue(scopeKey, out var target))
+            _workflowScopes.Add(scopeKey, target = new());
+        target.Entries++; target.Bytes += size;
+        value.Partitions.Add(partition);
+        _workflowCacheBytes += WorkflowScopeManagedBytes;
+        return true;
     }
 
     private static long ManagedStringBytes(string value) => 32L + 2L * value.Length;

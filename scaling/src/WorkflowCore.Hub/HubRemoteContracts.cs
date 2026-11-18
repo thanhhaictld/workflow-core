@@ -21,5 +21,5 @@ public sealed record HubTransitionRequest(string WorkerId, long Epoch,
     string? TimerKey = null, long? DelayMilliseconds = null,
     JsonElement? ProcessorState = null, JsonElement? ActivityInput = null);
 public sealed record HubTransitionResult(Guid WorkflowId, long Revision,
-    string State, bool Replayed);
+    string State, bool Replayed, bool PolicyRejected = false, string? Reason = null);
 public sealed record HubRemoteTimerMetrics(long Pending, long Due, long Fired);

@@ -100,6 +100,27 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         await LockPolicyHub(db,tx,policy.HubId,ct);
+        // Existing business policies remain readable and republishable for
+        // draining workers, but a publisher cannot introduce one or restore it
+        // over a supported policy. The hub lock serializes this with publication.
+        var retired = policy.Ordering is HubActivityOrdering.KeyedExclusive or
+            HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded ||
+            policy.ResourceName is not null || policy.ResourceField is not null ||
+            policy.ResourceCapacity != 1 || policy.StrictFifo;
+        if (retired)
+        {
+            await using var existing = new NpgsqlCommand("""
+                SELECT 1 FROM wfc_scale.hub_activity_registration
+                WHERE hub_id=@hub AND activity_type=@type AND version=@version
+                  AND (resource_name IS NOT NULL OR resource_field IS NOT NULL OR
+                       execution_policy IN ('KeyedExclusive','KeyedFifo','KeyedBounded'))
+                """, db, tx);
+            existing.Parameters.AddWithValue("hub", policy.HubId);
+            existing.Parameters.AddWithValue("type", policy.ActivityType);
+            existing.Parameters.AddWithValue("version", policy.Version);
+            if (await existing.ExecuteScalarAsync(ct) is null)
+                throw new InvalidOperationException("Business-resource activity policies are retired; applications must coordinate business keys");
+        }
         // Existing shared keys are authoritative even for a newly deployed version.
         await using var cmd = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
@@ -115,10 +136,22 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
             SET partitions=EXCLUDED.partitions,resource_name=EXCLUDED.resource_name,
                 resource_field=EXCLUDED.resource_field,resource_fifo=EXCLUDED.resource_fifo,
                 contract=EXCLUDED.contract,execution_policy=EXCLUDED.execution_policy
+            WHERE NOT (hub_activity_registration.resource_name IS NOT NULL OR
+                       hub_activity_registration.resource_field IS NOT NULL OR
+                       hub_activity_registration.execution_policy IN ('KeyedExclusive','KeyedFifo','KeyedBounded'))
+               OR (hub_activity_registration.partitions = EXCLUDED.partitions AND
+                   hub_activity_registration.resource_name IS NOT DISTINCT FROM EXCLUDED.resource_name AND
+                   hub_activity_registration.resource_field IS NOT DISTINCT FROM EXCLUDED.resource_field AND
+                   hub_activity_registration.resource_fifo = EXCLUDED.resource_fifo AND
+                   hub_activity_registration.contract IS NOT DISTINCT FROM EXCLUDED.contract AND
+                   hub_activity_registration.execution_policy = EXCLUDED.execution_policy)
             RETURNING xmax=0
             """,db,tx);
         BindActivity(cmd, policy);
-        var inserted = (bool)(await cmd.ExecuteScalarAsync(ct))!;
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is null)
+            throw new InvalidOperationException("Existing business-resource activity registrations are frozen; publish a new version for policy or contract changes");
+        var inserted = (bool)result;
         await NotifyPolicyChangeAsync(db, tx, policy.HubId, ct);
         await tx.CommitAsync(ct);
         return inserted;
@@ -393,6 +426,16 @@ public sealed class HubDefinitionStore(HubTaskStore tasks)
     internal sealed record ActivityRouteRegistration(int Partitions,int HubLimit,int ActivityLimit,
         string? Resource,string? Field,int ResourceLimit,bool Fifo,HubActivityOrdering Ordering)
     {
+        internal const string RetiredPolicyReason = "Business-resource policies are retired; applications must coordinate business keys";
+        internal bool IsBusinessPolicy => Resource is not null || Field is not null ||
+            Ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded;
+
+        internal void EnsureDispatchAllowed(bool compatibility)
+        {
+            if (!compatibility && IsBusinessPolicy)
+                throw new ArgumentException(RetiredPolicyReason);
+        }
+
         internal HubTaskRoute Resolve(string hub,string activity,int version,JsonElement input)
         {
             var ordering=Ordering;

@@ -183,16 +183,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             HubTelemetry.NativeEventLaneBypass.Add(1,
                 new KeyValuePair<string, object?>("operation","native_commit"),
                 EventLaneModeTag);
-        int partition;long revision;string status;
+        int partition;long revision;string status;bool businessCompatibility;
         var rowLockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using(var cmd=Command(db,tx,"""
-            SELECT partition_id,revision,native_status FROM wfc_scale.hub_workflow
+            SELECT partition_id,revision,native_status,business_policy_compatibility FROM wfc_scale.hub_workflow
             WHERE id=@id FOR UPDATE
             """,("id",id)))
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
             if(!await r.ReadAsync(ct))return null;
-            partition=r.GetInt32(0);revision=r.GetInt64(1);status=r.GetString(2);
+            partition=r.GetInt32(0);revision=r.GetInt64(1);status=r.GetString(2);businessCompatibility=r.GetBoolean(3);
         }
         HubTelemetry.NativeWorkflowRowLockDuration.Record(
             System.Diagnostics.Stopwatch.GetElapsedTime(rowLockStarted).TotalSeconds,
@@ -205,12 +205,17 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
             if(!await r.ReadAsync(ct))return null;
-            if(r.GetInt16(0)==2 && r.GetInt64(3)==request.Epoch && !r.IsDBNull(2) &&
+            if(r.GetInt16(0) is 2 or 3 && r.GetInt64(3)==request.Epoch && !r.IsDBNull(2) &&
                r.GetString(2)==request.WorkerId && !r.IsDBNull(5))
             {
                 var stored=Json(r.GetString(5));
                 if(stored.TryGetProperty("commit",out var previous) && JsonElement.DeepEquals(previous,Json(canonical)))
-                    return new(new(id,stored.GetProperty("revision").GetInt64(),stored.GetProperty("status").GetString()!,true),hub);
+                {
+                    var rejected=stored.TryGetProperty("policyRejected",out var flag) && flag.ValueKind==JsonValueKind.True;
+                    if (r.GetInt16(0)==3 && !rejected) return null;
+                    return new(new(id,stored.GetProperty("revision").GetInt64(),stored.GetProperty("status").GetString()!,true,
+                        rejected,rejected?HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason:null),hub);
+                }
                 return null;
             }
             if(r.GetInt16(0)!=1 || r.IsDBNull(1) || r.GetString(1)!=request.WorkerId ||
@@ -219,6 +224,47 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         // A status change invalidates in-flight snapshots by incrementing revision.
         if(status is "Complete" or "Terminated")return null;
+        // Validate policy before touching inbox, subscriptions, snapshots or
+        // caller-proposed cancellation. Existing dispatches are idempotent.
+        var registrations=new Dictionary<(string Hub,string Activity,int Version),HubDefinitionStore.ActivityRouteRegistration>();
+        if (!businessCompatibility && request.Status is "Runnable" or "Suspended")
+        {
+            foreach (var activity in request.Activities)
+            {
+                await using var existing=Command(db,tx,"SELECT 1 FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key",
+                    ("id",id),("key",activity.DispatchKey));
+                if(await existing.ExecuteScalarAsync(ct) is not null)continue;
+                var key=(hub,activity.ActivityType,activity.Version);
+                if(!registrations.TryGetValue(key,out var registration))
+                {
+                    registration=await definitions.ReadActivityRouteRegistrationAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
+                        ?? throw new KeyNotFoundException("Unregistered native activity");
+                    registrations.Add(key,registration);
+                }
+                if(registration.IsBusinessPolicy)
+                {
+                    const string reason=HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason;
+                    var stored=JsonSerializer.Serialize(new{commit=request,revision=revision+1,status="Terminated",policyRejected=true});
+                    await using(var reject=Command(db,tx,"""
+                        UPDATE wfc_scale.hub_task SET state=3,last_owner=@owner,owner=NULL,lease_until=NULL,
+                          last_error=@reason,result_json=@result::jsonb,updated_at=now()
+                        WHERE id=@task AND state=1 AND owner=@owner AND epoch=@epoch AND lease_until>clock_timestamp();
+                        """,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
+                        ("reason",reason),("result",stored)))
+                        if(await reject.ExecuteNonQueryAsync(ct)!=1)return null;
+                    await Execute(db,tx,"""
+                        UPDATE wfc_scale.hub_workflow SET state=3,native_status='Terminated',waiting_for=NULL,
+                          revision=revision+1,last_error=@reason,completed_at=now(),updated_at=now() WHERE id=@id
+                        """,ct,("id",id),("reason",reason));
+                    await RetireAsync(db,tx,id,ct);
+                    await HubRemoteWorkflowStore.JournalAsync(db,tx,id,0,request.TaskId,"__native_workflow__",
+                        "WorkflowPolicyRejected",JsonSerializer.Serialize(new { reason }),ct);
+                    await tx.CommitAsync(ct);
+                    HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
+                    return new(new(id,revision+1,"Terminated",false,true,reason),hub);
+                }
+            }
+        }
         foreach(var consumed in request.ConsumedInbox.Distinct())
         {
             await using var cmd=Command(db,tx,"""
@@ -253,7 +299,6 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         {
             var dispatches=new List<(HubNativeDispatch Activity,HubTaskRoute Route)>();
             // Entries and their shared policy locks live only for this transaction.
-            var registrations=new Dictionary<(string Hub,string Activity,int Version),HubDefinitionStore.ActivityRouteRegistration>();
             foreach(var activity in request.Activities)
             {
                 // Dispatch keys are stable across transport retries, unique across native retries/iterations.
@@ -268,6 +313,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                         ?? throw new KeyNotFoundException("Unregistered native activity");
                     registrations.Add(key,registration);
                 }
+                registration.EnsureDispatchAllowed(businessCompatibility);
                 var route=registration.Resolve(hub,activity.ActivityType,activity.Version,activity.Input);
                 if(partition>=route.PartitionCount)throw new InvalidOperationException("Activity partition mismatch");
                 dispatches.Add((activity,route));

@@ -2,7 +2,9 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For current Hub deployments, apply migrations through `032_hub_candidate_task_id_hints.sql`
+For this in-progress branch, migration `033_hub_business_compatibility.sql` follows `032_hub_candidate_task_id_hints.sql`;
+quiesce all old Hub/task writers before applying it and resume only gate-aware writers.
+Existing executions retain compatibility; retain original remote worker binaries for any old versions that can still continue. See the [removal plan](hub-keyed-resource-removal-plan.md) before rollout. Apply migrations
 as configured in Compose and the development script, skipping retired index-only
 migrations 023 and 025–027. Migration 031 requires autocommit, outside a transaction
 block; see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 032

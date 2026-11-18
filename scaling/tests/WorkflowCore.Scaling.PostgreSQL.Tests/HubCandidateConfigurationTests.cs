@@ -7,7 +7,8 @@ public sealed class HubCandidateConfigurationTests
     [Fact]
     public void StandardPresetsKeepExistingCandidateMatcherOnAndTaskIdHintsOff()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        var sourceRoot = Environment.GetEnvironmentVariable("WFC_TEST_SOURCE_ROOT");
+        var root = new DirectoryInfo(sourceRoot ?? AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Makefile")))
             root = root.Parent;
         Assert.NotNull(root);

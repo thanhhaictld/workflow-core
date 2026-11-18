@@ -134,10 +134,10 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using var db = await Source.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         string hub, definition; int partition, step, steps; long revision;
-        short workflowState; string? waitingFor; string input;
+        short workflowState; string? waitingFor; string input; bool businessCompatibility;
         await using (var cmd = new NpgsqlCommand("""
             SELECT hub_id,definition_id,partition_id,next_step,step_count,
-                   revision,state,waiting_for,input_json::text
+                   revision,state,waiting_for,input_json::text,business_policy_compatibility
             FROM wfc_scale.hub_workflow
             WHERE id=@id AND execution_mode='remote' FOR UPDATE
             """, db, tx))
@@ -151,12 +151,13 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             workflowState=reader.GetInt16(6);
             waitingFor=reader.IsDBNull(7)?null:reader.GetString(7);
             input=reader.GetString(8);
+            businessCompatibility=reader.GetBoolean(9);
         }
 
-        short taskState; string? owner,lastOwner,storedResult; long epoch;
+        short taskState; string? owner,lastOwner,storedResult,lastError; long epoch;
         DateTime? lease;
         await using (var cmd = new NpgsqlCommand("""
-            SELECT state,owner,last_owner,epoch,lease_until,result_json::text
+            SELECT state,owner,last_owner,epoch,lease_until,result_json::text,last_error
             FROM wfc_scale.hub_task
             WHERE id=@task AND workflow_id=@workflow AND task_type='__workflow__'
             FOR UPDATE
@@ -172,14 +173,17 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             epoch=reader.GetInt64(3);
             lease=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4);
             storedResult=reader.IsDBNull(5)?null:reader.GetString(5);
+            lastError=reader.IsDBNull(6)?null:reader.GetString(6);
         }
-        if (taskState==2 && epoch==request.Epoch && lastOwner==request.WorkerId &&
+        if ((taskState==2 || (taskState==3 && lastError==HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason)) &&
+            epoch==request.Epoch && lastOwner==request.WorkerId &&
             storedResult is not null)
         {
             using var previous=JsonDocument.Parse(storedResult);
             using var current=JsonDocument.Parse(canonical);
             if (JsonElement.DeepEquals(previous.RootElement,current.RootElement))
-                return new(id,revision,States[workflowState],true);
+                return new(id,revision,States[workflowState],true,taskState==3,
+                    taskState==3?HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason:null);
         }
         if (taskState!=1 || epoch!=request.Epoch || owner!=request.WorkerId ||
             lease<=DateTime.UtcNow || revision!=request.ExpectedRevision ||
@@ -198,9 +202,46 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 ? supplied : JsonDocument.Parse(input).RootElement;
             if (payload.GetRawText().Length>65536)
                 throw new ArgumentException("Activity payload exceeds limit");
-            route=await definitions.ResolveAsync(hub,request.ActivityType,request.ActivityVersion,
-                payload,ct,db,tx)
+            var registration=await definitions.ReadActivityRouteRegistrationAsync(hub,request.ActivityType,request.ActivityVersion,ct,db,tx)
                 ?? throw new KeyNotFoundException("Activity is not registered");
+            if (!businessCompatibility && registration.IsBusinessPolicy)
+            {
+                const string reason=HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason;
+                await using (var reject = new NpgsqlCommand("""
+                    UPDATE wfc_scale.hub_task SET state=3,last_owner=@owner,owner=NULL,lease_until=NULL,
+                      last_error=@reason,result_json=@result,updated_at=now()
+                    WHERE id=@id AND state=1 AND owner=@owner AND epoch=@epoch AND lease_until>clock_timestamp()
+                    """,db,tx))
+                {
+                    reject.Parameters.AddWithValue("id",request.TaskId);
+                    reject.Parameters.AddWithValue("owner",request.WorkerId);
+                    reject.Parameters.AddWithValue("epoch",request.Epoch);
+                    reject.Parameters.AddWithValue("reason",reason);
+                    reject.Parameters.Add("result",NpgsqlDbType.Jsonb).Value=canonical;
+                    if(await reject.ExecuteNonQueryAsync(ct)!=1)return null;
+                }
+                await using (var terminate = new NpgsqlCommand("""
+                    UPDATE wfc_scale.hub_workflow SET state=3,waiting_for=NULL,revision=revision+1,
+                      last_error=@reason,completed_at=now(),updated_at=now() WHERE id=@id;
+                    UPDATE wfc_scale.hub_timer SET state=2,cancelled_at=now() WHERE workflow_id=@id AND state=0;
+                    UPDATE wfc_scale.hub_task SET state=3,owner=NULL,lease_until=NULL,
+                      last_error='Workflow ended',updated_at=now() WHERE workflow_id=@id AND state IN (0,1);
+                    UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
+                      FROM wfc_scale.hub_task t WHERE t.id=a.task_id AND t.workflow_id=@id
+                        AND t.last_error='Workflow ended' AND a.finished_at IS NULL;
+                    """,db,tx))
+                {
+                    terminate.Parameters.AddWithValue("id",id);
+                    terminate.Parameters.AddWithValue("reason",reason);
+                    await terminate.ExecuteNonQueryAsync(ct);
+                }
+                await JournalAsync(db,tx,id,step,request.TaskId,"__workflow__","WorkflowPolicyRejected",
+                    JsonSerializer.Serialize(new { reason }),ct);
+                await tx.CommitAsync(ct);
+                HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
+                return new(id,revision+1,"Failed",false,true,reason);
+            }
+            route=registration.Resolve(hub,request.ActivityType,request.ActivityVersion,payload);
             if (route.PartitionCount<=partition)
                 throw new InvalidOperationException("Activity partition registration mismatch");
             var activityId=Guid.NewGuid();

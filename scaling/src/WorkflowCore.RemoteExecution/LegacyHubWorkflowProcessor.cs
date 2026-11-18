@@ -131,7 +131,12 @@ public sealed class HubWorkflowProcessor(HubRestClient client,
                 logger.LogWarning("Processor fenced/stale workflow {Workflow}",id);
                 return;
             }
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException("Hub rejected the workflow transition: " + response.StatusCode + " " +
+                    await response.Content.ReadAsStringAsync(ct));
+            var transition = await response.Content.ReadFromJsonAsync<HubTransitionResult>(cancellationToken: ct);
+            if (transition?.PolicyRejected == true)
+                logger.LogWarning("Workflow {Workflow} failed Hub policy validation: {Reason}",id,transition.Reason);
         }
         catch(OperationCanceledException)when(ct.IsCancellationRequested){}
         catch(Exception ex)

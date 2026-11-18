@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.request
 import re
+import threading
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 LOAD = ROOT / "scaling/benchmarks/hub-push-load.py"
@@ -38,6 +39,9 @@ SELECT coalesce(json_agg(json_build_object('class',class,'calls',calls,'rows',ro
  'walBytes',wal_bytes) ORDER BY class),'[]'::json)
 FROM (
  SELECT CASE
+   WHEN query ILIKE '%hub_workflow%' AND query ILIKE '%page AS MATERIALIZED%' THEN 'discovery-with-workflow-enrichment'
+   WHEN query ILIKE '%hub_workflow%' THEN 'workflow-metadata-probe'
+   WHEN query ILIKE '%requested AS MATERIALIZED%' AND query ILIKE '%hub_task_constraint%' THEN 'id-hydration-with-constraints'
    WHEN query ILIKE '%requested AS MATERIALIZED%' THEN 'id-hydration'
    WHEN query ILIKE '%page AS MATERIALIZED%' THEN 'candidate-discovery-page'
    WHEN query ILIKE '%INSERT INTO wfc_scale.hub_notification_outbox%' THEN 'notification-outbox-producer'
@@ -62,7 +66,8 @@ FROM (
  SELECT queryid,query,calls,rows,total_exec_time,shared_blks_hit,shared_blks_read,wal_bytes
  FROM pg_stat_statements
  WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-   AND (query ILIKE '%hub_task%' OR query ILIKE '%hub_notification_outbox%')
+   AND (query ILIKE '%hub_task%' OR query ILIKE '%hub_workflow%' OR
+        query ILIKE '%hub_task_constraint%' OR query ILIKE '%hub_notification_outbox%')
  ORDER BY calls DESC LIMIT 100
 ) top_task_queries;
 SELECT json_build_object('tasksInserted',n_tup_ins,'outboxInserted',outbox_ins,
@@ -225,6 +230,14 @@ def metric_delta(before, after):
             for name in sorted(set(before) | set(after))}
 
 
+def sample_candidate_gauges(run_id, samples, stopped):
+    while not stopped.wait(10):
+        values = scrape_candidate_metrics(run_id)
+        samples.append({key: value for key, value in values.items()
+                        if key in ("workflow_hub_candidate_bytes", "workflow_hub_candidate_entries",
+                                   "workflow_hub_candidate_credits", "workflow_hub_candidate_reservations")})
+
+
 def environment(arm, node, database, task_id_hints_enabled, run_id):
     env = os.environ.copy()
     db = base_connection if arm == "baseline" else candidate_connection
@@ -239,6 +252,9 @@ def environment(arm, node, database, task_id_hints_enabled, run_id):
         # Compare metadata enrichment within the established in-memory matcher;
         # candidate topology is on for both arms.
         "WFC_HUB_MATCHING_CANDIDATES_ENABLED": "true",
+        # The metadata page replacement is the treatment; the baseline binary
+        # ignores this setting and retains its legacy enriched-page query.
+        "WFC_HUB_CANDIDATE_METADATA_ENRICHMENT_ENABLED": "true" if arm == "candidate" else "false",
         "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED": "true" if task_id_hints_enabled else "false",
         "WFC_HUB_PUSH_ENABLED": "true",
         "WFC_HUB_CLAIM_ADMISSION_ENABLED": "true",
@@ -333,6 +349,11 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
         if warmup:
             count, vus, stagger, constrained = (max(4, count // 2), max(1, vus // 2), 0, constrained)
         raw_path = out / f"{run_id}.json"
+        telemetry_samples = []
+        telemetry_stopped = threading.Event()
+        telemetry_thread = threading.Thread(target=sample_candidate_gauges,
+            args=(run_id, telemetry_samples, telemetry_stopped), daemon=True)
+        telemetry_thread.start()
         env = os.environ.copy()
         env.update({
             "WFC_HUB_URL": f"http://127.0.0.1:{ports[0]}",
@@ -348,6 +369,8 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
         })
         workload = subprocess.run([sys.executable, str(LOAD)], cwd=ROOT, env=env,
                                   capture_output=True, text=True)
+        telemetry_stopped.set()
+        telemetry_thread.join(timeout=5)
         (out / f"{run_id}.stdout.txt").write_text(workload.stdout, encoding="utf-8")
         (out / f"{run_id}.stderr.txt").write_text(workload.stderr, encoding="utf-8")
         stop()
@@ -372,6 +395,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
             workload_summary, db_summary = {}, []
         record = {
             "arm": arm, "candidateTopologyEnabled": True,
+            "metadataEnrichmentEnabled": arm == "candidate",
             "taskIdHintsEnabled": task_id_hints_enabled,
             "scenario": scenario, "repetition": repetition,
             "workloadExit": workload.returncode,
@@ -379,6 +403,7 @@ def execute(arm, database, task_id_hints_enabled, scenario, repetition, warmup=F
             "workload": workload_summary,
             "database": db_summary,
             "candidateTelemetryDelta": metric_delta(metrics_before, metrics_after),
+            "candidateTelemetrySamples": telemetry_samples,
             "durationSeconds": load.get("duration_seconds"),
             "sharedTenant": constrained,
             "staggerMs": stagger,

@@ -37,7 +37,6 @@ if (Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ENABLED") == "true")
     registrations
         .AddWorkflow<PolicyUnorderedWorkflow, PolicyBenchmarkData>("policy-benchmark", 8)
         .AddWorkflow<PolicyPartitionWorkflow, PolicyBenchmarkData>("policy-benchmark", 8)
-        .AddWorkflow<PolicyKeyedWorkflow, PolicyBenchmarkData>("policy-benchmark", 8)
         .AddActivity<PolicyUnorderedStep>("policy-benchmark", "policy-unordered-step", 1, o =>
         {
             o.Partitions = 8;
@@ -48,14 +47,6 @@ if (Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ENABLED") == "true")
         {
             o.Partitions = 8;
             o.Ordering = WorkflowCore.Hub.HubActivityOrdering.PartitionSerial;
-            o.Input(s => s.ResourceId).Output(s => s.Completed);
-        })
-        .AddActivity<PolicyKeyedStep>("policy-benchmark", "policy-keyed-step", 1, o =>
-        {
-            o.Partitions = 8;
-            o.Ordering = WorkflowCore.Hub.HubActivityOrdering.KeyedFifo;
-            o.ResourceName = "resource";
-            o.ResourceField = "resourceId";
             o.Input(s => s.ResourceId).Output(s => s.Completed);
         });
 }

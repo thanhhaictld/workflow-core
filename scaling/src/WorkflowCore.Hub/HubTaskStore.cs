@@ -205,11 +205,54 @@ public sealed class HubTaskStore : IAsyncDisposable
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
         Guid? workflowId, string? requestKey, CancellationToken ct)
     {
+        // Direct producers may use only fixed, non-keyed operational quotas.
+        // Compare complete canonical identities, not a caller-controlled prefix.
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            $"hub:{route.HubId}:{HubPolicyDigest(route.HubId)}",
+            $"hub:{route.HubId}:{HubPolicyDigest("all")}",
+            $"activity:{route.HubId}:{route.TaskType}:{HubPolicyDigest(route.TaskType)}",
+            $"activity:{route.HubId}:{route.TaskType}:{HubPolicyDigest("all")}",
+            $"workflow-task:{route.HubId}:{route.TaskType}:{HubPolicyDigest("all")}"
+        };
+        var retired = route.Ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded ||
+            route.Resources.Any(r => r.StrictFifo || r.Capacity < 1 || !allowed.Contains(r.Key));
         var id = Guid.NewGuid();
         var partition = HubPartitionRouter.ForWorkflow(workflowId ?? id, route.PartitionCount);
         var constraints = route.ResourcesForPartition(partition);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
+
+        if (retired)
+        {
+            // Reconcile an already accepted direct enqueue without creating any
+            // resources. A workflow ID supplied by a caller grants no exemption.
+            if (requestKey is not null)
+            {
+                await using var existing = new NpgsqlCommand("""
+                    SELECT id, task_type=@type AND task_version=@version AND payload=@payload
+                      AND workflow_id IS NOT DISTINCT FROM @workflow
+                    FROM wfc_scale.hub_task WHERE hub_id=@hub AND request_key=@request
+                    """,db,tx);
+                existing.Parameters.AddWithValue("hub",route.HubId);
+                existing.Parameters.AddWithValue("request",requestKey);
+                existing.Parameters.AddWithValue("type",route.TaskType);
+                existing.Parameters.AddWithValue("version",route.Version);
+                existing.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
+                existing.Parameters.Add("workflow",NpgsqlDbType.Uuid).Value=(object?)workflowId ?? DBNull.Value;
+                await using var replay = await existing.ExecuteReaderAsync(ct);
+                if (await replay.ReadAsync(ct))
+                {
+                    if (!replay.GetBoolean(1))
+                        throw new InvalidOperationException("Idempotency key reused for different Hub task");
+                    var previous = replay.GetGuid(0);
+                    await replay.CloseAsync();
+                    await tx.CommitAsync(ct);
+                    return previous;
+                }
+            }
+            throw new ArgumentException("Direct business-resource policies are retired; applications must coordinate business keys");
+        }
 
         // Serialize against operator policy changes. Re-resolve declarative routes
         // inside the transaction after acquiring the registration lock.

@@ -122,6 +122,8 @@ public sealed class HubNativeRoutedTests
     public async Task RoutedStepsRecoverFromSnapshotsAndApplyOutputsOnce(string mode)
     {
         var database=Environment.GetEnvironmentVariable("WFC_TEST_PG");if(database is null)return;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(database);
+        database=fixture.ConnectionString;
         var hub="routed-"+Guid.NewGuid().ToString("N");
         await using var tasks=new HubTaskStore(database);
         var definitions=new HubDefinitionStore(tasks);
@@ -130,11 +132,14 @@ public sealed class HubNativeRoutedTests
         using(var provider=Provider(hub,mode))
         {
             var catalog=provider.GetRequiredService<HubNativeCatalog>();
-            foreach(var activity in catalog.Activities)await definitions.RegisterActivityAsync(activity.Policy,default);
+            foreach(var activity in catalog.Activities)
+                if(activity.Policy.ResourceName is not null) await fixture.SeedRegistrationAsync(activity.Policy);
+                else await definitions.RegisterActivityAsync(activity.Policy,default);
             foreach(var workflow in catalog.Definitions)await definitions.RegisterAsync(workflow,default);
         }
         var id=await new HubRemoteWorkflowStore(tasks,definitions).StartAsync(new(hub,"routed-"+mode,2,
             JsonSerializer.SerializeToElement(new Data(),new JsonSerializerOptions(JsonSerializerDefaults.Web))),default);
+        await fixture.ApplyAsync(33);
         var sawParallel=false;var repeatedSteps=new List<int>();
         var fifo=new Queue<string>();
         for(var iteration=0;iteration<100;iteration++)
@@ -188,6 +193,7 @@ public sealed class HubNativeRoutedTests
             Assert.Contains(snapshot.ExecutionPointers,p=>p.RetryCount==1);
         }
         Assert.Empty(final.Inbox);
+        fixture.MarkPassed();
     }
 
     [Fact]

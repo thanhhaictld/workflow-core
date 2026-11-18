@@ -14,7 +14,7 @@ param(
     [ValidateSet('both','hub','hub-2')][string]$Victim = 'both',
     [ValidateSet('both','idle','busy')][string]$Mode = 'both',
     [ValidateRange(1,10)][int]$Repeat = 1,
-    [ValidateSet('unordered','partition','keyed')][string]$StressMode = 'unordered',
+    [ValidateSet('unordered','partition')][string]$StressMode = 'unordered',
     [ValidateRange(1,1000000)][int]$Count = 300,
     [ValidateRange(1,10000)][int]$Vus = 60,
     [ValidateRange(15,7200)][int]$TimeoutSeconds = 600
@@ -133,7 +133,7 @@ function Wait-LabReady {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
             $defs = Invoke-RestMethod "http://127.0.0.1:$lbPort/api/hub/definitions" -Headers @{Authorization="Bearer $env:OWNER_RECOVERY_TOKEN"} -TimeoutSec 3
-            $ready = @($defs | Where-Object { $_.hubId -eq 'policy-benchmark' -and $_.definitionId -in @('policy-unordered','policy-partition-fifo','policy-keyed-fifo') }).Count -eq 3
+            $ready = @($defs | Where-Object { $_.hubId -eq 'policy-benchmark' -and $_.definitionId -in @('policy-unordered','policy-partition-fifo') }).Count -eq 2
             if ($ready) { break }
         } catch { }
         Start-Sleep -Seconds 1
@@ -143,9 +143,34 @@ function Wait-LabReady {
 function Start-Lab {
     Invoke-Compose build hub hub-2 processor monitor
     Invoke-Compose up -d --wait postgres otel-collector prometheus tempo loki grafana postgres-process-exporter
+    # Migration 033 needs a boundary with no old Hub writers. This controls
+    # only this project; operators must quiesce any external writers separately.
+    # The preset replaces processor binaries, so it cannot safely replace an
+    # old worker while any workflow could still need that worker to continue.
+    $hasWorkflowTable = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc "SELECT to_regclass('wfc_scale.hub_workflow') IS NOT NULL"
+    if ($LASTEXITCODE) { throw 'Cannot inspect schema before replacing processor binaries' }
+    if ($hasWorkflowTable.Trim() -eq 't') {
+        $live = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc `
+            "SELECT count(*) FROM wfc_scale.hub_workflow WHERE state IN (0,1) OR (execution_mode='native' AND native_status IN ('Runnable','Suspended'))"
+        if ($LASTEXITCODE) { throw 'Cannot inventory workflows before replacing processor binaries' }
+        if ([long]$live -gt 0) { throw "Cannot replace lab processors: $live nonterminal workflow(s) may require the old binaries; drain or provision compatible workers first" }
+    }
+    Invoke-Compose stop hub hub-2
+    if ($hasWorkflowTable.Trim() -eq 't') {
+        # Recheck after Hub writers stop to close the check/stop race. If work
+        # arrived in the gap, restart the existing (not rebuilt) containers.
+        $live = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc `
+            "SELECT count(*) FROM wfc_scale.hub_workflow WHERE state IN (0,1) OR (execution_mode='native' AND native_status IN ('Runnable','Suspended'))"
+        if ($LASTEXITCODE -or [long]$live -gt 0) {
+            Invoke-Compose start hub hub-2
+            throw 'Cannot replace lab processors: workflow inventory changed or could not be rechecked after quiescing Hubs'
+        }
+    }
+    Invoke-Compose stop processor
     Invoke-Compose run --rm --no-deps migrate
-    Invoke-Compose up -d --no-deps --wait hub hub-2 hub-lb monitor
-    Invoke-Compose up -d --no-deps --wait --scale "processor=$Processors" processor
+    Invoke-Compose up -d --no-deps --force-recreate --wait hub hub-2
+    Invoke-Compose up -d --no-deps --wait hub-lb monitor
+    Invoke-Compose up -d --no-deps --force-recreate --wait --scale "processor=$Processors" processor
     Wait-LabReady
     Write-Host "Hub: http://127.0.0.1:$lbPort; Grafana: http://127.0.0.1:$grafanaPort; Prometheus: http://127.0.0.1:$prometheusPort"
 }
@@ -193,9 +218,9 @@ switch ($Task) {
     down { Invoke-Compose down; Invoke-TestCompose down }
     clean { Invoke-Compose down --volumes --remove-orphans; Invoke-TestCompose down --volumes --remove-orphans }
     db-test { Test-Database }
-    smoke-test { Wait-LabReady; Test-K6 unordered 40; Test-K6 keyed 40 }
+    smoke-test { Wait-LabReady; Test-K6 unordered 40; Test-K6 partition 40 }
     stress-test { Wait-LabReady; Test-K6 $StressMode $Count }
-    test { Wait-LabReady; Test-K6 unordered 40; Test-K6 keyed 40 }
+    test { Wait-LabReady; Test-K6 unordered 40; Test-K6 partition 40 }
     test-4k { Wait-LabReady; Test-K6 $StressMode 4000 100 }
     fault-test {
         Start-Lab

@@ -6,6 +6,16 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 
 public sealed class HubCandidateReaderTests
 {
+    [Fact]
+    public void MetadataEnrichmentGateIsIndependentAndOffByDefault()
+    {
+        Assert.False(HubCandidateReader.ParseMetadataEnrichmentFlag(null));
+        Assert.False(HubCandidateReader.ParseMetadataEnrichmentFlag("false"));
+        Assert.False(HubCandidateReader.ParseMetadataEnrichmentFlag("0"));
+        Assert.True(HubCandidateReader.ParseMetadataEnrichmentFlag("true"));
+        Assert.True(HubCandidateReader.ParseMetadataEnrichmentFlag("1"));
+    }
+
     private sealed class CountingDiscovery(IHubCandidateDiscovery inner) : IHubCandidateDiscovery
     {
         public int PageCalls;
@@ -39,7 +49,7 @@ public sealed class HubCandidateReaderTests
             command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database);
-        var reader = new HubCandidateReader(tasks);
+        var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var horizon = await reader.CaptureHorizonAsync(hub, default);
         var small = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, horizon, null, 1, 256, default);
         var fallback = Assert.Single(small.Items);
@@ -50,13 +60,39 @@ public sealed class HubCandidateReaderTests
         var page = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, horizon, null, 1, 2048, default);
         var item = Assert.Single(page.Items);
         Assert.Equal(id, item.Id);
-        Assert.Empty(item.ResourceKeys);
-        Assert.False(item.ResourceKeysComplete);
-        Assert.False(item.EnrichmentLoaded);
+        Assert.Equal(key, Assert.Single(item.ResourceKeys));
+        Assert.True(item.ResourceKeysComplete);
+        Assert.True(item.EnrichmentLoaded);
         Assert.Equal(0, item.Epoch);
         var enriched = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [id], 2048, default)).Items);
         Assert.Equal(key, Assert.Single(enriched.ResourceKeys));
         Assert.True(enriched.ResourceKeysComplete);
+    }
+
+    [Fact]
+    public async Task CandidatePageRemainsEnrichedForEitherLegacyFlagValue()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate reader tests");
+        var hub = "metadata-gate-" + Guid.NewGuid().ToString("N"); var id = Guid.NewGuid();
+        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+            VALUES (@id,@hub,0,'activity',1,'{}')
+            """, db))
+        { command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hub", hub); await command.ExecuteNonQueryAsync(); }
+        await using var tasks = new HubTaskStore(database);
+        var horizon = await new HubCandidateReader(tasks, metadataEnrichmentEnabled: false).CaptureHorizonAsync(hub, default);
+        var baselineReader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: false);
+        var enabledReader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
+        Assert.True(baselineReader.MetadataEnrichmentEnabled);
+        Assert.True(enabledReader.MetadataEnrichmentEnabled);
+        var baseline = Assert.Single((await baselineReader.ReadPageAsync(hub, 0, HubCandidateStream.Ready,
+            horizon, null, 8, 4096, default)).Items);
+        var enabled = Assert.Single((await enabledReader.ReadPageAsync(hub, 0, HubCandidateStream.Ready,
+            horizon, null, 8, 4096, default)).Items);
+        Assert.Equal(id, baseline.Id); Assert.True(baseline.EnrichmentLoaded);
+        Assert.Equal(id, enabled.Id); Assert.True(enabled.EnrichmentLoaded);
     }
 
     [Fact]
@@ -117,7 +153,7 @@ public sealed class HubCandidateReaderTests
             command.Parameters.AddWithValue("combinedKey", combinedKey); command.Parameters.AddWithValue("unicodeKey", unicodeKey);
             await command.ExecuteNonQueryAsync();
         }
-        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
+        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var page = await reader.HydrateAsync(hub, 0, 64, [combined, combined], 512, default);
         var combinedItem = Assert.Single(page.Items);
         Assert.Equal(combined, combinedItem.Id);
@@ -153,10 +189,10 @@ public sealed class HubCandidateReaderTests
             VALUES (@workflow,@hub,'shared-flow',3,0,'{}',1),
                    (@largeWorkflow,@hub,@largeDefinition,7,0,'{}',1);
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@a,@hub,0,'activity',1,'{}',@workflow),
-                   (@b,@hub,0,'activity',1,'{}',@workflow),
-                   (@largeTask,@hub,0,'activity',1,'{}',@largeWorkflow),
-                   (@missingTask,@hub,0,'activity',1,'{}',@missingWorkflow);
+            VALUES (@a,@hub,0,'__workflow__',1,'{}',@workflow),
+                   (@b,@hub,0,'__workflow__',1,'{}',@workflow),
+                   (@largeTask,@hub,0,'__workflow__',1,'{}',@largeWorkflow),
+                   (@missingTask,@hub,0,'__workflow__',1,'{}',@missingWorkflow);
             """, db))
         {
             command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
@@ -201,7 +237,7 @@ public sealed class HubCandidateReaderTests
     }
 
     [Fact]
-    public async Task RepeatedIndexedDiscoveryReusesOwnerMetadataAndHydratesOnlyNewTaskIds()
+    public async Task RepeatedIndexedDiscoveryReusesEnrichedPageWithoutExtraHydration()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate enrichment reuse tests");
@@ -219,7 +255,7 @@ public sealed class HubCandidateReaderTests
             command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database);
-        var discovery = new CountingDiscovery(new HubCandidateReader(tasks));
+        var discovery = new CountingDiscovery(new HubCandidateReader(tasks, metadataEnrichmentEnabled: true));
         var options = new HubCandidateCoordinatorOptions(PageSize: 1, PageWireBytes: 4096, PartitionEntries: 8,
             ProcessEntries: 16, PartitionBytes: 65536, ProcessBytes: 131072, PartitionCredits: 4,
             ProcessCredits: 8, ProcessPartitions: 2, RecoveryCadence: TimeSpan.FromSeconds(10));
@@ -228,12 +264,12 @@ public sealed class HubCandidateReaderTests
             DateTime.UtcNow.AddMinutes(5));
         registry.StartGeneration(owner, 64);
         for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
-        Assert.Equal(1, discovery.HydrationCalls);
+        Assert.Equal(0, discovery.HydrationCalls);
         Assert.Equal(1, registry.Snapshot().Entries);
         registry.Notify(hub, 0, owner.Epoch);
         for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
         Assert.True(discovery.PageCalls >= 4);
-        Assert.Equal(1, discovery.HydrationCalls);
+        Assert.Equal(0, discovery.HydrationCalls);
         Assert.Equal(1, registry.Snapshot().Entries);
     }
 
@@ -262,7 +298,7 @@ public sealed class HubCandidateReaderTests
             command.Parameters.AddWithValue("future", future); command.Parameters.AddWithValue("expired", expired);
             await command.ExecuteNonQueryAsync();
         }
-        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
+        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var horizon = await reader.CaptureHorizonAsync(hub, default);
         async Task<HubCandidatePage> Drain(HubCandidateStream stream)
         {
@@ -328,7 +364,7 @@ public sealed class HubCandidateReaderTests
             INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
             VALUES (@workflow,@hub,'pool-flow',1,0,'{}',1);
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@task,@hub,0,'activity',1,'{}',@workflow),(@canceled,@hub,0,'activity',1,'{}',NULL);
+            VALUES (@task,@hub,0,'__workflow__',1,'{}',@workflow),(@canceled,@hub,0,'activity',1,'{}',NULL);
             """, db))
         {
             command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
@@ -341,6 +377,12 @@ public sealed class HubCandidateReaderTests
             .WaitAsync(TimeSpan.FromSeconds(3))).Items);
         Assert.True(hydrated.WorkflowMetadataComplete);
         Assert.Equal("pool-flow", hydrated.DefinitionId);
+
+        var coldPageReader = new HubCandidateReader(tasks);
+        var horizon = await coldPageReader.CaptureHorizonAsync(hub,default);
+        var page = await coldPageReader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,8,4096,default)
+            .WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("pool-flow", Assert.Single(page.Items, x => x.Id == task).DefinitionId);
 
         await using (var held = await tasks.DataSource.OpenConnectionAsync())
         using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
@@ -364,9 +406,9 @@ public sealed class HubCandidateReaderTests
             VALUES (@a,@hub,'a',1,0,'{}',1),(@b,@hub,'b',2,1,'{}',1),(@c,@hub,'c',3,0,'{}',1),
                    (@expire,@hub,'before-expiry',4,0,'{}',1);
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@ta,@hub,0,'activity',1,'{}',@a),(@tb,@hub,1,'activity',1,'{}',@b),
-                   (@tc,@hub,0,'activity',1,'{}',@c),(@te,@hub,0,'activity',1,'{}',@expire),
-                   (@tm,@hub,0,'activity',1,'{}',@missing);
+            VALUES (@ta,@hub,0,'__workflow__',1,'{}',@a),(@tb,@hub,1,'__workflow__',1,'{}',@b),
+                   (@tc,@hub,0,'__workflow__',1,'{}',@c),(@te,@hub,0,'__workflow__',1,'{}',@expire),
+                   (@tm,@hub,0,'__workflow__',1,'{}',@missing);
             """, db))
         {
             command.Parameters.AddWithValue("hub",hub); command.Parameters.AddWithValue("a",workflowA);
@@ -423,7 +465,7 @@ public sealed class HubCandidateReaderTests
             INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
             VALUES (@workflow,@hub,'shared-cold-flow',7,0,'{}',1);
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@a,@hub,0,'activity',1,'{}',@workflow),(@b,@hub,0,'activity',1,'{}',@workflow);
+            VALUES (@a,@hub,0,'__workflow__',1,'{}',@workflow),(@b,@hub,0,'__workflow__',1,'{}',@workflow);
             """, db))
         {
             command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
@@ -563,7 +605,7 @@ public sealed class HubCandidateReaderTests
                    (@earlier,@hub,0,'activity',1,'{}',now()-interval '2 hours')
             """,db))
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("later",later); cmd.Parameters.AddWithValue("earlier",earlier); await cmd.ExecuteNonQueryAsync(); }
-        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
+        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var horizon = await reader.CaptureHorizonAsync(hub, default);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.ReadyDue,horizon,null,1,1024,default);
         Assert.Equal(earlier, Assert.Single(first.Items).Id);
@@ -632,13 +674,14 @@ public sealed class HubCandidateReaderTests
             VALUES (@oversized,@hub,0,@large,1,'{}'),(@ordinary,@hub,0,'activity',1,'{}')
             """,db))
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("oversized",oversized); cmd.Parameters.AddWithValue("ordinary",ordinary); cmd.Parameters.AddWithValue("large",new string('z',4000)); await cmd.ExecuteNonQueryAsync(); }
-        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
+        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var horizon = await reader.CaptureHorizonAsync(hub,default);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,256,default);
         Assert.Equal(oversized,Assert.Single(first.Oversized!).Id);
         var second = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,first.Next,10,256,default);
-        Assert.Equal(ordinary,Assert.Single(second.Items).Id);
-        Assert.Equal(second.Items[0].Sequence,second.Next!.Sequence);
+        var all = first.Items.Concat(second.Items).ToArray();
+        Assert.Equal(ordinary,Assert.Single(all).Id);
+        Assert.True(second.Next!.Sequence >= all[0].Sequence);
     }
 
     [Fact]

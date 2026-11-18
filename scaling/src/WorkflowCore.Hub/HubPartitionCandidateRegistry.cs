@@ -582,6 +582,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                             EnrichmentLoaded = true
                         };
                     }
+                    else if (item.EnrichmentLoaded)
+                    {
+                        // Eligible pages already contain the task metadata and
+                        // resource keys; only exact-ID hints need hydration.
+                        enrichedByCache[item.Id] = item;
+                    }
                     else
                     {
                         if (existing is not null && existing.Reservation is null &&
@@ -590,6 +596,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     }
                 }
             }
+            if (page.WorkflowMetadataError is { } pageMetadataError) reportError?.Invoke(pageMetadataError);
             if (enrichmentIds.Count != 0)
             {
                 HubTelemetry.CandidateHydrationCalls.Add(1);
@@ -628,6 +635,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 foreach (var item in enriched.Items) enrichedByCache[item.Id] = item;
             }
             pageItems = enrichedByCache.Values.ToArray();
+            // A base identity larger than the entire configured page cannot be
+            // safely materialized within this owner's memory reservation. Surface
+            // the limit rather than silently dropping the row on every sweep.
+            foreach (var marker in page.Oversized ?? [])
+                reportError?.Invoke(new InvalidOperationException(
+                    $"Candidate {marker.Id} exceeds the configured page identity limit of {_options.PageWireBytes} bytes"));
             lock (_sync)
             {
                 if (!p.Active) return true;

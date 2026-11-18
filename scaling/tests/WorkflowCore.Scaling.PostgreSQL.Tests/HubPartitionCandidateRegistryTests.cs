@@ -160,7 +160,7 @@ public sealed class HubPartitionCandidateRegistryTests
     public async Task FailedPageEnrichmentAdvancesBoundedRecoveryAndRetriesOnFreshHorizon()
     {
         var clock = new Clock(); var source = new Discovery { AlwaysFailHydration = true };
-        var hub = "page-enrichment-fairness"; var item = Candidate(hub, 1);
+        var hub = "page-enrichment-fairness"; var item = Candidate(hub, 1) with { EnrichmentLoaded = false };
         source.Add(hub, 0, HubCandidateStream.ReadyDue, item);
         using var registry = new HubPartitionCandidateRegistry(source, Options(entries: 8), clock);
         registry.StartGeneration(Owner(hub), 64);

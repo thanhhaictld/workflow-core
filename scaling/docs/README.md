@@ -15,6 +15,7 @@ This is one selected architecture, not a menu of recommended polling/streaming a
 | [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, discovery/hydration shape, and conservative unknown metadata behavior |
 | [Activity policy updates](activity-policy-update.md) | Controlled updates to concurrency and resource policy |
 | [Ordering](explicit-partition-ordering.md) | Business ordering and strict FIFO, independently of matching partition routing |
+| [Keyed resource removal plan](hub-keyed-resource-removal-plan.md) | Proposed removal of all business-key policies, compatibility drain, and simpler partition/quota admission |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
 | [CI contract](ci-primary-architecture.md) | Current correctness gates, manual 16-processor stress, removed historical CI |
 | [Monitoring service](../monitor/README.md) | Next.js monitor and development API |

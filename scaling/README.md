@@ -89,7 +89,7 @@ Use `pwsh -NoProfile -File ./scripts/dev.ps1 up` for the local development stack
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
    Current Hub deployments apply migrations through
-   `scaling/sql/032_hub_candidate_task_id_hints.sql` in numeric order,
+   `scaling/sql/033_hub_business_compatibility.sql` in numeric order,
    skipping retired index-only migrations 023 and 025–027, as configured in
    Compose and `scripts/dev.ps1`. Migration 029 adds candidate discovery indexes;
    030 adds the opt-in notification outbox; 031 concurrently drops five retired
