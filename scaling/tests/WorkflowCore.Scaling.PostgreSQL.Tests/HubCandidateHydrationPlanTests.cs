@@ -59,7 +59,7 @@ public sealed class HubCandidateHydrationPlanTests
             .Replace("@hub", "$2", StringComparison.Ordinal)
             .Replace("@matchingPartition", "$3", StringComparison.Ordinal)
             .Replace("@partitionCount", "$4", StringComparison.Ordinal)
-            .Replace("@byteLimit", "$5", StringComparison.Ordinal);
+            .Replace("@perCandidateByteLimit", "$5", StringComparison.Ordinal);
         var literalIds = "ARRAY[" + string.Join(',', ids.Select(id => $"'{id:D}'::uuid")) + "]::uuid[]";
         string plan;
         await using (var db = new NpgsqlConnection(connection))
@@ -72,7 +72,7 @@ public sealed class HubCandidateHydrationPlanTests
                 await prepare.ExecuteNonQueryAsync();
             await using var explain = new NpgsqlCommand($"""
                 EXPLAIN (ANALYZE,BUFFERS,SETTINGS,FORMAT JSON)
-                  EXECUTE candidate_hydration({literalIds},'{hub}',0,1,{sqlBudget})
+                  EXECUTE candidate_hydration({literalIds},'{hub}',0,1,{Math.Max(0, sqlBudget / ids.Length)})
                 """, db);
             await using var rows = await explain.ExecuteReaderAsync();
             Assert.True(await rows.ReadAsync());

@@ -33,14 +33,13 @@ make obs-down                         # stop containers; retain volumes
 ```
 
 Other owner-recovery actions remain available directly through `scripts/owner-recovery.ps1`, for example `db-test`, `smoke-test`, `stress-test`, and `fault-test`. Use `-Processors`, `-ComposeFile`, `-EnvFile`, and other script parameters to customize them. `OBS_ENV_FILE` and `OBS_COMPOSE_FILE` overrides are supported. The launcher applies ordered forward migrations with `ON_ERROR_STOP`; it never resets the runtime schema. The 16 processor containers each run independent 8-slot workflow and activity lanes.
-The workload supports `K6_POLICY_MODE=unordered`, `partition`, or `keyed`.
+The active workload supports `K6_POLICY_MODE=unordered` or `partition`. Historical keyed evidence remains available for compatibility analysis.
 Run `make ups-16` after changing application code to rebuild and start
 the runtime before running the test, test-4k, smoke-test or stress-test target. These
 k6 targets do not rebuild or start the runtime. Run `pwsh -NoProfile -File scripts/owner-recovery.ps1 db-test`
 separately for the isolated PostgreSQL suite.
 Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
-`K6_POLICY_TIMEOUT_SECONDS=600`. Keyed mode uses eight capacity-one resource
-keys; partition mode uses the sample's partition-ordering policy. These are
+`K6_POLICY_TIMEOUT_SECONDS=600`. Partition mode uses the sample's activity-level partition-ordering policy. These are
 synthetic 75 ms activities, not production capacity measurements.
 
 The `make ups-16` golden preset always sets `WFC_HUB_METRICS_SAMPLER_ENABLED=false`. For an A/B with the sampler enabled, set `$env:WFC_HUB_METRICS_SAMPLER_ENABLED='true'` and start directly with `pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 16`, then run the same `test` or `stress-test` command. The flag defaults to `true`; `0` and case-insensitive `false` disable it, and it is read at process startup. To return to the golden disabled setting, clear the shell override with `Remove-Item Env:WFC_HUB_METRICS_SAMPLER_ENABLED` and run `make ups-16`.
@@ -58,16 +57,17 @@ cost rather than measuring a runtime with all observability disabled.
 SSE workers offer one credit per free execution slot. The Hub can combine
 workflow credits already queued on the same session into one claim of up to 32 tasks;
 each delivery or unused-credit response still corresponds to one credit.
-Activity credits are claimed individually, and keyed activities remain subject
-to their durable FIFO permits. Large submission
+Activity credits are claimed individually, and draining keyed activities remain subject
+to their original durable FIFO permits. Large submission
 bursts can queue workflow continuations behind earlier workflow tasks, and a
 previous cohort on the same stack also competes for processing capacity.
 
 Smoke/stress runs use `k6/partition-ordering.js`, its completion thresholds and
 persisted business-snapshot check, and its Prometheus remote-write output.
 After k6 completes, the launcher exports the exact cohort's workflow, task,
-attempt and history rows and checks every durable result/completion. Keyed
-cohorts must have no FIFO inversions or overlapping attempt intervals. External
+attempt and history rows and checks every durable result/completion. Partition
+cohorts must have no activity FIFO inversions or overlapping attempt intervals;
+the historical keyed audit remains available for retained evidence. External
 side effects still require idempotency/reconciliation.
 
 ## Grafana and ports

@@ -920,7 +920,19 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     if((int)response.StatusCode>=500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
                         throw new HttpRequestException("Hub completion temporarily unavailable: "+response.StatusCode);
                     if(!response.IsSuccessStatusCode)
-                        throw new InvalidOperationException("Hub rejected the completion contract: "+response.StatusCode);
+                    {
+                        var detail = await response.Content.ReadAsStringAsync(execution.Token);
+                        throw new InvalidOperationException("Hub rejected the completion contract: "+response.StatusCode+" "+detail);
+                    }
+                    if (!isActivity)
+                    {
+                        var transition = await response.Content.ReadFromJsonAsync<HubTransitionResult>(cancellationToken: execution.Token);
+                        if (transition?.PolicyRejected == true)
+                        {
+                            logger.LogWarning("Workflow {Workflow} terminated by Hub policy: {Reason}",task.WorkflowId,transition.Reason);
+                            outcome="policy_rejected";return;
+                        }
+                    }
                     outcome="success";return;
                 }
                 catch(Exception ex)when(ex is HttpRequestException or TaskCanceledException && !execution.IsCancellationRequested)

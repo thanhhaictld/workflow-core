@@ -104,15 +104,18 @@ public sealed class HubUnconstrainedBatchClaimTests
     public async Task SplitBatchClaims_LeaveConstrainedTasksToPermitAdmission()
     {
         if (Database is null) return;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
         var hub = Hub();
         var registry = new HubPolicyRegistry()
             .Register(hub, "free", 1, 1, _ => { })
             .Register(hub, "serial", 1, 1,
                 p => p.SequentialBy("resource", x => x.GetProperty("resourceId").GetString()));
-        await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
+        await using var store = new HubTaskStore(fixture.ConnectionString, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: true);
-        var first = await Enqueue(store, registry, hub, "serial", "key");
-        var second = await Enqueue(store, registry, hub, "serial", "key");
+        var input=Payload("key"); var route=registry.Resolve(hub,"serial",1,input);
+        var first = await fixture.SeedTaskAsync(route,input.GetRawText());
+        var second = await fixture.SeedTaskAsync(route,input.GetRawText());
+        await fixture.ApplyAsync(33);
         var free = await Enqueue(store, registry, hub, "free", "free");
         Task<IReadOnlyList<HubLeasedTask>> ClaimShard(string worker) => store.ClaimAsync(worker, [hub],
             [new(hub, "serial", 1), new(hub, "free", 1)], 8, Lease, CancellationToken.None,
@@ -123,6 +126,7 @@ public sealed class HubUnconstrainedBatchClaimTests
         var lease = Assert.Single(initial, t => t.Id == first);
         Assert.True(await store.CompleteAsync(first, "first", lease.Epoch, "{}", CancellationToken.None));
         Assert.Equal(second, Assert.Single(await ClaimShard("second")).Id);
+        fixture.MarkPassed();
     }
 
     [Fact]
@@ -322,18 +326,23 @@ public sealed class HubUnconstrainedBatchClaimTests
     public async Task MixedClaims_BatchOnlyUnconstrained_AndPreserveStrictFifo(bool split)
     {
         if (Database is null) return;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
         var hub = Hub();
         var registry = new HubPolicyRegistry()
             .Register(hub, "free", 1, 8, _ => { })
             .Register(hub, "serialized", 1, 8,
                 policy => policy.SequentialBy("resource",
                     value => value.GetProperty("resourceId").GetString()));
-        await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
+        await using var store = new HubTaskStore(fixture.ConnectionString, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: split);
 
         var constrained = new List<Guid>();
         for (var i = 0; i < 3; i++)
-            constrained.Add(await Enqueue(store, registry, hub, "serialized", "same-key"));
+        {
+            var input=Payload("same-key");
+            constrained.Add(await fixture.SeedTaskAsync(registry.Resolve(hub,"serialized",1,input),input.GetRawText()));
+        }
+        await fixture.ApplyAsync(33);
         var free = new List<Guid>();
         for (var i = 0; i < 8; i++)
             free.Add(await Enqueue(store, registry, hub, "free", i.ToString()));
@@ -355,5 +364,6 @@ public sealed class HubUnconstrainedBatchClaimTests
             "{\"ok\":true}", CancellationToken.None));
         var third = Assert.Single(await Claim(store, hub, "C", 16, "serialized", "free"));
         Assert.Equal(constrained[2], third.Id);
+        fixture.MarkPassed();
     }
 }

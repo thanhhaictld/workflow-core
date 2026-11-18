@@ -9,7 +9,6 @@ const MODE = __ENV.K6_POLICY_MODE || "unordered";
 const DEFINITIONS = {
   unordered: "policy-unordered",
   partition: "policy-partition-fifo",
-  keyed: "policy-keyed-fifo",
 };
 const DEFINITION = DEFINITIONS[MODE];
 const TOTAL = Math.max(1, Number(__ENV.K6_POLICY_COUNT || 300));
@@ -53,8 +52,7 @@ export function setup() {
 }
 export default function (data) {
   const i = exec.scenario.iterationInTest;
-  // 8 stable resource keys used by the keyed-FIFO mode. Workflow partitions
-  // are distributed by workflow ID independently of these keys.
+  // Workflow partitions are distributed by workflow ID independently of input.
   const resourceId = "account-" + (i % 8);
   const body = {
     hubId: HUB, definitionId: DEFINITION, version: 1,

@@ -342,6 +342,7 @@ public static class HubGatewayEndpoints
                 readiness.PublishFallback(request.HubId, request.TaskType, request.Version);
                 return Results.Accepted($"/api/hub/tasks/{id}", new { taskId = id });
             }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
             catch (InvalidOperationException ex)
             {
                 return Results.Conflict(new { error = ex.Message });

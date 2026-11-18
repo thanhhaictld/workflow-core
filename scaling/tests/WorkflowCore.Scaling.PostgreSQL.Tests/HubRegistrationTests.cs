@@ -11,6 +11,57 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 
 public sealed class HubRegistrationTests
 {
+    [Fact]
+    public async Task NewBusinessPoliciesAndRetiredOptionsAreRejected()
+    {
+        var database=Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
+        var hub="retired-registration-"+Guid.NewGuid().ToString("N");
+        await using var tasks=new HubTaskStore(database); var defs=new HubDefinitionStore(tasks);
+        foreach(var policy in new[]{HubActivityOrdering.KeyedExclusive,HubActivityOrdering.KeyedFifo,HubActivityOrdering.KeyedBounded})
+            await Assert.ThrowsAsync<InvalidOperationException>(()=>defs.RegisterActivityAsync(
+                new(hub,"a",(int)policy,4,10,10,"tenant","tenantId",Ordering:policy),default));
+        foreach(var fifo in new[]{false,true})
+            await Assert.ThrowsAsync<InvalidOperationException>(()=>defs.RegisterActivityAsync(
+                new(hub,"legacy",fifo?2:1,4,10,10,"tenant","tenantId",StrictFifo:fifo),default));
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>defs.RegisterActivityAsync(
+            new(hub,"unused-option",1,4,10,10,ResourceCapacity:2),default));
+        var safe=new HubActivityRegistration(hub,"safe",1,4,10,10);
+        Assert.True(await defs.RegisterActivityAsync(safe,default));
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>defs.RegisterActivityAsync(
+            safe with {ResourceName="tenant",ResourceField="tenantId"},default));
+    }
+    [Fact]
+    public async Task RolloutBoundaryOrdersConcurrentStartsAndNeverReclassifiesLaterExecutions()
+    {
+        var database=Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
+        var root=Environment.GetEnvironmentVariable("WFC_TEST_SOURCE_ROOT");
+        var directory=new DirectoryInfo(root ?? AppContext.BaseDirectory);
+        while(directory is not null && !File.Exists(Path.Combine(directory.FullName,"scaling","sql","033_hub_business_compatibility.sql"))) directory=directory.Parent;
+        Assert.NotNull(directory);
+        var schema="boundary_fixture_"+Guid.NewGuid().ToString("N");
+        var migration=(await File.ReadAllTextAsync(Path.Combine(directory!.FullName,"scaling","sql","033_hub_business_compatibility.sql")))
+            .Replace("wfc_scale.",schema+".",StringComparison.Ordinal);
+        await using var before=new NpgsqlConnection(database); await before.OpenAsync();
+        await using(var setup=new NpgsqlCommand($"CREATE SCHEMA {schema}; CREATE TABLE {schema}.hub_workflow(id uuid PRIMARY KEY)",before)) await setup.ExecuteNonQueryAsync();
+        await using var tx=await before.BeginTransactionAsync();
+        var oldId=Guid.NewGuid(); var newId=Guid.NewGuid();
+        await using(var insert=new NpgsqlCommand($"INSERT INTO {schema}.hub_workflow(id) VALUES (@id)",before,tx))
+        { insert.Parameters.AddWithValue("id",oldId); await insert.ExecuteNonQueryAsync(); }
+        await using var cutover=new NpgsqlConnection(database); await cutover.OpenAsync();
+        await using var migrate=new NpgsqlCommand(migration,cutover);
+        var pending=migrate.ExecuteNonQueryAsync();
+        await Task.Delay(100);
+        Assert.False(pending.IsCompleted); // the start's table lock fences cutover
+        await tx.CommitAsync(); await pending;
+        await using(var insert=new NpgsqlCommand($"INSERT INTO {schema}.hub_workflow(id) VALUES (@id)",before))
+        { insert.Parameters.AddWithValue("id",newId); await insert.ExecuteNonQueryAsync(); }
+        await using(var replay=new NpgsqlCommand(migration,cutover)) await replay.ExecuteNonQueryAsync();
+        await using var read=new NpgsqlCommand($"SELECT id,business_policy_compatibility FROM {schema}.hub_workflow ORDER BY business_policy_compatibility",before);
+        await using var rows=await read.ExecuteReaderAsync();
+        Assert.True(await rows.ReadAsync()); Assert.Equal(newId,rows.GetGuid(0)); Assert.False(rows.GetBoolean(1));
+        Assert.True(await rows.ReadAsync()); Assert.Equal(oldId,rows.GetGuid(0)); Assert.True(rows.GetBoolean(1));
+        Assert.False(await rows.ReadAsync());
+    }
     public sealed class Data { public int Result { get; set; } }
 
     public class WaitingWorkflow(string label) : IWorkflow<Data>
@@ -148,7 +199,7 @@ public sealed class HubRegistrationTests
     }
 
     [Fact]
-    public async Task ConcurrentActivityPublicationUpdatesContractAndRetainsOperatorCapacities()
+    public async Task BusinessActivityPublicationIsFrozenAndRetainsOperatorCapacities()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
         if (database is null) return;
@@ -157,18 +208,33 @@ public sealed class HubRegistrationTests
         var hub = "registration-" + Guid.NewGuid().ToString("N");
         var initial = new HubActivityRegistration(hub, "activity", 1, 4, 10, 10,
             "tenant", "tenantId", 4, false, JsonSerializer.SerializeToElement(new { implementation = "old-build" }));
-        Assert.True(await definitions.RegisterActivityAsync(initial, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => definitions.RegisterActivityAsync(initial, default));
+        // Seed a pre-retirement registration to exercise compatibility publication.
+        await using (var db = new NpgsqlConnection(database))
+        {
+            await db.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_activity_registration
+                  (hub_id,activity_type,version,partitions,hub_concurrency,activity_concurrency,
+                   resource_name,resource_field,resource_capacity,resource_fifo,contract,execution_policy)
+                VALUES (@hub,'activity',1,4,10,10,'tenant','tenantId',4,false,
+                        '{"implementation":"old-build"}'::jsonb,'Legacy')
+                """, db);
+            seed.Parameters.AddWithValue("hub",hub);
+            await seed.ExecuteNonQueryAsync();
+        }
+        Assert.False(await definitions.RegisterActivityAsync(initial, default));
         var revision = await definitions.UpdateActivityCapacityAsync(new(hub, "activity", 1, 1, 3, 2, 1), default);
         var updated = initial with { Partitions = 8, ResourceField = "accountId", StrictFifo = true,
             Contract = JsonSerializer.SerializeToElement(new { implementation = "new-build", inputs = new[] { "accountId" } }) };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => definitions.RegisterActivityAsync(updated, default));
         Assert.All(await Task.WhenAll(Enumerable.Range(0, 8)
-            .Select(_ => definitions.RegisterActivityAsync(updated, default))), inserted => Assert.False(inserted));
+            .Select(_ => definitions.RegisterActivityAsync(initial, default))), inserted => Assert.False(inserted));
         var published = Assert.Single(await definitions.ActivitiesAsync(default), a => a.HubId == hub);
-        Assert.Equal(8, published.Partitions);
-        Assert.Equal("accountId", published.ResourceField);
-        Assert.True(published.StrictFifo);
-        Assert.Equal("new-build", published.Contract!.Value.GetProperty("implementation").GetString());
-        Assert.Equal("accountId", Assert.Single(published.Contract.Value.GetProperty("inputs").EnumerateArray()).GetString());
+        Assert.Equal(4, published.Partitions);
+        Assert.Equal("tenantId", published.ResourceField);
+        Assert.False(published.StrictFifo);
+        Assert.Equal("old-build", published.Contract!.Value.GetProperty("implementation").GetString());
         var policy = (await definitions.GetActivityPolicyAsync(hub, "activity", 1, default))!;
         Assert.Equal(revision, policy.Revision);
         Assert.Equal(3, policy.HubConcurrency);

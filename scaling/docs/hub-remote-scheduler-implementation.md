@@ -52,6 +52,19 @@ avoids enumerating every eligible task when many tasks share a hub and uses
 existing indexes without a migration. Dead index entries can still require
 visibility checks; performance under concurrent load remains to be validated.
 
+Candidate-mode acquisition pages now return eligible task identity and bounded
+resource keys together from indexed keyset scans; discovery no longer issues a
+second ID-to-task hydration query for every page. Exact task-ID notification
+hints still use bounded hydration because an ID hint is advisory and must be
+revalidated against current PostgreSQL state. Stable workflow definition
+matching metadata is resolved in a deduplicated batch and cached by
+`(HubId, WorkflowId)` for up to ten minutes, with a 10,000-entry and 32 MiB
+per-process bound. Missing, failed, or oversized metadata remains unknown and
+cannot match a workflow worker. This cache contains only stable matching
+metadata; workflow execution state and task eligibility remain authoritative
+in PostgreSQL. Page row and byte limits, owner generation fencing, cursor
+progress, and lease/resource admission behavior are unchanged.
+
 ## Local startup: Docker Compose
 
 From the repository root:

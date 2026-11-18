@@ -257,3 +257,9 @@ scaling/monitor/.env.*.local
 scaling/monitor/.next/
 scaling/monitor/*.tsbuildinfo
 scaling/observability/.build-resolv.conf
+
+# Local benchmark run output (curated, already-tracked results remain tracked)
+/scaling/benchmarks/results/
+/scaling/benchmarks/hub-candidate-enrichment-stageB/
+/scaling/benchmarks/hub-candidate-enrichment-stageB/*
+/scaling/benchmarks/*

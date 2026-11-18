@@ -62,6 +62,29 @@ public sealed class OnboardingTimerWorkflow : IWorkflow<OnboardingData>
         .OnError(WorkflowErrorHandling.Retry,TimeSpan.FromSeconds(5))
         .Then<SendWelcome>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WelcomeSent,s=>s.WelcomeSent);
 }
+// New definitions explicitly use a new activity version without business-key permits.
+public sealed class OnboardingWorkflowV5 : IWorkflow<OnboardingData>
+{
+    public string Id=>"tenant-onboarding";
+    public int Version=>5;
+    public void Build(IWorkflowBuilder<OnboardingData> builder)=>builder
+        .StartWith<ValidateTenant>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.Validated,s=>s.Validated)
+        .Then<ProvisionTenantV4>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WorkspaceId,s=>s.WorkspaceId)
+        .OnError(WorkflowErrorHandling.Retry,TimeSpan.FromSeconds(5))
+        .Then<ConfigureTenantAccess>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.AccessConfigured,s=>s.AccessConfigured)
+        .Then<SendWelcome>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WelcomeSent,s=>s.WelcomeSent);
+}
+public sealed class OnboardingTimerWorkflowV4 : IWorkflow<OnboardingData>
+{
+    public string Id=>"tenant-onboarding-timer";
+    public int Version=>4;
+    public void Build(IWorkflowBuilder<OnboardingData> builder)=>builder
+        .StartWith<ValidateTenant>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.Validated,s=>s.Validated)
+        .Delay(d=>TimeSpan.FromSeconds(2))
+        .Then<ProvisionTenantV4>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WorkspaceId,s=>s.WorkspaceId)
+        .OnError(WorkflowErrorHandling.Retry,TimeSpan.FromSeconds(5))
+        .Then<SendWelcome>().Input(s=>s.TenantId,d=>d.TenantId).Output(d=>d.WelcomeSent,s=>s.WelcomeSent);
+}
 public sealed class ValidateTenant : StepBodyAsync
 {
     public string TenantId { get; set; }="";
@@ -72,7 +95,7 @@ public sealed class ValidateTenant : StepBodyAsync
         await Task.Delay(15,context.CancellationToken);SampleSideEffectObservation.Record(context,"validate-tenant");Validated=true;return ExecutionResult.Next();
     }
 }
-public sealed class ProvisionTenant : StepBodyAsync
+public class ProvisionTenant : StepBodyAsync
 {
     public string TenantId { get; set; }="";
     public bool Provisioned { get; set; }
@@ -85,6 +108,7 @@ public sealed class ProvisionTenant : StepBodyAsync
         return ExecutionResult.Next();
     }
 }
+public sealed class ProvisionTenantV4 : ProvisionTenant { }
 public sealed class ConfigureTenantAccess : StepBodyAsync
 {
     public string TenantId { get; set; }="";

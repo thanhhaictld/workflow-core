@@ -72,6 +72,7 @@ public sealed class HubTaskPolicyBuilder
     }
 
     /// <summary>Same named resource across all business hubs.</summary>
+    [Obsolete("Business-key policies are retired for new work; applications own coordination.")]
     public HubTaskPolicyBuilder ExclusiveGloballyBy(string resource,
         Func<JsonElement, string?> key)
     {
@@ -79,6 +80,7 @@ public sealed class HubTaskPolicyBuilder
         return this;
     }
 
+    [Obsolete("Business-key policies are retired for new work; applications own coordination.")]
     public HubTaskPolicyBuilder SequentialGloballyBy(string resource,
         Func<JsonElement, string?> key)
     {
@@ -86,18 +88,21 @@ public sealed class HubTaskPolicyBuilder
         return this;
     }
 
+    [Obsolete("Business-key policies are retired for new work; applications own coordination.")]
     public HubTaskPolicyBuilder ExclusiveBy(string resource, Func<JsonElement, string?> key)
     {
         Add("exclusive:" + resource, 1, false, key);
         return this;
     }
 
+    [Obsolete("Business-key policies are retired for new work; applications own coordination.")]
     public HubTaskPolicyBuilder SequentialBy(string resource, Func<JsonElement, string?> key)
     {
         Add("sequential:" + resource, 1, true, key);
         return this;
     }
 
+    [Obsolete("Business-key policies are retired for new work; applications own coordination.")]
     public HubTaskPolicyBuilder LimitBy(string resource, int limit,
         Func<JsonElement, string?> key)
     {
@@ -121,6 +126,10 @@ public sealed class HubPolicyRegistry
         int PartitionCount, IReadOnlyList<PolicyRule> Rules);
 
     private readonly Dictionary<(string Hub, string TaskType, int Version), Definition> _defs = new();
+
+    internal bool HasBusinessPolicy(string hub, string taskType, int version) =>
+        _defs.TryGetValue((hub, taskType, version), out var def) &&
+        def.Rules.Any(r => r.Name is not ("hub" or "activity" or "workflow-task"));
 
     public HubPolicyRegistry Register(string hub, string taskType, int version,
         int partitions, Action<HubTaskPolicyBuilder> configure)

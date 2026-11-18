@@ -35,11 +35,11 @@ public sealed class HubCandidatePagePlanTests
         foreach (var stream in new[] { HubCandidateStream.Ready, HubCandidateStream.ReadyDue, HubCandidateStream.Expired })
         {
             var sql = HubCandidateReader.BuildPageSql(stream);
-            string[] names = ["hub","bucket","upper","cutoff","after","limit","byteLimit","afterDeadline"];
+            string[] names = ["hub","bucket","upper","cutoff","after","limit","byteLimit","perCandidateByteLimit","afterDeadline"];
             for (var i = 0; i < names.Length; i++)
                 sql = Regex.Replace(sql, "@" + names[i] + @"\b", "$" + (i+1), RegexOptions.CultureInvariant);
             var deadline = stream != HubCandidateStream.Ready;
-            var types = "text,integer,bigint,timestamp with time zone,bigint,integer,integer" + (deadline ? ",timestamp with time zone" : "");
+            var types = "text,integer,bigint,timestamp with time zone,bigint,integer,integer,integer" + (deadline ? ",timestamp with time zone" : "");
             var prepare = $"PREPARE candidate_page({types}) AS {sql}";
             await using (var cmd = new NpgsqlCommand(prepare,db)) await cmd.ExecuteNonQueryAsync();
             output.AppendLine($"--- {stream}: actual reader SQL, generic prepared parameters ({types}) ---").AppendLine(prepare).AppendLine(";");
@@ -48,7 +48,8 @@ public sealed class HubCandidatePagePlanTests
                 // Production reserves 16 ID bytes per effective row before
                 // passing the SQL-side base-metadata budget.
                 var productionPageBudget = 1048576 - 256 * 16;
-                var call = $"EXPLAIN (ANALYZE, BUFFERS) EXECUTE candidate_page('{hub}',{bucket},9223372036854775807,now(),0,256,{productionPageBudget}" + (deadline ? ",'2000-01-01 00:00:00+00'" : "") + ")";
+                var perCandidateBudget = Math.Max(256, productionPageBudget / 256);
+                var call = $"EXPLAIN (ANALYZE, BUFFERS) EXECUTE candidate_page('{hub}',{bucket},9223372036854775807,now(),0,256,{productionPageBudget},{perCandidateBudget}" + (deadline ? ",'2000-01-01 00:00:00+00'" : "") + ")";
                 var plan = new StringBuilder(); await using var cmd = new NpgsqlCommand(call,db);
                 await using (var r = await cmd.ExecuteReaderAsync()) while (await r.ReadAsync()) plan.AppendLine(r.GetString(0));
                 output.AppendLine($"--- bucket {bucket} ---").AppendLine(call).AppendLine(plan.ToString());
