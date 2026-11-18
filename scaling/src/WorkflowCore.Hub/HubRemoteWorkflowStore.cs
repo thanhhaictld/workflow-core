@@ -469,15 +469,18 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
 
     internal static async Task InsertActivityAsync(NpgsqlConnection db,NpgsqlTransaction tx,
         Guid taskId,Guid workflow,string hub,int partition,int? step,HubTaskRoute route,
-        string payload,CancellationToken ct)
+        string payload,CancellationToken ct,string? executionPointerId=null,
+        string? dispatchKey=null,int? nativeStepId=null,DateTime? notBefore=null,
+        bool resourcesLocked=false)
     {
         var constraints = route.ResourcesForPartition(partition);
-        await LockActivityResourcesAsync(db,tx,constraints,ct);
+        if(!resourcesLocked) await LockActivityResourcesAsync(db,tx,constraints,ct);
         await using(var insert=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             workflow_step,payload)
-            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload)
+             workflow_step,payload,execution_pointer_id,dispatch_key,native_step_id,due_at)
+            VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload,
+                    @pointer,@dispatch,@nativeStep,COALESCE(@due::timestamptz,now()))
             """,db,tx))
         {
             insert.Parameters.AddWithValue("id",taskId);
@@ -488,6 +491,10 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             insert.Parameters.AddWithValue("workflow",workflow);
             insert.Parameters.Add("step",NpgsqlDbType.Integer).Value=(object?)step??DBNull.Value;
             insert.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
+            insert.Parameters.Add("pointer",NpgsqlDbType.Text).Value=(object?)executionPointerId??DBNull.Value;
+            insert.Parameters.Add("dispatch",NpgsqlDbType.Text).Value=(object?)dispatchKey??DBNull.Value;
+            insert.Parameters.Add("nativeStep",NpgsqlDbType.Integer).Value=(object?)nativeStepId??DBNull.Value;
+            insert.Parameters.Add("due",NpgsqlDbType.TimestampTz).Value=(object?)notBefore?.ToUniversalTime()??DBNull.Value;
             await insert.ExecuteNonQueryAsync(ct);
         }
         foreach(var resource in constraints)

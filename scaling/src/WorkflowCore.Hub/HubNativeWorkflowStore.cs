@@ -227,13 +227,23 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         // Validate policy before touching inbox, subscriptions, snapshots or
         // caller-proposed cancellation. Existing dispatches are idempotent.
         var registrations=new Dictionary<(string Hub,string Activity,int Version),HubDefinitionStore.ActivityRouteRegistration>();
+        var dispatchKeys=request.Activities.Select(activity=>activity.DispatchKey)
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var existingDispatchKeys=new HashSet<string>(StringComparer.Ordinal);
+        if(dispatchKeys.Length>0 && (request.Status is "Runnable" or "Suspended"))
+        {
+            await using var existing=Command(db,tx,"""
+                SELECT dispatch_key FROM wfc_scale.hub_task
+                WHERE workflow_id=@id AND dispatch_key=ANY(@keys)
+                """,("id",id),("keys",dispatchKeys));
+            await using var rows=await existing.ExecuteReaderAsync(ct);
+            while(await rows.ReadAsync(ct))existingDispatchKeys.Add(rows.GetString(0));
+        }
         if (!businessCompatibility && request.Status is "Runnable" or "Suspended")
         {
             foreach (var activity in request.Activities)
             {
-                await using var existing=Command(db,tx,"SELECT 1 FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key",
-                    ("id",id),("key",activity.DispatchKey));
-                if(await existing.ExecuteScalarAsync(ct) is not null)continue;
+                if(existingDispatchKeys.Contains(activity.DispatchKey))continue;
                 var key=(hub,activity.ActivityType,activity.Version);
                 if(!registrations.TryGetValue(key,out var registration))
                 {
@@ -302,10 +312,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             foreach(var activity in request.Activities)
             {
                 // Dispatch keys are stable across transport retries, unique across native retries/iterations.
-                await using(var existing=Command(db,tx,"""
-                    SELECT 1 FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key
-                    """,("id",id),("key",activity.DispatchKey)))
-                    if(await existing.ExecuteScalarAsync(ct) is not null)continue;
+                if(existingDispatchKeys.Contains(activity.DispatchKey))continue;
                 var key=(hub,activity.ActivityType,activity.Version);
                 if(!registrations.TryGetValue(key,out var registration))
                 {
@@ -326,12 +333,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             foreach(var (activity,route) in dispatches)
             {
                 var task=Guid.NewGuid();
-                await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,activity.Input.GetRawText(),ct);
-                await Execute(db,tx,"""
-                    UPDATE wfc_scale.hub_task SET execution_pointer_id=@pointer,dispatch_key=@key,native_step_id=@step,
-                      due_at=COALESCE(@due::timestamptz,due_at) WHERE id=@task
-                    """,ct,("pointer",activity.PointerId),("key",activity.DispatchKey),("task",task),("step",activity.StepId),
-                    ("due",activity.NotBefore?.ToUniversalTime()));
+                await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
+                    activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
+                    activity.StepId,activity.NotBefore,resourcesLocked:true);
                 await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
                     JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
             }
