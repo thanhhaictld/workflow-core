@@ -8,6 +8,104 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 public sealed class HubNativeCommitOptimizationTests
 {
     [Fact]
+    public async Task NativeDelayedDispatchPersistsFinalDueFieldsWithoutEarlyReadyHint()
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");
+        if (database is null) return;
+        await using var fixture=await LegacyDatabaseFixture.CreateAsync(database);
+        database=fixture.ConnectionString;
+        await using var tasks=new HubTaskStore(database);
+        var definitions=new HubDefinitionStore(tasks);
+        var native=new HubNativeWorkflowStore(tasks,definitions);
+        var hub="native-due-"+Guid.NewGuid().ToString("N");
+        await definitions.RegisterAsync(new(hub,"native",1,4,1,
+            JsonSerializer.SerializeToElement(new{executionMode="native"})),default);
+        await fixture.SeedRegistrationAsync(new(hub,"delayed",1,4,10,10));
+        await fixture.SeedRegistrationAsync(new(hub,"immediate",1,4,10,10));
+        await fixture.ApplyAsync(33);
+        var id=await new HubRemoteWorkflowStore(tasks,definitions).StartAsync(
+            new(hub,"native",1,JsonSerializer.SerializeToElement(new{})),default);
+        var lease=Assert.Single(await tasks.ClaimAsync("workflow-worker",[hub],
+            [new(hub,"__native_workflow__",1)],1,TimeSpan.FromSeconds(30),default));
+
+        await using var listener=new NpgsqlConnection(database);
+        await listener.OpenAsync();
+        var notifications=new List<NpgsqlNotificationEventArgs>();
+        listener.Notification+=(_,notification)=>notifications.Add(notification);
+        await using(var listen=new NpgsqlCommand("LISTEN wfc_hub_matching_ready",listener))
+            await listen.ExecuteNonQueryAsync();
+        var due=DateTime.UtcNow.AddSeconds(2);
+        var dispatch=new HubNativeDispatch("delayed-key","pointer-7",7,"delayed",1,
+            JsonSerializer.SerializeToElement(new{value=42}),due);
+        var immediate=new HubNativeDispatch("immediate-key","pointer-8",8,"immediate",1,
+            JsonSerializer.SerializeToElement(new{value=43}));
+        var commit=new HubNativeCommit(1,"workflow-worker",lease.Epoch,0,lease.Id,
+            JsonSerializer.SerializeToElement(new{}),"Runnable",false,null,[],[],[dispatch,immediate],[]);
+        Assert.NotNull(await native.CommitWithRoutingAsync(id,commit,default));
+        using(var timeout=new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+        {
+            try { await listener.WaitAsync(timeout.Token); }
+            catch(OperationCanceledException) { }
+        }
+        Assert.Contains(notifications,item=>item.Payload.Contains("immediate",StringComparison.Ordinal));
+        Assert.DoesNotContain(notifications,item=>item.Payload.Contains("delayed",StringComparison.Ordinal));
+
+        Guid activityTaskId;
+        await using(var db=new NpgsqlConnection(database))
+        {
+            await db.OpenAsync();
+            await using(var taskId=new NpgsqlCommand("SELECT id FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key",db))
+            {
+                taskId.Parameters.AddWithValue("id",id); taskId.Parameters.AddWithValue("key",dispatch.DispatchKey);
+                activityTaskId=(Guid)(await taskId.ExecuteScalarAsync() ?? throw new InvalidOperationException("Native activity task was not persisted"));
+            }
+            await using var saved=new NpgsqlCommand("""
+                SELECT execution_pointer_id,dispatch_key,native_step_id,workflow_step,due_at
+                FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key
+                """,db);
+            saved.Parameters.AddWithValue("id",id); saved.Parameters.AddWithValue("key",dispatch.DispatchKey);
+            await using var reader=await saved.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(dispatch.PointerId,reader.GetString(0));
+            Assert.Equal(dispatch.DispatchKey,reader.GetString(1));
+            Assert.Equal(dispatch.StepId,reader.GetInt32(2));
+            Assert.True(reader.IsDBNull(3));
+            Assert.InRange(Math.Abs((reader.GetDateTime(4)-due).TotalMilliseconds),0,20);
+        }
+        await using(var db=new NpgsqlConnection(database))
+        {
+            await db.OpenAsync();
+            await using var saved=new NpgsqlCommand("""
+                SELECT execution_pointer_id,dispatch_key,native_step_id,workflow_step,due_at<=clock_timestamp()
+                FROM wfc_scale.hub_task WHERE workflow_id=@id AND dispatch_key=@key
+                """,db);
+            saved.Parameters.AddWithValue("id",id); saved.Parameters.AddWithValue("key",immediate.DispatchKey);
+            await using var reader=await saved.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(immediate.PointerId,reader.GetString(0));
+            Assert.Equal(immediate.DispatchKey,reader.GetString(1));
+            Assert.Equal(immediate.StepId,reader.GetInt32(2));
+            Assert.True(reader.IsDBNull(3));
+            Assert.True(reader.GetBoolean(4));
+        }
+
+        var candidates=new HubCandidateReader(tasks);
+        var partition=lease.PartitionId;
+        var horizon=await candidates.CaptureHorizonAsync(hub,default);
+        var before=await candidates.ReadPageAsync(hub,partition,HubCandidateStream.Ready,horizon,null,32,65536,default);
+        Assert.DoesNotContain(before.Items,item=>item.Id==activityTaskId);
+        Assert.Empty(await tasks.ClaimAsync("activity-worker",[hub],[new(hub,"delayed",1)],1,
+            TimeSpan.FromSeconds(30),default));
+        await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(0,(due-DateTime.UtcNow).TotalMilliseconds)+1500));
+        horizon=await candidates.CaptureHorizonAsync(hub,default);
+        var after=await candidates.ReadPageAsync(hub,partition,HubCandidateStream.Ready,horizon,null,32,65536,default);
+        Assert.Contains(after.Items,item=>item.Id==activityTaskId);
+        Assert.Single(await tasks.ClaimAsync("activity-worker",[hub],[new(hub,"delayed",1)],1,
+            TimeSpan.FromSeconds(30),default));
+        fixture.MarkPassed();
+    }
+
+    [Fact]
     public async Task RetiredDispatchTerminatesFencedNativeWorkflowWithoutApplyingProposedEffects()
     {
         var database=Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
