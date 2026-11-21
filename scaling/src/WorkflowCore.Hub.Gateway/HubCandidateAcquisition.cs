@@ -35,6 +35,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
     private readonly bool _concurrentAdmission = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION") is "true" or "1" or "True";
     private readonly SemaphoreSlim _admissionSlots;
     private readonly int _batchSize;
+    private readonly int _discoveryParallelism;
     private readonly object _inflightGate = new();
     private readonly HashSet<(string Hub, int Partition)> _inflightPartitions = [];
     private readonly HashSet<Task> _inflightTasks = [];
@@ -66,6 +67,13 @@ public sealed class HubCandidateAcquisition : BackgroundService
         if (configuredBatch is not null && (!int.TryParse(configuredBatch, out var batch) || batch is < 1 or > 32))
             throw new ArgumentException("WFC_HUB_CANDIDATE_BATCH_SIZE must be 1..32");
         _batchSize = configuredBatch is null ? 32 : int.Parse(configuredBatch);
+        // Parallel discovery is safe because the registry reserves at most one
+        // active turn per matching shard, while enforcing global memory budgets.
+        var configuredDiscovery = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM");
+        if (configuredDiscovery is not null &&
+            (!int.TryParse(configuredDiscovery, out var discovery) || discovery is < 1 or > 16))
+            throw new ArgumentException("WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM must be 1..16");
+        _discoveryParallelism = configuredDiscovery is null ? 4 : int.Parse(configuredDiscovery);
         _tasks=tasks; _ownership=ownership; _logger=logger;
         _registry=new(new HubCandidateReader(tasks), (options ?? new()) with { RequireDemand = _backpressure });
         if (Enabled)
@@ -267,7 +275,11 @@ public sealed class HubCandidateAcquisition : BackgroundService
                     var turns=0;
                     for(;turns<16;turns++)
                     {
-                        var progressed=await _registry.RunOneTurnAsync(DateTimeOffset.UtcNow,stoppingToken);
+                        var now = DateTimeOffset.UtcNow;
+                        var discovery = new Task<bool>[_discoveryParallelism];
+                        for (var worker = 0; worker < discovery.Length; worker++)
+                            discovery[worker] = _registry.RunOneTurnAsync(now, stoppingToken);
+                        var progressed = (await Task.WhenAll(discovery)).Any(x => x);
                         if (_backpressure && progressed) AllocateWaiting();
                         await DrainAsync(stoppingToken);
                         var snapshot=_registry.Snapshot();
