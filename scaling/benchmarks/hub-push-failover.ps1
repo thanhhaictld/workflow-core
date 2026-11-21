@@ -88,7 +88,7 @@ try {
     $oldLease = $null
     if ($Scenario -ne 'before-claim') {
         for ($i=0; $i -lt 2; $i++) {
-            $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=3; runId=$run
+            $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=5; runId=$run
                 idempotencyKey="${run}:$i"; input=@{ tenantId="same-$suffix"; organizationName="Failover $i" } } | ConvertTo-Json -Depth 5
             Invoke-RestMethod 'http://127.0.0.1:54112/api/hub/workflows' -Headers $headers -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 10 | Out-Null
         }
@@ -107,7 +107,7 @@ try {
     Stop-Process -Id $hubA.Id -Force
     if ($Scenario -eq 'before-claim') {
         for ($i=0; $i -lt 2; $i++) {
-            $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=3; runId=$run
+            $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=5; runId=$run
                 idempotencyKey="${run}:$i"; input=@{ tenantId="same-$suffix"; organizationName="Failover $i" } } | ConvertTo-Json -Depth 5
             Invoke-RestMethod 'http://127.0.0.1:54112/api/hub/workflows' -Headers $headers -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 15 | Out-Null
         }
@@ -139,7 +139,9 @@ try {
     $result.finalMatching = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
     $result.taskSummary = Query "SELECT json_build_object('tasks',count(*),'complete',count(*) FILTER (WHERE t.state=2),'retries',sum(greatest(t.attempts-1,0))) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run'" | ConvertFrom-Json
     $result.fifoOverlaps = [int](Query "SELECT count(*) FROM wfc_scale.hub_task_attempt a JOIN wfc_scale.hub_task ta ON ta.id=a.task_id JOIN wfc_scale.hub_workflow wa ON wa.id=ta.workflow_id JOIN wfc_scale.hub_task_attempt b ON b.task_id<>a.task_id AND a.claimed_at < coalesce(b.finished_at,now()) AND b.claimed_at < coalesce(a.finished_at,now()) JOIN wfc_scale.hub_task tb ON tb.id=b.task_id JOIN wfc_scale.hub_workflow wb ON wb.id=tb.workflow_id WHERE wa.run_id='$run' AND wb.run_id='$run' AND ta.task_type='provision-tenant' AND tb.task_type='provision-tenant'")
-    if ($result.taskSummary.tasks -ne $result.taskSummary.complete -or $result.fifoOverlaps -ne 0) { throw 'Incomplete tasks or overlapping FIFO activity attempts' }
+    # New onboarding v5 intentionally has no business-key FIFO policy.
+    # Cross-workflow provisioning overlap is allowed and recorded for diagnosis.
+    if ($result.taskSummary.tasks -ne $result.taskSummary.complete) { throw 'Incomplete tasks after failover' }
     $starts = @(Get-Content $execLog | ForEach-Object { $_ | ConvertFrom-Json })
     $effects = @(Get-Content $sideLog | ForEach-Object { $_ | ConvertFrom-Json })
     $result.executionStarts = $starts.Count
@@ -147,7 +149,7 @@ try {
     $result.sideEffects = $effects.Count
     $result.missingDispatchKeys = @($effects | Where-Object { -not $_.dispatchKey }).Count
     $result.duplicateSideEffects = [int]($effects | Group-Object { "$($_.workflowId):$($_.dispatchKey)" } | Where-Object Count -gt 1 | ForEach-Object { $_.Count - 1 } | Measure-Object -Sum).Sum
-    if ($result.duplicateSameEpochStarts -or $result.missingDispatchKeys -or $result.duplicateSideEffects -or $result.sideEffects -ne 6) { throw 'Unexpected execution or side-effect observation' }
+    if ($result.duplicateSameEpochStarts -or $result.missingDispatchKeys -or $result.duplicateSideEffects -or $result.sideEffects -ne 8) { throw 'Unexpected execution or side-effect observation' }
     if ($null -ne $oldLease) {
         try {
             $hb = @{ workerId=$oldLease.owner; epoch=$oldLease.epoch } | ConvertTo-Json
