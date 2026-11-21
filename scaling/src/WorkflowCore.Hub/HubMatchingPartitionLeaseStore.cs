@@ -18,8 +18,9 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
     /// <summary>
     /// Locks and validates a captured matching-owner generation for a short
     /// admission transaction. Keep the transaction open through the task
-    /// update and history commit so acquisition and release serialize on the
-    /// same owner row. This does not replace a task execution lease.
+    /// update and history commit. Concurrent admissions use compatible SHARE
+    /// locks; owner takeover/release waits for them. A task still needs its
+    /// independent fenced lease. This does not replace a task execution lease.
     /// </summary>
     public static async Task<bool> LockOwnerForAdmissionAsync(NpgsqlConnection db,
         NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
@@ -31,7 +32,11 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
                 JOIN wfc_scale.hub_matching_partition_config c ON c.hub_id=o.hub_id
                 WHERE o.hub_id=@hub AND o.matching_partition=@partition
                   AND c.partition_count=@count AND o.owner_id=@owner AND o.epoch=@epoch
-                FOR UPDATE OF o
+                -- Multiple independent task admissions may share the same
+                -- owner generation. Takeover and renewal update this row and
+                -- therefore wait until these admitted leases have committed.
+                -- Never use an unlocked generation check here.
+                FOR SHARE OF o
             )
             SELECT 1 FROM locked_owner WHERE lease_until>clock_timestamp()
             """, db, transaction);
