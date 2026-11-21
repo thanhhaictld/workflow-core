@@ -138,7 +138,8 @@ public sealed class HubMatchingPartitionTests
         var current = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-b", "http://hub-2:5100",
             TimeSpan.FromSeconds(30), default);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Claim(old));
-        Assert.Equal(new HashSet<Guid> { free, constrained }, (await Claim(current)).Select(x => x.Id).ToHashSet());
+        // A residual constrained task must never enter the MVP fast path.
+        Assert.Equal(new HashSet<Guid> { free }, (await Claim(current)).Select(x => x.Id).ToHashSet());
         Assert.Empty(await Claim(current));
     }
 

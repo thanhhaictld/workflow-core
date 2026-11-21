@@ -92,9 +92,9 @@ public sealed class HubCandidateBatchPlanTests
         {
             await using var command = new NpgsqlCommand("""
                 INSERT INTO pg_temp.hub_task
-                    (id,sequence,hub_id,partition_id,task_type,task_version,payload,state,attempts,max_attempts,due_at,created_at,updated_at,epoch)
+                    (id,sequence,hub_id,partition_id,task_type,task_version,payload,state,attempts,max_attempts,due_at,created_at,updated_at,epoch,admission)
                 SELECT (lpad(to_hex(sequence),8,'0') || '-0000-0000-0000-000000000000')::uuid,
-                       sequence,'plan',0,'activity',1,'{}',0,0,5,now(),now(),now(),0
+                       sequence,'plan',0,'activity',1,'{}',0,0,5,now(),now(),now(),0,1
                 FROM generate_series(@first,@last) AS rows(sequence)
                 """, db, tx);
             command.Parameters.AddWithValue("first", first);
