@@ -40,7 +40,7 @@ flowchart LR
     HUB --> OWNER[Per-partition matching owner]
     OWNER --> BUF[Bounded in-memory candidates]
     BUF --> ADMIT[Concurrent fenced admission]
-    ADMIT --> PG[(PostgreSQL tasks, leases, FIFO, history)]
+    ADMIT --> PG[(PostgreSQL tasks, leases, history)]
     HUB --> PG
     SCHED[Embedded scheduler] --> PG
 ```
@@ -89,7 +89,7 @@ Use `pwsh -NoProfile -File ./scripts/dev.ps1 up` for the local development stack
    `scaling/sql/004_request_dedupe.sql`, and
    `scaling/sql/005_execution_history.sql`.
    Current Hub deployments apply migrations through
-   `scaling/sql/033_hub_business_compatibility.sql` in numeric order,
+   `scaling/sql/035_hub_ready_notifications.sql` in the [Compose setup order](observability/compose.yaml),
    skipping retired index-only migrations 023 and 025–027, as configured in
    Compose and `scripts/dev.ps1`. Migration 029 adds candidate discovery indexes;
    030 adds the opt-in notification outbox; 031 concurrently drops five retired

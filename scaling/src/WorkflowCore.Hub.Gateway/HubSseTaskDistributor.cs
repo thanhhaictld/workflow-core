@@ -136,9 +136,8 @@ public sealed class HubSseTaskDistributor
             throw new ArgumentException("Invalid SSE owner/session/credit registration");
 
         var session = new Session(subscribe, ownerEpoch);
-        // The unconstrained workflow batch commits atomically. The legacy
-        // constrained path commits each task separately, so cancellation of
-        // a multi-task claim could leave earlier leases undispatched.
+        // Workflow lanes can use atomic batches. Activity fallback sessions
+        // request one lease at a time.
         var maxGrants = subscribe.Claim.Capabilities.All(c =>
             c.TaskType == "__native_workflow__") ? 32 : 1;
         var connectedAt = Stopwatch.GetTimestamp();

@@ -28,7 +28,7 @@ public sealed class HubCandidateBackpressureTests
             }
             await using var store = new HubTaskStore(database);
             var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(store), new HubMatchingPartitionLeaseStore(store), NullLogger<HubMatchingOwnership>.Instance);
-            var readiness = new HubReadinessBroadcaster(store, new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()), NullLogger<HubReadinessBroadcaster>.Instance);
+            var readiness = new HubReadinessBroadcaster(store, new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()), NullLogger<HubReadinessBroadcaster>.Instance);
             var candidate = new HubCandidateAcquisition(store, ownership, readiness, NullLogger<HubCandidateAcquisition>.Instance, null, true);
             await ownership.StartAsync(default); await candidate.StartAsync(default); await ownership.AcquirePartitionAsync(hub, 0, default);
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -69,7 +69,7 @@ public sealed class HubCandidateBackpressureTests
             var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(store), new HubMatchingPartitionLeaseStore(store),
                 NullLogger<HubMatchingOwnership>.Instance);
             var readiness = new HubReadinessBroadcaster(store,
-                new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()), NullLogger<HubReadinessBroadcaster>.Instance);
+                new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()), NullLogger<HubReadinessBroadcaster>.Instance);
             var options = new HubCandidateCoordinatorOptions(PartitionCredits: 1, ProcessCredits: 1);
             var admissionBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var candidate = new HubCandidateAcquisition(store, ownership, readiness, NullLogger<HubCandidateAcquisition>.Instance, options, true,

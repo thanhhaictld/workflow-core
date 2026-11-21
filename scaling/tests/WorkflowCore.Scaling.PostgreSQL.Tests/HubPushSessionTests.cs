@@ -31,11 +31,11 @@ public sealed class HubPushSessionTests
             Environment.SetEnvironmentVariable(keys[6], "true");
             var hub = "push-" + Guid.NewGuid().ToString("N");
             await using var tasks = new HubTaskStore(database, 4);
-            var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+            var policies = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
             var payload = JsonSerializer.SerializeToElement(new { value = 1 });
             var ids = new List<Guid>();
             for (var i = 0; i < 2; i++)
-                ids.Add(await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+                ids.Add(await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1),
                     payload.GetRawText(), null, null, default));
             var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(tasks),
                 new HubMatchingPartitionLeaseStore(tasks), NullLogger<HubMatchingOwnership>.Instance);
@@ -78,7 +78,7 @@ public sealed class HubPushSessionTests
             Assert.NotEqual(first.Task.Id, second.Task.Id);
             Assert.True(await tasks.CompleteAsync(second.Task.Id, "worker", second.Task.Epoch, "{}", default));
             failSend = true;
-            var third = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+            var third = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1),
                 payload.GetRawText(), null, null, default);
             broadcaster.PublishMatchingHint(hub, "work", 1, 0);
             Assert.True(sessions.Update(session, new(4, 1, second.DeliveryId)));
@@ -113,9 +113,9 @@ public sealed class HubPushSessionTests
             // Repeated capacity refreshes must not assign a second lease to
             // any session while its first delivery is outstanding.
             var concurrentHub = "push-race-" + Guid.NewGuid().ToString("N");
-            var racePolicies = new HubPolicyRegistry().Register(concurrentHub, "work", 1, 1, _ => { });
+            var racePolicies = new HubTaskRouteRegistry().Register(concurrentHub, "work", 1, 1);
             for (var i = 0; i < 16; i++)
-                await tasks.EnqueueAsync(racePolicies.Resolve(concurrentHub, "work", 1, payload),
+                await tasks.EnqueueAsync(racePolicies.Resolve(concurrentHub, "work", 1),
                     payload.GetRawText(), null, null, default);
             var raceAssignments = Channel.CreateUnbounded<HubPushAssignment>();
             var raceSessions = new List<HubPushSessions.Session>();
@@ -145,9 +145,9 @@ public sealed class HubPushSessionTests
             Assert.False(sessions.Update(revokedSession, new(4, 1)));
 
             var multiHub = "push-multicredit-" + Guid.NewGuid().ToString("N");
-            var multiPolicies = new HubPolicyRegistry().Register(multiHub, "work", 1, 1, _ => { });
+            var multiPolicies = new HubTaskRouteRegistry().Register(multiHub, "work", 1, 1);
             for (var i = 0; i < 8; i++)
-                await tasks.EnqueueAsync(multiPolicies.Resolve(multiHub, "work", 1, payload),
+                await tasks.EnqueueAsync(multiPolicies.Resolve(multiHub, "work", 1),
                     payload.GetRawText(), null, null, default);
             var (multi, _) = await sessions.RegisterAsync(new("multi-worker", multiHub, 0, 1,
                 [new(multiHub, "work", 1)], null, 4), default);

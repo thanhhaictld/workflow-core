@@ -94,12 +94,12 @@ jobs:
             /tmp/sse-hub-a.json /tmp/sse-hub-b.json
           echo 'PASS: candidate matching enabled and all eight worker SSE sessions registered'
 
-      - name: Run real 100-workflow E2E for every ordering policy
+      - name: Run real 100-workflow E2E for both routed workflows
         run: |
           set -euo pipefail
           mkdir -p scaling/observability/results/sse-push
           chmod 0777 scaling/observability/results scaling/observability/results/sse-push
-          for mode in unordered partition keyed; do
+          for mode in unordered partition; do
             run="sse-push-$mode-$GITHUB_RUN_ID"
             docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
               --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
@@ -120,18 +120,18 @@ jobs:
           # Matching ownership is PostgreSQL-fenced with an 8 s lease.
           sleep 12
           curl -fsS http://127.0.0.1:5110/health/ready
-          run="sse-owner-failover-keyed-$GITHUB_RUN_ID"
+          run="sse-owner-failover-unordered-$GITHUB_RUN_ID"
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" --profile policy-k6 run --rm --no-deps \
-            -e K6_POLICY_MODE=keyed -e K6_POLICY_COUNT=100 \
+            -e K6_POLICY_MODE=unordered -e K6_POLICY_COUNT=100 \
             -e K6_POLICY_VUS=40 -e K6_POLICY_TIMEOUT_SECONDS=360 \
             -e K6_POLICY_RUN_ID="$run" k6-policy
           python3 scaling/observability/benchmark/verify_ordering.py \
-            --mode keyed --run-id "$run" --count 100 \
-            --output "scaling/observability/results/sse-push/failover-keyed.json"
+            --mode unordered --run-id "$run" --count 100 \
+            --output "scaling/observability/results/sse-push/failover-unordered.json"
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" up -d hub
           echo 'PASS: SSE worker reconnection and matching-shard takeover after Hub A failure'
-      - name: Upload ordering evidence
+      - name: Upload durable workflow evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:

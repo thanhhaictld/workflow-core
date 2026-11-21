@@ -28,7 +28,7 @@ public sealed class HubPushBatchFailureTests
                 """, db)) { insert.Parameters.AddWithValue("hub",hub); await insert.ExecuteNonQueryAsync(); }
             await using var store = new HubTaskStore(database);
             var owner = new HubMatchingOwnership(new HubMatchingLeaseStore(store),new HubMatchingPartitionLeaseStore(store),NullLogger<HubMatchingOwnership>.Instance);
-            var ready = new HubReadinessBroadcaster(store,new HubWorkflowStore(store,new HubPolicyRegistry(),new HubWorkflowRegistry()),NullLogger<HubReadinessBroadcaster>.Instance);
+            var ready = new HubReadinessBroadcaster(store,new HubWorkflowStore(store,new HubTaskRouteRegistry(),new HubWorkflowRegistry()),NullLogger<HubReadinessBroadcaster>.Instance);
             var candidate = new HubCandidateAcquisition(store,owner,ready,NullLogger<HubCandidateAcquisition>.Instance);
             await owner.StartAsync(default); await candidate.StartAsync(default);
             var sessions = new HubPushSessions(store,owner,ready,NullLogger<HubPushSessions>.Instance,candidate);

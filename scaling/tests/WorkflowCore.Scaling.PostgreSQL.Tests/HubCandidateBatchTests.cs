@@ -37,7 +37,7 @@ public sealed class HubCandidateBatchTests
         check.Parameters.AddWithValue("ids",new[] { ids[2], ids[3] }); Assert.Equal(2L,(long)(await check.ExecuteScalarAsync())!);
     }
     [Fact]
-    public async Task BatchRevalidatesEachIdPinsEpochAndConstraintsAndJournalsOnlyAdmitted()
+    public async Task BatchRevalidatesEachIdPinsEpochAndJournalsOnlyAdmitted()
     {
         var hub="candidate-batch-"+Guid.NewGuid().ToString("N"); var ids=Enumerable.Range(0,7).Select(_=>Guid.NewGuid()).ToArray();
         await using var db=new NpgsqlConnection(Database); await db.OpenAsync();
@@ -63,12 +63,12 @@ public sealed class HubCandidateBatchTests
             [new(hub,"__native_workflow__",1)],i==6?null:[new(hub,"definition",1)])).ToArray(),"worker",hub,0,4,
             [new(hub,"__native_workflow__",1)],[new(hub,"definition",1)],owner,TimeSpan.FromSeconds(30));
         var result=await store.ClaimCandidateBatchAsync(request,default);
-        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status); Assert.Equal(new HashSet<Guid>{ids[0],ids[6]},result.Leases.Select(x=>x.Id).ToHashSet());
+        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status); Assert.Equal(new HashSet<Guid>{ids[0],ids[2],ids[6]},result.Leases.Select(x=>x.Id).ToHashSet());
         await using var check=new NpgsqlCommand("""
             SELECT t.id,t.state,t.epoch,t.attempts,t.dispatch_key,(SELECT count(*) FROM wfc_scale.hub_workflow_event e WHERE e.task_id=t.id AND e.event_type='WorkflowTaskClaimed')
             FROM wfc_scale.hub_task t WHERE t.id=ANY(@ids)
             """,db); check.Parameters.AddWithValue("ids",ids); await using var rows=await check.ExecuteReaderAsync(); var count=0;
-        while(await rows.ReadAsync()) { var taskId=rows.GetGuid(0); var admitted=taskId==ids[0]||taskId==ids[6]; Assert.Equal(admitted?1:0,rows.GetInt16(1)); Assert.Equal(admitted?1L:0L,rows.GetInt64(2)); Assert.Equal(admitted?1:0,rows.GetInt32(3)); if(taskId!=ids[6]) Assert.Equal("stable",rows.GetString(4)); Assert.Equal(taskId==ids[0]?1L:0L,rows.GetInt64(5)); count++; }
+        while(await rows.ReadAsync()) { var taskId=rows.GetGuid(0); var admitted=taskId==ids[0]||taskId==ids[2]||taskId==ids[6]; Assert.Equal(admitted?1:0,rows.GetInt16(1)); Assert.Equal(admitted?1L:0L,rows.GetInt64(2)); Assert.Equal(admitted?1:0,rows.GetInt32(3)); if(taskId!=ids[6]) Assert.Equal("stable",rows.GetString(4)); Assert.Equal((taskId==ids[0]||taskId==ids[2])?1L:0L,rows.GetInt64(5)); count++; }
         Assert.Equal(7,count);
     }
 

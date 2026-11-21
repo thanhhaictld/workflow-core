@@ -14,6 +14,10 @@ public static class HubGatewayEndpoints
 {
     private static long _pullClaims, _pullEmptyClaims, _pullFailedClaims;
 
+    private static readonly JsonSerializerOptions RegistrationJson = new(JsonSerializerDefaults.Web);
+    private static readonly HashSet<string> ActivityRegistrationFields = new(StringComparer.OrdinalIgnoreCase)
+        { "hubId", "activityType", "version", "partitions", "contract" };
+
     public static IServiceCollection AddHubGateway(
         this IServiceCollection services, string connectionString)
     {
@@ -33,7 +37,7 @@ public static class HubGatewayEndpoints
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
         // API for compatibility with explicit integration-test registrations.
-        services.AddSingleton(new HubPolicyRegistry());
+        services.AddSingleton(new HubTaskRouteRegistry());
         services.AddSingleton(new HubWorkflowRegistry());
         services.AddSingleton<HubDefinitionStore>();
         services.AddSingleton<HubRemoteWorkflowStore>();
@@ -81,20 +85,6 @@ public static class HubGatewayEndpoints
             return await next(context);
         });
 
-        routes.MapGet("/policies", async (HubPolicyRegistry registry,
-            HubDefinitionStore published, CancellationToken ct) =>
-        {
-            var external=await published.ActivitiesAsync(ct);
-            return Results.Ok(registry.Describe().Cast<object>().Concat(
-                external.Select(p=>(object)new {
-                    p.HubId, TaskType=p.ActivityType,p.Version,
-                    PartitionCount=p.Partitions,
-                    Rules=new [] {
-                        "hub: capacity="+p.HubConcurrency,
-                        "activity: capacity="+p.ActivityConcurrency
-                    }
-                })));
-        });
         routes.MapGet("/definitions", async (HubWorkflowRegistry registry,
             HubDefinitionStore published, CancellationToken ct) =>
         {
@@ -120,37 +110,26 @@ public static class HubGatewayEndpoints
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
-        routes.MapPost("/activity-registrations", async (HubActivityRegistration policy,
+        routes.MapPost("/activity-registrations", async (System.Text.Json.JsonElement body,
             HubDefinitionStore store, HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             try {
-                var created=await store.RegisterActivityAsync(policy,ct);
-                readiness.PublishMatchingHint(policy.HubId, null, 0);
+                if (body.ValueKind != JsonValueKind.Object ||
+                    body.EnumerateObject().Any(p => !ActivityRegistrationFields.Contains(p.Name)))
+                    return Results.BadRequest(new { error = "Activity registration accepts hubId, activityType, version, partitions and contract" });
+                HubActivityRegistration activity;
+                try { activity = body.Deserialize<HubActivityRegistration>(RegistrationJson)!; }
+                catch (JsonException) { return Results.BadRequest(new { error = "Invalid activity registration" }); }
+                var created=await store.RegisterActivityAsync(activity,ct);
+                readiness.PublishMatchingHint(activity.HubId, null, 0);
                 return created?Results.Created("/api/hub/activity-registrations",new{registered=true}):
                     Results.Ok(new{registered=true});
             }
             catch(ArgumentException ex){return Results.BadRequest(new{error=ex.Message});}
             catch(InvalidOperationException ex){return Results.Conflict(new{error=ex.Message});}
         });
-        routes.MapGet("/activity-registrations/{hub}/{activity}/{version:int}",async (
-            string hub,string activity,int version,HubDefinitionStore store,CancellationToken ct) =>
-        {
-            var current=await store.GetActivityPolicyAsync(hub,activity,version,ct);
-            return current is null?Results.NotFound():Results.Ok(current);
-        });
-        routes.MapPut("/activity-registrations/capacity",async (
-            HubActivityCapacityUpdate request,HubDefinitionStore store,HubReadinessBroadcaster readiness,CancellationToken ct) =>
-        {
-            try
-            {
-                var revision = await store.UpdateActivityCapacityAsync(request,ct);
-                readiness.PublishMatchingHint(request.HubId, null, 0);
-                return Results.Ok(new {revision});
-            }
-            catch(ArgumentException ex){return Results.BadRequest(new {error=ex.Message});}
-            catch(KeyNotFoundException ex){return Results.NotFound(new {error=ex.Message});}
-            catch(InvalidOperationException ex){return Results.Conflict(new {error=ex.Message});}
-        });
+        routes.MapPut("/activity-registrations/capacity", () => Results.Problem(
+            "Activity capacity updates are retired", statusCode: StatusCodes.Status410Gone));
         routes.MapGet("/operations", async (string? hub, int? windowMinutes,
             HubOperationsStore operations, CancellationToken ct) =>
         {
@@ -318,7 +297,7 @@ public static class HubGatewayEndpoints
         });
 
         routes.MapPost("/tasks", async (HubEnqueueRequest request,
-            HubPolicyRegistry registry, HubDefinitionStore published, HubTaskStore store,
+            HubTaskRouteRegistry registry, HubDefinitionStore published, HubTaskStore store,
             HubReadinessBroadcaster readiness, CancellationToken ct) =>
         {
             if (request.Payload.ValueKind != JsonValueKind.Object ||
@@ -328,9 +307,9 @@ public static class HubGatewayEndpoints
             HubTaskRoute route;
             try {
                 route=await published.ResolveAsync(request.HubId,request.TaskType,
-                    request.Version,request.Payload,ct)
+                    request.Version,ct)
                     ?? registry.Resolve(request.HubId, request.TaskType,
-                        request.Version, request.Payload);
+                        request.Version);
             }
             catch (KeyNotFoundException) { return Results.NotFound(new { error = "Unknown registered task" }); }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }

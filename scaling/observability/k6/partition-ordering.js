@@ -8,7 +8,7 @@ const TOKEN = __ENV.HUB_TOKEN;
 const MODE = __ENV.K6_POLICY_MODE || "unordered";
 const DEFINITIONS = {
   unordered: "policy-unordered",
-  partition: "policy-partition-fifo",
+  partition: "policy-partition-routed",
 };
 const DEFINITION = DEFINITIONS[MODE];
 const TOTAL = Math.max(1, Number(__ENV.K6_POLICY_COUNT || 300));
@@ -16,7 +16,7 @@ const VUS = Math.max(1, Number(__ENV.K6_POLICY_VUS || 60));
 const TIMEOUT = Math.max(15, Number(__ENV.K6_POLICY_TIMEOUT_SECONDS || 600));
 const HUB = "policy-benchmark";
 // Only the deliberate SIGKILL workload permits transient HTTP transport
-// failures. Real workflow completion and activity-FIFO checks remain strict.
+// failures. Real workflow completion and activity-attempt checks remain strict.
 const FAULT_INJECTION = __ENV.K6_POLICY_FAULT_INJECTION === "true";
 const MAX_START_RETRIES = FAULT_INJECTION ? 6 : 0;
 const started = new Counter("hub_policy_started");
@@ -124,7 +124,7 @@ export function teardown(data) {
 }
 export function handleSummary(data) {
   return {
-    "/results/k6-policy-summary.json": JSON.stringify(data, null, 2),
-    stdout: "Policy E2E k6 finished; see /results/k6-policy-summary.json\n",
+    "/results/k6-summary.json": JSON.stringify(data, null, 2),
+    stdout: "Policy E2E k6 finished; see /results/k6-summary.json\n",
   };
 }

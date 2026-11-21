@@ -201,7 +201,7 @@ public sealed class HubSseOwnerRoutingTests
         var hub = "route-executing-" + Guid.NewGuid().ToString("N");
         await definitions.RegisterAsync(new(hub, "native", 1, 4, 1,
             JsonSerializer.SerializeToElement(new { executionMode = "native" })), default);
-        await definitions.RegisterActivityAsync(new(hub, "activity", 1, 4, 10, 10), default);
+        await definitions.RegisterActivityAsync(new(hub, "activity", 1, 4), default);
         var id = await new HubRemoteWorkflowStore(tasks, definitions).StartAsync(
             new(hub, "native", 1, JsonSerializer.SerializeToElement(new { })), default);
         var workflow = Assert.Single(await tasks.ClaimAsync("wf", [hub],
@@ -228,7 +228,7 @@ public sealed class HubSseOwnerRoutingTests
         await native.CompleteActivityAsync(activity.Id, "executor", activity.Epoch, result, default);
         var runtime = (await native.GetRuntimeAsync(id, default))!;
         Assert.Single(runtime.Inbox);
-        var attempts = await new HubWorkflowStore(tasks, new HubPolicyRegistry(),
+        var attempts = await new HubWorkflowStore(tasks, new HubTaskRouteRegistry(),
             new HubWorkflowRegistry()).TraceAsync(id, default);
         var attempt = Assert.Single(Assert.Single(attempts).Attempts);
         Assert.Equal("Completed", attempt.Outcome);
@@ -238,15 +238,10 @@ public sealed class HubSseOwnerRoutingTests
     [Fact]
     public async Task OwnerDiesAfterClaimBeforeDeliveryKeepsUncertainExecutionLease()
     {
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
-        await using var tasks = new HubTaskStore(fixture.ConnectionString);
+        await using var tasks = new HubTaskStore(Database);
         var owners = new HubMatchingPartitionLeaseStore(tasks);
         var hub = "route-undelivered-" + Guid.NewGuid().ToString("N");
-        var policy = new HubPolicyRegistry().Register(hub, "activity", 1, 4,
-            p => p.SequentialBy("resource", v => v.GetProperty("resourceId").GetString()));
-        var payload = JsonSerializer.SerializeToElement(new { resourceId = "one" });
-        var id = await fixture.SeedTaskAsync(policy.Resolve(hub, "activity", 1, payload), payload.GetRawText());
-        await fixture.ApplyAsync(33);
+        var id = await tasks.EnqueueAsync(new(hub, "activity", 1, 4), "{}", null, null, default);
         var task = (await tasks.GetAsync(id, default))!;
         var shard = task.PartitionId % 4;
         var old = await owners.AcquireOrReadAsync(hub, shard, 4, "old-owner", "http://old:5100",
@@ -288,6 +283,5 @@ public sealed class HubSseOwnerRoutingTests
         Assert.True(await tasks.HeartbeatAsync(id, "routing-worker", claimed.Epoch,
             TimeSpan.FromSeconds(30), default));
         Assert.False(distributor.Offer(new(sessionId, old.Epoch, "routing-worker", hub, shard, Guid.NewGuid())));
-        fixture.MarkPassed();
     }
 }

@@ -262,4 +262,4 @@ scaling/observability/.build-resolv.conf
 /scaling/benchmarks/results/
 /scaling/benchmarks/hub-candidate-enrichment-stageB/
 /scaling/benchmarks/hub-candidate-enrichment-stageB/*
-/scaling/benchmarks/*
+/scaling/benchmarks/

@@ -43,13 +43,13 @@ internal sealed class HubRuntimePublisher(HubRestClient client,HubNativeCatalog 
     public async Task StartAsync(CancellationToken ct)
     {
         foreach(var activity in catalog.Activities)
-            await client.RegisterAsync("api/hub/activity-registrations",activity.Policy,ct);
+            await client.RegisterAsync("api/hub/activity-registrations",activity.Registration,ct);
         foreach(var definition in catalog.Definitions)
             await client.RegisterAsync("api/hub/definitions",definition,ct);
         if(options.SequentialVersionOneCompatibility)
         {
             foreach(var activity in catalog.Activities)
-                await client.RegisterAsync("api/hub/activity-registrations",activity.Policy with{Version=1,Contract=null},ct);
+                await client.RegisterAsync("api/hub/activity-registrations",activity.Registration with{Version=1,Contract=null},ct);
             var sequential=(RemoteWorkflowRegistry?)services.GetService(typeof(RemoteWorkflowRegistry));
             if(sequential is not null)
                 foreach(var definition in sequential.All())
@@ -99,8 +99,8 @@ internal sealed class HubNativeWorkflowWorker(HubRestClient client,HubNativeCata
 internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCatalog catalog,HubRuntimeOptions options,
     HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup)
     : HubRuntimeWorker(client,options,logger,options.ActivityConcurrency,
-        catalog.Activities.Where(a=>options.WorkerHub is null || a.Policy.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,a.Policy.Version))
-            .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Where(a=>options.WorkerHub is null || a.Policy.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Policy.HubId,a.Policy.ActivityType,1)) : [])
+        catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,a.Registration.Version))
+            .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,1)) : [])
             .Distinct().ToArray(),startup)
 {
     protected override async Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct)=>
@@ -923,15 +923,6 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     {
                         var detail = await response.Content.ReadAsStringAsync(execution.Token);
                         throw new InvalidOperationException("Hub rejected the completion contract: "+response.StatusCode+" "+detail);
-                    }
-                    if (!isActivity)
-                    {
-                        var transition = await response.Content.ReadFromJsonAsync<HubTransitionResult>(cancellationToken: execution.Token);
-                        if (transition?.PolicyRejected == true)
-                        {
-                            logger.LogWarning("Workflow {Workflow} terminated by Hub policy: {Reason}",task.WorkflowId,transition.Reason);
-                            outcome="policy_rejected";return;
-                        }
                     }
                     outcome="success";return;
                 }

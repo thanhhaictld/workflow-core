@@ -76,28 +76,6 @@ public sealed class HubCandidateAdmissionTests
         check.Parameters.AddWithValue("id",workflow); Assert.Equal  (1L, (long)(await check.ExecuteScalarAsync())!);
     }
 
-    [Fact]
-    public async Task CandidateAdmissionReportsBlockingResourceAndHonorsFifo()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
-        var hub = "candidate-resource-" + Guid.NewGuid().ToString("N"); var first = Guid.NewGuid(); var second = Guid.NewGuid(); var key = hub + "-key";
-        await using var store = new HubTaskStore(database, enableUnconstrainedBatchClaims: false); var owners = new HubMatchingPartitionLeaseStore(store);
-        var owner = await owners.AcquireOrReadAsync(hub,0,4,"owner","http://localhost:5100",TimeSpan.FromSeconds(60),default);
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var cmd = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,true);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload) VALUES (@first,@hub,0,'activity',1,'{}'),(@second,@hub,0,'activity',1,'{}');
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@first,@key),(@second,@key);
-            """,db))
-        { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("first",first); cmd.Parameters.AddWithValue("second",second); cmd.Parameters.AddWithValue("key",key); await cmd.ExecuteNonQueryAsync(); }
-        var request = new HubCandidateClaim(second,0,"worker",hub,0,4,[new(hub,"activity",1)],null,owner,TimeSpan.FromSeconds(30));
-        var blocked = await store.ClaimCandidateAsync(request,default);
-        Assert.Equal(HubCandidateClaimStatus.ResourceBlocked,blocked.Status); Assert.Equal(key,blocked.ResourceKey);
-        var old = await store.ClaimAsync("worker",[hub],[new(hub,"activity",1)],1,TimeSpan.FromSeconds(30),default,matchingPartition:0,matchingPartitionCount:4);
-        Assert.Equal(first,Assert.Single(old).Id);
-        blocked = await store.ClaimCandidateAsync(request,default);
-        Assert.Equal(HubCandidateClaimStatus.ResourceBlocked,blocked.Status);
-    }
 
     [Fact]
     public async Task CandidateAndLegacyClaimsPreserveAttemptHistoryOnTakeover()
@@ -188,33 +166,6 @@ public sealed class HubCandidateAdmissionTests
         Assert.Equal(HubCandidateClaimStatus.OwnerLost,(await store.ClaimCandidateAsync(req,default)).Status);
     }
 
-    [Fact]
-    public async Task ConcurrentPartitionsSerializeMultipleResourceAdmission()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG") ?? throw new InvalidOperationException("WFC_TEST_PG is required");
-        var hub = "candidate-locks-" + Guid.NewGuid().ToString("N"); var first = Guid.NewGuid(); var second = Guid.NewGuid();
-        var keyA = hub + "-a"; var keyB = hub + "-b";
-        await using var store = new HubTaskStore(database,maxPoolSize:12); var owners = new HubMatchingPartitionLeaseStore(store);
-        var o0 = await owners.AcquireOrReadAsync(hub,0,4,"owner0","http://localhost:5100",TimeSpan.FromSeconds(60),default);
-        var o1 = await owners.AcquireOrReadAsync(hub,1,4,"owner1","http://localhost:5200",TimeSpan.FromSeconds(60),default);
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var cmd = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@a,1,false),(@b,1,false);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload) VALUES (@first,@hub,0,'activity',1,'{}'),(@second,@hub,1,'activity',1,'{}');
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@first,@b),(@first,@a),(@second,@a),(@second,@b);
-            """,db))
-        { cmd.Parameters.AddWithValue("a",keyA); cmd.Parameters.AddWithValue("b",keyB); cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("first",first); cmd.Parameters.AddWithValue("second",second); await cmd.ExecuteNonQueryAsync(); }
-        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var r0 = new HubCandidateClaim(first,0,"w0",hub,0,4,[new(hub,"activity",1)],null,o0,TimeSpan.FromSeconds(30));
-        var r1 = new HubCandidateClaim(second,0,"w1",hub,1,4,[new(hub,"activity",1)],null,o1,TimeSpan.FromSeconds(30));
-        var c0 = store.ClaimCandidateAsync(r0,default,new HubCandidateClaimTestHooks(BeforeOwnerRecheck: async ct => { reached.SetResult(); await release.Task.WaitAsync(ct); }));
-        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10)); var c1 = store.ClaimCandidateAsync(r1,default);
-        release.SetResult();
-        Assert.Equal(HubCandidateClaimStatus.Leased,(await c0.WaitAsync(TimeSpan.FromSeconds(10))).Status);
-        var blocked = await c1.WaitAsync(TimeSpan.FromSeconds(10)); Assert.Equal(HubCandidateClaimStatus.ResourceBlocked,blocked.Status); Assert.Equal(keyA,blocked.ResourceKey);
-        await using var check = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_task WHERE id=@id AND state=0 AND epoch=0 AND attempts=0",db);
-        check.Parameters.AddWithValue("id",second); Assert.Equal(1L,(long)(await check.ExecuteScalarAsync())!);
-    }
 
     [Fact]
     public async Task CandidateAndLegacyWorkflowJournalAndDispatchKeysMatch()

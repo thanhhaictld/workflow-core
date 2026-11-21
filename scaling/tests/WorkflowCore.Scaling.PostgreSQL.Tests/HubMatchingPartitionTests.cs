@@ -104,7 +104,7 @@ public sealed class HubMatchingPartitionTests
     }
 
     [Fact]
-    public async Task OwnerFencedBatch_RejectsStaleGeneration_AndDoesNotClaimConstrainedFallback()
+    public async Task OwnerFencedBatch_RejectsStaleGeneration_AndClaimsOwnedTaskIds()
     {
         if (Database is null) return;
         var hub = Hub();
@@ -138,11 +138,8 @@ public sealed class HubMatchingPartitionTests
         var current = await owners.AcquireOrReadAsync(hub, 0, 4, "hub-b", "http://hub-2:5100",
             TimeSpan.FromSeconds(30), default);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Claim(old));
-        Assert.Equal(free, Assert.Single(await Claim(current)).Id);
+        Assert.Equal(new HashSet<Guid> { free, constrained }, (await Claim(current)).Select(x => x.Id).ToHashSet());
         Assert.Empty(await Claim(current));
-        var legacy = await store.ClaimAsync("legacy", [hub], [new(hub, "work", 1)], 1,
-            TimeSpan.FromSeconds(30), default);
-        Assert.Equal(constrained, Assert.Single(legacy).Id);
     }
 
     [Fact]
@@ -185,9 +182,9 @@ public sealed class HubMatchingPartitionTests
         var owners = new HubMatchingPartitionLeaseStore(tasks);
         var old = await owners.AcquireOrReadAsync(hub, 0, 1, "old", "http://hub:5100",
             TimeSpan.FromSeconds(30), default);
-        var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var policies = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
         var payload = JsonSerializer.SerializeToElement(new { value = 1 });
-        var id = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+        var id = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1),
             payload.GetRawText(), null, null, default);
         Assert.True(await owners.ReleaseAsync(hub, 0, old.OwnerId, old.Epoch, default));
         var current = await owners.AcquireOrReadAsync(hub, 0, 1, "new", "http://hub:5100",
@@ -212,9 +209,9 @@ public sealed class HubMatchingPartitionTests
         var owners = new HubMatchingPartitionLeaseStore(tasks);
         var old = await owners.AcquireOrReadAsync(hub, 0, 1, "old", "http://hub:5100",
             TimeSpan.FromSeconds(30), default);
-        var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var policies = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
         var payload = JsonSerializer.SerializeToElement(new { value = 1 });
-        await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+        await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1),
             payload.GetRawText(), null, null, default);
         await using var db = new NpgsqlConnection(Database);
         await db.OpenAsync();

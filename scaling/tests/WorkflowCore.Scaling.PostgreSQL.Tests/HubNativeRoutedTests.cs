@@ -102,7 +102,7 @@ public sealed class HubNativeRoutedTests
         services.AddHubWorkflowRuntime().AddWorkflow<Workflow,Data>(hub,4)
             .AddActivity<Add>(hub,"add",2,o=>
             {
-                o.Partitions=4;o.ResourceName="key";o.ResourceField="resource";o.StrictFifo=true;
+                o.Partitions=4;
                 o.Input(s=>s.Value).Input(s=>s.Resource).Input(s=>s.Boxed).Output(s=>s.Value).Output(s=>s.Boxed).ActivityResult(s=>s.Result);
             })
             .AddActivity<FailOnce>(hub,"fail-once",2,o=>{o.Partitions=4;o.Input(s=>s.Value).Output(s=>s.Value);})
@@ -122,8 +122,6 @@ public sealed class HubNativeRoutedTests
     public async Task RoutedStepsRecoverFromSnapshotsAndApplyOutputsOnce(string mode)
     {
         var database=Environment.GetEnvironmentVariable("WFC_TEST_PG");if(database is null)return;
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(database);
-        database=fixture.ConnectionString;
         var hub="routed-"+Guid.NewGuid().ToString("N");
         await using var tasks=new HubTaskStore(database);
         var definitions=new HubDefinitionStore(tasks);
@@ -133,15 +131,13 @@ public sealed class HubNativeRoutedTests
         {
             var catalog=provider.GetRequiredService<HubNativeCatalog>();
             foreach(var activity in catalog.Activities)
-                if(activity.Policy.ResourceName is not null) await fixture.SeedRegistrationAsync(activity.Policy);
-                else await definitions.RegisterActivityAsync(activity.Policy,default);
+                await definitions.RegisterActivityAsync(activity.Registration,default);
             foreach(var workflow in catalog.Definitions)await definitions.RegisterAsync(workflow,default);
         }
         var id=await new HubRemoteWorkflowStore(tasks,definitions).StartAsync(new(hub,"routed-"+mode,2,
             JsonSerializer.SerializeToElement(new Data(),new JsonSerializerOptions(JsonSerializerDefaults.Web))),default);
-        await fixture.ApplyAsync(33);
+        var expectedDispatches = new HashSet<string>();
         var sawParallel=false;var repeatedSteps=new List<int>();
-        var fifo=new Queue<string>();
         for(var iteration=0;iteration<100;iteration++)
         {
             // Rebuild all application services to prove no in-memory result/cursor is required.
@@ -156,16 +152,14 @@ public sealed class HubNativeRoutedTests
                 if(commit.Activities.Length>1)sawParallel=true;
                 repeatedSteps.AddRange(commit.Activities.Select(a=>a.StepId));
                 var result=await native.CommitAsync(id,commit,default);Assert.NotNull(result);
-                foreach(var dispatch in commit.Activities.Where(a=>a.ActivityType=="add"))fifo.Enqueue(dispatch.DispatchKey);
+                foreach(var dispatch in commit.Activities.Where(a=>a.ActivityType=="add")) expectedDispatches.Add(dispatch.DispatchKey);
                 Assert.True((await native.CommitAsync(id,commit,default))!.Replayed);
             }
             var activityLeases=await tasks.ClaimAsync("activity",[hub],
                 [new(hub,"add",2),new(hub,"fail-once",2),new(hub,"fail-always",2),new(hub,"scalar",2)],8,TimeSpan.FromSeconds(30),default);
-            // All Add tasks share a FIFO resource of capacity one.
-            Assert.True(activityLeases.Count(a=>a.TaskType=="add")<=1);
             foreach(var activity in activityLeases)
             {
-                if(activity.TaskType=="add")Assert.Equal(fifo.Dequeue(),activity.Payload.GetProperty("__hubContext").GetProperty("dispatchKey").GetString());
+                if(activity.TaskType=="add")Assert.True(expectedDispatches.Remove(activity.Payload.GetProperty("__hubContext").GetProperty("dispatchKey").GetString()!));
                 var result=await executor.ExecuteActivityAsync(activity);
                 Assert.True(await native.CompleteActivityAsync(activity.Id,"activity",activity.Epoch,result,default));
                 Assert.True(await native.CompleteActivityAsync(activity.Id,"activity",activity.Epoch,result,default));
@@ -193,7 +187,6 @@ public sealed class HubNativeRoutedTests
             Assert.Contains(snapshot.ExecutionPointers,p=>p.RetryCount==1);
         }
         Assert.Empty(final.Inbox);
-        fixture.MarkPassed();
     }
 
     [Fact]
@@ -222,7 +215,7 @@ public sealed class HubNativeRoutedTests
         Assert.True(takeover.Epoch>lease.Epoch);
         Assert.Null(await native.CommitAsync(id,oldCommit,default));
         Assert.True(await native.ChangeStatusAsync(id,new("Suspended","suspend"),default));
-        var monitor=new HubWorkflowStore(tasks,new HubPolicyRegistry(),new HubWorkflowRegistry());
+        var monitor=new HubWorkflowStore(tasks,new HubTaskRouteRegistry(),new HubWorkflowRegistry());
         Assert.Equal("Suspended",(await monitor.GetAsync(id,default))!.State);
         Assert.Equal(id,Assert.Single((await monitor.ListAsync(hub,null,"Suspended",1,10,default)).Items).Id);
         var overview=await monitor.OverviewAsync(hub,default);

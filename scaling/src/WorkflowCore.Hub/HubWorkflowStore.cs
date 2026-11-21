@@ -46,7 +46,7 @@ public sealed record HubWorkflowHistoryEntry(int StepIndex, Guid TaskId,
 /// committed atomically. The same bounded DataSource is shared with HubTaskStore.
 /// </summary>
 public sealed class HubWorkflowStore(
-    HubTaskStore tasks, HubPolicyRegistry policies, HubWorkflowRegistry definitions)
+    HubTaskStore tasks, HubTaskRouteRegistry taskRoutes, HubWorkflowRegistry definitions)
 {
     private NpgsqlDataSource DataSource => tasks.DataSource;
 
@@ -64,21 +64,10 @@ public sealed class HubWorkflowStore(
             throw new ArgumentException("Invalid workflow input, run identifier or idempotency key");
 
         var routes = definition.Steps.Select(step =>
-            policies.Resolve(definition.HubId, step.ActivityType, step.Version, request.Input))
+            taskRoutes.Resolve(definition.HubId, step.ActivityType, step.Version))
             .ToArray();
         if (routes.Any(route => route.PartitionCount != definition.Partitions))
             throw new InvalidOperationException("Activity and workflow partition counts differ");
-
-        var resources = routes.SelectMany(route => route.Resources)
-            .GroupBy(resource => resource.Key, StringComparer.Ordinal)
-            .Select(group =>
-            {
-                var first = group.First();
-                if (group.Any(other => other.Capacity != first.Capacity ||
-                                       other.StrictFifo != first.StrictFifo))
-                    throw new InvalidOperationException("Inconsistent concurrency policy");
-                return first;
-            }).OrderBy(x => x.Key, StringComparer.Ordinal).ToArray();
 
         var id = Guid.NewGuid();
         var partition = HubPartitionRouter.ForWorkflow(id, definition.Partitions);
@@ -132,36 +121,6 @@ public sealed class HubWorkflowStore(
             }
         }
 
-        if (definition.Steps.Any(step => policies.HasBusinessPolicy(definition.HubId, step.ActivityType, step.Version)))
-            throw new ArgumentException("Business-resource policies are retired; applications must coordinate business keys");
-
-        // Register/verify resources under a deterministic lock order, including
-        // strict FIFO keys, before allocating sequence numbers to future tasks.
-        foreach (var resource in resources)
-        {
-            await using (var insert = new NpgsqlCommand("""
-                INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
-                VALUES (@key,@limit,@fifo)
-                ON CONFLICT (resource_key) DO NOTHING
-                """, db, tx))
-            {
-                insert.Parameters.AddWithValue("key", resource.Key);
-                insert.Parameters.AddWithValue("limit", resource.Capacity);
-                insert.Parameters.AddWithValue("fifo", resource.StrictFifo);
-                await insert.ExecuteNonQueryAsync(ct);
-            }
-            await using var check = new NpgsqlCommand("""
-                SELECT capacity,strict_fifo FROM wfc_scale.hub_resource
-                WHERE resource_key=@key FOR UPDATE
-                """, db, tx);
-            check.Parameters.AddWithValue("key", resource.Key);
-            await using var reader = await check.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct) ||
-                reader.GetInt32(0) != resource.Capacity ||
-                reader.GetBoolean(1) != resource.StrictFifo)
-                throw new InvalidOperationException("Existing concurrency policy does not match C#");
-        }
-
         for (var step = 0; step < routes.Length; step++)
         {
             var taskId = Guid.NewGuid();
@@ -184,16 +143,6 @@ public sealed class HubWorkflowStore(
                 task.Parameters.AddWithValue("first", step == 0);
                 task.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = input;
                 await task.ExecuteNonQueryAsync(ct);
-            }
-            foreach (var resource in routes[step].Resources)
-            {
-                await using var relation = new NpgsqlCommand("""
-                    INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
-                    VALUES (@task,@resource)
-                    """, db, tx);
-                relation.Parameters.AddWithValue("task", taskId);
-                relation.Parameters.AddWithValue("resource", resource.Key);
-                await relation.ExecuteNonQueryAsync(ct);
             }
         }
         await tx.CommitAsync(ct);

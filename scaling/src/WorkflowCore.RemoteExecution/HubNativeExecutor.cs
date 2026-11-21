@@ -88,14 +88,14 @@ internal sealed class HubActivityMiddleware(HubNativeCatalog catalog,HubExecutio
         }
         var dispatchKey=pointer.Id+":"+Guid.NewGuid().ToString("N");
         var properties=route.ReadInputs(body);
-        // Policy fields stay at the top level; adapter context is explicitly separate.
+        // Activity inputs stay at the top level; adapter context is explicitly separate.
         var payload=properties.EnumerateObject().ToDictionary(p=>p.Name,p=>(object?)p.Value.Clone());
         payload["__hubContext"]=new { dispatchKey,workflowId=context.Workflow.Id,
             definitionId=context.Workflow.WorkflowDefinitionId,version=context.Workflow.Version,
             pointer=codec.Encode(pointer) };
         payload["__hubValues"]=codec.EncodeValue(HubTypedActivity.ReadValues(body,route.Inputs));
-        session.Dispatches.Add(new(dispatchKey,pointer.Id,pointer.StepId,route.Policy.ActivityType,
-            route.Policy.Version,JsonSerializer.SerializeToElement(payload,HubNativeExecutor.JsonOptions)));
+        session.Dispatches.Add(new(dispatchKey,pointer.Id,pointer.StepId,route.Registration.ActivityType,
+            route.Registration.Version,JsonSerializer.SerializeToElement(payload,HubNativeExecutor.JsonOptions)));
         pointer.ExtensionAttributes["hubDispatchKey"]=dispatchKey;
         return Task.FromResult(ExecutionResult.WaitForEvent("__hub_typed_activity",dispatchKey,DateTime.UtcNow));
     }
@@ -133,7 +133,7 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
         var session=new HubExecutionSession(runtime.HubId){
             Workflow=workflow,WorkerId=owner,LeaseEpoch=lease.Epoch
         };
-        session.StepNames=definition.Steps.ToDictionary(s=>s.Id,s=>catalog.Route(runtime.HubId,s.BodyType)?.Policy.ActivityType??s.Name??s.BodyType.Name);
+        session.StepNames=definition.Steps.ToDictionary(s=>s.Id,s=>catalog.Route(runtime.HubId,s.BodyType)?.Registration.ActivityType??s.Name??s.BodyType.Name);
         session.ExcludedTimingSteps=definition.Steps
             .Where(s=>catalog.Route(runtime.HubId,s.BodyType) is not null ||
                 s.BodyType.FullName?.StartsWith("WorkflowCore.Primitives.Activity",StringComparison.Ordinal)==true)
@@ -199,7 +199,7 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
                 if(pointer.Status!=PointerStatus.WaitingForEvent || pointer.EndTime is not null)continue;
                 pointer.ExtensionAttributes["hubEventAsOf"]=subscription.SubscribeAsOf.ToUniversalTime().Ticks.ToString();
                 if(subscription.EventName!=Event.EventTypeActivity)continue;
-                var route=catalog.Activities.SingleOrDefault(a=>a.Policy.HubId==runtime.HubId && a.Policy.ActivityType==subscription.EventKey)
+                var route=catalog.Activities.SingleOrDefault(a=>a.Registration.HubId==runtime.HubId && a.Registration.ActivityType==subscription.EventKey)
                     ?? throw new InvalidOperationException("Native Activity name must have an activity registration");
                 var key=pointer.Id+":"+Guid.NewGuid().ToString("N");
                 pointer.ExtensionAttributes["hubDispatchKey"]=key;
@@ -225,7 +225,7 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
                         input.GetProperty(HubTypedActivity.PropertyName(p)).Deserialize(p.PropertyType,JsonOptions);
                 });
                 payload["__hubValues"]=codec.EncodeValue(values);
-                session.Dispatches.Add(new(key,pointer.Id,pointer.StepId,route.Policy.ActivityType,route.Policy.Version,
+                session.Dispatches.Add(new(key,pointer.Id,pointer.StepId,route.Registration.ActivityType,route.Registration.Version,
                     JsonSerializer.SerializeToElement(payload,JsonOptions),subscription.SubscribeAsOf>clock.UtcNow?subscription.SubscribeAsOf:null));
             }
             foreach(var pointer in workflow.ExecutionPointers.Where(p=>p.Status==PointerStatus.WaitingForEvent && !p.EventPublished))
@@ -250,8 +250,8 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
 
     public async Task<JsonElement> ExecuteActivityAsync(HubLeasedTask task,CancellationToken ct=default)
     {
-        var route=catalog.Activities.Single(a=>a.Policy.HubId==task.HubId && a.Policy.ActivityType==task.TaskType &&
-            (a.Policy.Version==task.Version || task.Version==1 && services.GetRequiredService<HubRuntimeOptions>().SequentialVersionOneCompatibility));
+        var route=catalog.Activities.Single(a=>a.Registration.HubId==task.HubId && a.Registration.ActivityType==task.TaskType &&
+            (a.Registration.Version==task.Version || task.Version==1 && services.GetRequiredService<HubRuntimeOptions>().SequentialVersionOneCompatibility));
         if(!task.Payload.TryGetProperty("__hubContext",out _))
         {
             using var legacyScope=services.CreateScope();

@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using WorkflowCore.Hub;
 using Xunit;
 
@@ -53,12 +54,12 @@ public sealed class HubPartitionCandidateRegistryTests
     }
     private static HubMatchingPartitionLease Owner(string hub,int partition=0,long epoch=1) =>
         new(hub,partition,"owner"+epoch,"http://localhost",epoch,new DateTime(2035,1,1,0,0,0,DateTimeKind.Utc));
-    private static HubTaskCandidate Candidate(string hub,long seq,string type="activity",string? definition=null,int? version=null,string[]? keys=null,int partition=0) =>
-        new(Guid.NewGuid(),seq,hub,partition,type,1,definition is null ? null : Guid.NewGuid(),definition,version,0,new DateTime(2029,1,1,0,0,0,DateTimeKind.Utc),keys ?? []);
+    private static HubTaskCandidate Candidate(string hub,long seq,string type="activity",string? definition=null,int? version=null,int partition=0) =>
+        new(Guid.NewGuid(),seq,hub,partition,type,1,definition is null ? null : Guid.NewGuid(),definition,version,0,new DateTime(2029,1,1,0,0,0,DateTimeKind.Utc));
     private static HubCandidateCoordinatorOptions Options(int entries=4,int probe=8) =>
         new(PageSize:1,PageWireBytes:256,PartitionEntries:entries,ProcessEntries:entries*4,
             PartitionBytes:65536,ProcessBytes:262144,PartitionCredits:8,ProcessCredits:32,
-            ProcessPartitions:4,SequenceProbeEverySweeps:probe,RecoveryCadence:TimeSpan.FromSeconds(10),ResourceCooldown:TimeSpan.FromSeconds(5));
+            ProcessPartitions:4,SequenceProbeEverySweeps:probe,RecoveryCadence:TimeSpan.FromSeconds(10),AdmissionCooldown:TimeSpan.FromSeconds(5));
     private static HubCandidateCredit Credit(string id,string hub,string type="activity",HubWorkflowCapability[]? pins=null) =>
         new(id,id,[new(hub,type,1)],pins);
     private static async Task Pump(HubPartitionCandidateRegistry registry, Clock clock, int turns, Action? perTurn=null)
@@ -156,27 +157,6 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.True(source.Calls.Count > 1);
     }
 
-    [Fact]
-    public async Task FailedPageEnrichmentAdvancesBoundedRecoveryAndRetriesOnFreshHorizon()
-    {
-        var clock = new Clock(); var source = new Discovery { AlwaysFailHydration = true };
-        var hub = "page-enrichment-fairness"; var item = Candidate(hub, 1) with { EnrichmentLoaded = false };
-        source.Add(hub, 0, HubCandidateStream.ReadyDue, item);
-        using var registry = new HubPartitionCandidateRegistry(source, Options(entries: 8), clock);
-        registry.StartGeneration(Owner(hub), 64);
-        await registry.RunOneTurnAsync(clock.Now, default); // capture horizon
-        var errors = new List<Exception>();
-        await registry.RunOneTurnAsync(clock.Now, default, errors.Add); // bounded hydration fails
-        Assert.Equal("synthetic hydration failure", Assert.Single(errors).Message);
-        Assert.Equal(1, source.HydrationCalls);
-        Assert.Equal(0, registry.Snapshot().Entries);
-
-        source.AlwaysFailHydration = false;
-        for (var i = 0; i < 8; i++) await registry.RunOneTurnAsync(clock.Now, default);
-        Assert.True(source.Calls.Count(x => x.Stream == HubCandidateStream.ReadyDue) >= 2);
-        Assert.Equal(1, registry.Snapshot().Entries);
-        Assert.Equal(2, source.HydrationCalls);
-    }
 
     [Fact]
     public async Task ExactHintFloodIsBoundedAndFallsBackToIndexedRecovery()
@@ -249,6 +229,55 @@ public sealed class HubPartitionCandidateRegistryTests
     }
 
     [Fact]
+    public async Task BackpressuredCreditSearchUsesCapabilityQueuesAndHonorsOlderCredit()
+    {
+        var clock = new Clock();
+        var source = new Discovery();
+        const string hub = "backpressured-capability";
+        var first = Candidate(hub, 65);
+        var second = Candidate(hub, 66);
+        var backlog = Enumerable.Range(1, 64).Select(i => Candidate(hub, i, "unrelated"));
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, backlog.Append(first).Append(second).ToArray());
+        using var registry = new HubPartitionCandidateRegistry(source,
+            Options(entries: 80) with { PageSize = 80, PartitionBytes = 262144, ProcessBytes = 1048576 }, clock);
+        registry.StartGeneration(Owner(hub), 64);
+        await Pump(registry, clock, 2);
+        Assert.Equal(66, registry.Snapshot().Entries);
+
+        // Both compatible candidates are deferred while PostgreSQL admission is full.
+        foreach (var id in new[] { "first-attempt", "second-attempt" })
+        {
+            Assert.True(registry.AddMatchedCredit(hub, 0, 1, Credit(id, hub)));
+            var reservation = registry.TakeReservation(hub, 0, 1)!;
+            registry.Complete(reservation.Id, HubCandidateResolution.AdmissionDeferred, clock.Now);
+            Assert.True(registry.CancelCredit(id));
+        }
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("older", hub)));
+        Assert.Null(registry.TakeReservation(hub, 0, 1));
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var matchingThread = Environment.CurrentManagedThreadId;
+        var checkedEntries = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Name == HubTelemetry.CandidateMatcherEntriesChecked.Name)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<int>((_, count, _, _) =>
+        {
+            if (Environment.CurrentManagedThreadId == matchingThread) checkedEntries += count;
+        });
+        listener.Start();
+        Assert.True(registry.AddMatchedCredit(hub, 0, 1, Credit("newer", hub)));
+        Assert.Equal(3, checkedEntries);
+
+        var older = registry.TakeReservation(hub, 0, 1)!;
+        var newer = registry.TakeReservation(hub, 0, 1)!;
+        Assert.Equal(("older", first.Id), (older.Credit.Id, older.Candidate.Id));
+        Assert.Equal(("newer", second.Id), (newer.Credit.Id, newer.Candidate.Id));
+    }
+
+    [Fact]
     public async Task FullBufferAndNotificationStormStillTraverseAndRediscover()
     {
         var clock = new Clock(); var source = new Discovery(); var hub = "fair";
@@ -312,8 +341,7 @@ public sealed class HubPartitionCandidateRegistryTests
         var clock = new Clock(); var source = new Discovery(); var hub = "unknown-pinned-workflow";
         var unknown = Candidate(hub, 1, "__native_workflow__") with
         {
-            WorkflowId = Guid.NewGuid(), WorkflowMetadataComplete = false,
-            EnrichmentLoaded = true
+            WorkflowId = Guid.NewGuid(), WorkflowMetadataComplete = false
         };
         source.Add(hub, 0, HubCandidateStream.ReadyDue, unknown);
         using var registry = new HubPartitionCandidateRegistry(source, Options(entries: 4), clock);
@@ -328,21 +356,6 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.Null(reservation.Candidate.DefinitionId);
     }
 
-    [Fact]
-    public async Task BlockedResourceDefersLaterPagesUntilWakeAndLeavesOtherWorkEligible()
-    {
-        var clock = new Clock(); var source = new Discovery(); var hub = "resources";
-        var a = Candidate(hub,1,keys:["scope"]); var b = Candidate(hub,2,keys:["scope"]); var c = Candidate(hub,3,keys:["other"]);
-        source.Add(hub,0,HubCandidateStream.ReadyDue,a,b,c);
-        using var registry = new HubPartitionCandidateRegistry(source,Options(entries:5),clock); registry.StartGeneration(Owner(hub),64);
-        Assert.True(registry.AddCredit(hub,0,1,Credit("one",hub)));
-        await Pump(registry,clock,3); var first = registry.TakeReservation(hub,0,1); Assert.NotNull(first); Assert.Equal(a.Id,first.Candidate.Id);
-        registry.Complete(first.Id,HubCandidateResolution.ResourceBlocked,clock.Now,"scope");
-        await Pump(registry,clock,5); var other = registry.TakeReservation(hub,0,1); Assert.NotNull(other); Assert.Equal(c.Id,other.Candidate.Id);
-        registry.Complete(other.Id,HubCandidateResolution.Leased,clock.Now); Assert.True(registry.ReleaseGrantedCredit("one"));
-        Assert.True(registry.AddCredit(hub,0,1,Credit("two",hub))); Assert.Null(registry.TakeReservation(hub,0,1));
-        registry.Notify(hub,0,1,"scope"); var unblocked = registry.TakeReservation(hub,0,1); Assert.NotNull(unblocked); Assert.Equal(a.Id,unblocked.Candidate.Id);
-    }
 
     [Fact]
     public async Task OwnerCancellationRetainsDispatchedCreditAndCandidateUntilResolution()

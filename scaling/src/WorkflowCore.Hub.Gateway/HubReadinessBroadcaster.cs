@@ -73,7 +73,7 @@ public sealed class HubReadinessBroadcaster(
                 HubTelemetry.SseNotifications.Add(1, HubTelemetry.HubTag(hub));
     }
 
-    /// <summary>In-process hint for a task capability or a permit-release rescan.</summary>
+    /// <summary>In-process hint for a task capability or a recovery rescan.</summary>
     public void PublishMatchingHint(string hub, string? type, int version, int? taskPartitionId = null)
     {
         if (!string.IsNullOrEmpty(hub))

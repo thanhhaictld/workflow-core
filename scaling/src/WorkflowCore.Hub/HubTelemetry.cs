@@ -136,7 +136,7 @@ public static class HubTelemetry
         Interlocked.Exchange(ref _candidateBytes, bytes);
     }
     // PostgreSQL hub-scoped advisory lock wait; tracks implicit native-runtime
-    // coordination even if no activity-level FIFO/resource policy is configured.
+    // coordination across runtime replicas.
     public static readonly Histogram<double> NativeEventLaneLockWait =
         Meter.CreateHistogram<double>("workflow_hub_native_event_lane_lock_wait_seconds", "s");
     public static readonly Histogram<double> ClaimDuration =

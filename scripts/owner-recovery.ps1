@@ -133,7 +133,7 @@ function Wait-LabReady {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
             $defs = Invoke-RestMethod "http://127.0.0.1:$lbPort/api/hub/definitions" -Headers @{Authorization="Bearer $env:OWNER_RECOVERY_TOKEN"} -TimeoutSec 3
-            $ready = @($defs | Where-Object { $_.hubId -eq 'policy-benchmark' -and $_.definitionId -in @('policy-unordered','policy-partition-fifo') }).Count -eq 2
+            $ready = @($defs | Where-Object { $_.hubId -eq 'policy-benchmark' -and $_.definitionId -in @('policy-unordered','policy-partition-routed') }).Count -eq 2
             if ($ready) { break }
         } catch { }
         Start-Sleep -Seconds 1
@@ -143,29 +143,7 @@ function Wait-LabReady {
 function Start-Lab {
     Invoke-Compose build hub hub-2 processor monitor
     Invoke-Compose up -d --wait postgres otel-collector prometheus tempo loki grafana postgres-process-exporter
-    # Migration 033 needs a boundary with no old Hub writers. This controls
-    # only this project; operators must quiesce any external writers separately.
-    # The preset replaces processor binaries, so it cannot safely replace an
-    # old worker while any workflow could still need that worker to continue.
-    $hasWorkflowTable = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc "SELECT to_regclass('wfc_scale.hub_workflow') IS NOT NULL"
-    if ($LASTEXITCODE) { throw 'Cannot inspect schema before replacing processor binaries' }
-    if ($hasWorkflowTable.Trim() -eq 't') {
-        $live = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc `
-            "SELECT count(*) FROM wfc_scale.hub_workflow WHERE state IN (0,1) OR (execution_mode='native' AND native_status IN ('Runnable','Suspended'))"
-        if ($LASTEXITCODE) { throw 'Cannot inventory workflows before replacing processor binaries' }
-        if ([long]$live -gt 0) { throw "Cannot replace lab processors: $live nonterminal workflow(s) may require the old binaries; drain or provision compatible workers first" }
-    }
     Invoke-Compose stop hub hub-2
-    if ($hasWorkflowTable.Trim() -eq 't') {
-        # Recheck after Hub writers stop to close the check/stop race. If work
-        # arrived in the gap, restart the existing (not rebuilt) containers.
-        $live = & docker @composeArgs exec -T postgres psql -U $pgUser -d $pgDatabase -Atqc `
-            "SELECT count(*) FROM wfc_scale.hub_workflow WHERE state IN (0,1) OR (execution_mode='native' AND native_status IN ('Runnable','Suspended'))"
-        if ($LASTEXITCODE -or [long]$live -gt 0) {
-            Invoke-Compose start hub hub-2
-            throw 'Cannot replace lab processors: workflow inventory changed or could not be rechecked after quiescing Hubs'
-        }
-    }
     Invoke-Compose stop processor
     Invoke-Compose run --rm --no-deps migrate
     Invoke-Compose up -d --no-deps --force-recreate --wait hub hub-2

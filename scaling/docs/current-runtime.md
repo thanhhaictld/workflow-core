@@ -3,7 +3,7 @@
 > **Architecture decision:** The Hub-native runtime uses **partition-owned,
 > in-memory candidate matching and fenced SSE task delivery** as its primary
 > distributed execution model. PostgreSQL is the authoritative task/lease,
-> concurrency-policy, FIFO, workflow-history and result store.
+> workflow-history and result store.
 >
 > This is the selected architecture for the `make ups-16`
 > development/benchmark presets. It remains under correctness and failover
@@ -24,7 +24,7 @@ flowchart LR
     OWN --> BUF[Bounded per-generation candidate metadata]
     BUF --> MATCH[Match type / version / workflow pins to live credits]
     MATCH --> ADMIT[Bounded concurrent claim-by-ID admission]
-    ADMIT -->|row locks, owner fence, resource permits, journal, commit| PG
+    ADMIT -->|row locks, owner fence, journal, commit| PG
     ADMIT -->|committed leases only| OWN
     TIMER[Embedded Hub scheduler] -->|timers / durable runnable tasks| PG
     PG -.->|committed notifications + reconciliation| OWN
@@ -41,15 +41,18 @@ database credentials.
 
 | Component | Authoritative for | Not authoritative for |
 | --- | --- | --- |
-| PostgreSQL | Task state, owner/lease epoch, attempts, FIFO/resource permits, workflow revisions, history | Worker connections |
+| PostgreSQL | Task state, owner/lease epoch, attempts, workflow revisions, history | Worker connections |
 | Matching owner `(hub, partition, owner epoch)` | Live demand, advisory candidates, bounded reservations, SSE sessions | Durable task existence or permission to execute |
 | Worker lane | Local execution semaphore, side-effect idempotency, heartbeat progress | Task scheduling or overriding a stale lease |
 | Scheduler | Making persisted timers and workflow work eligible | Worker matching or delivery |
 
 Every matching owner is itself elected and fenced in PostgreSQL. Partition
 assignment uses `task.partition_id % matchingPartitionCount`; candidate
-discovery requires a matching count that divides 64. FIFO/resource scopes can
-span these matching partitions and are *always* rechecked transactionally.
+discovery requires a matching count that divides 64. A partition routes tasks
+to an owner. Multiple workers can hold leases in the same partition. Activity
+registration declares identity, version, partition count and its optional
+contract. Worker credits indicate available execution slots. The PostgreSQL claim
+gate bounds concurrent admission SQL. Hub quotas and strict ordering are retired.
 
 ## End-to-end assignment
 
@@ -62,17 +65,16 @@ span these matching partitions and are *always* rechecked transactionally.
    reconciles startup, ownership takeover, overflow, eviction, missed hints,
    due tasks and expired leases.
 2. **Discover once, share across workers:** the current owner reads paginated,
-   index-backed metadata (ID, epoch, type/version, partition, due time and
-   advisory resource keys). It holds bounded candidate buffers and cursors per
+   index-backed task identity, routing and deadlines, with cached workflow pins. It holds bounded candidate buffers and cursors per
    owner generation. No task is leased just for appearing in memory.
 3. **Match to available demand:** each connected worker SSE session advertises
    sequenced free-slot credits. The matcher pairs a compatible buffered
    candidate with **one** credit. Capability and workflow-definition version
-   checks in memory are an optimization, not authorization.
+   checks are repeated in PostgreSQL. Sequence is a preference across currently
+   buffered, compatible candidates. Earlier waiting credits get the first match.
 4. **Claim authoritatively:** a bounded, concurrent admission worker locks and
-   validates matching ownership and task eligibility in PostgreSQL; constrained
-   tasks acquire their canonical resource permits and enforce strict FIFO. An
-   unconstrained batch may be claimed atomically by ID. The transaction writes
+   validates matching ownership and task eligibility in PostgreSQL. A batch of
+   one or more selected task IDs is claimed atomically. The transaction writes
    the new task lease epoch, attempts and workflow history before committing.
 5. **Push committed leases in bounded batches:** the partition owner reserves
    up to **four worker credits per acquisition turn**, matches eligible
@@ -88,8 +90,7 @@ span these matching partitions and are *always* rechecked transactionally.
    dependent work ready and notify the owner.
 
 The candidate reader runs independently of bounded admission workers and the
-uncertainty reaper. This prevents a slow resource lock from blocking discovery
-or lease-retirement bookkeeping. `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY`
+uncertainty reaper. The admission path and discovery each have bounded concurrency. `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY`
 controls the maximum number of local admission groups (default 2). The
 existing PostgreSQL claim gate still applies and should not be configured
 higher than the available connection budget.
@@ -97,36 +98,31 @@ higher than the available connection budget.
 The established candidate matcher remains enabled in the normal presets via
 `WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`. Its indexed discovery query pages
 bounded task identity and routing fields; the registry accounts for page
-memory and batches advisory workflow/resource enrichment only for new entries.
+memory. The reader batches uncached workflow-pin lookups.
 The independent experimental `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` remains
 false by default.
 
 ### Task-ID hint coverage and recovery
 
-Migration `032_hub_candidate_task_id_hints.sql` replaces the 014/030 trigger
-function and expands its trigger to observe task state, due-time and lease-epoch
-changes. The existing partition-owned in-memory matcher remains the normal
+Migrations 032 and 035 install the task notification function. It tracks
+task state, due time and lease epoch. The existing partition-owned in-memory matcher remains the normal
 architecture and is controlled by `WFC_HUB_MATCHING_CANDIDATES_ENABLED`.
 Exact task-ID payloads and hydration are a separate experimental opt-in through
 `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED=true`; Hub task-writer connections set
 the corresponding PostgreSQL session flag. When this new flag is disabled,
-migration 032 preserves migration 030's coarse payload, channel and outbox
-delivery behavior, and suppresses epoch-only producer events. A mixed-version
+the trigger emits coarse readiness payloads for ready inserts and transitions
+to readiness. A mixed-version
 exact-ID payload is conservatively converted to the existing coarse candidate
 rescan. Exact hints route by hub, task ID and task partition; each owner reads
-the row's current state and bounded workflow/resource metadata before adding,
+the row's current state and bounded workflow-pin metadata before adding,
 updating or safely removing the advisory entry. Lease-heartbeat updates do not
 emit hints. Future tasks becoming due and leases expiring without a task-row
 update remain indexed PostgreSQL discovery streams; no future-task timer heap
-or sequence-watermark feed is used. Deletes and out-of-band resource writes
-also rely on authoritative admission and periodic recovery.
+or sequence-watermark feed is used. Deletes rely on authoritative admission and periodic recovery.
 
 In exact-ID opt-in mode, an exact hint is emitted per immediately ready insert and
 relevant state/epoch transition, so workflow fan-out, claims, retries and
-completions produce per-task notifications; a permit release also emits a
-hub-wide hint. In default mode the legacy coarse task hint is retained.
-Policy-change hints use the same opt-in; with task-ID hints off, indexed
-reconciliation remains responsible for observing capacity/policy changes.
+completions produce per-task notifications.
 Outbox
 mode stores each notification separately and the dispatcher deletes those rows
 in the notification transaction. Heartbeats do not add event rows. The bounded
@@ -138,11 +134,7 @@ or `hydration_failure`).
 
 Exact ID hints are deduplicated in bounded listener and owner queues. Queue
 overflow, malformed payloads and hydration failures request recovery; bounded
-periodic scans remain the fallback if even that recovery hint is lost. A
-hub-wide permit-release hint still wakes every owner because resource scopes
-can span matching partitions. Activity policy capacity updates publish the
-same conservative hub-wide invalidation after their database transaction.
-Coarse permit/policy hints can still cause full paged rescans. Local Gateway
+periodic scans remain the fallback if even that recovery hint is lost. Local Gateway
 durable mutations publish a conservative candidate rescan after commit. The
 existing two-second ready-hub reconciliation also requests recovery for each
 currently ready hub, preserving the previous missed-hint and disabled-LISTEN
@@ -164,24 +156,13 @@ the recovery turn budget, and if exact queue memory blocks a page reservation,
 advisory IDs are released to make room for indexed recovery. Existing reservations
 and uncertain claims remain pinned.
 
-Hydration is a bounded primary-key probe over requested IDs. SQL suppresses
-oversized text before returning it and includes resource arrays only when their
-UTF-8 metadata plus base strings fit the share of the actual eligible-result
-budget. When base metadata fits but resource keys do not, the entry carries
-`ResourceKeysComplete=false`; claim admission remains authoritative and reloads
-constraints transactionally. Requested IDs are deduplicated and their parameter
-array is bounded by the wire-byte budget.
+Hydration probes the primary key for requested IDs. SQL suppresses oversized
+identity text before returning it. The reader deduplicates IDs and charges the
+ID array against the wire budget. Indexed discovery uses the same identity
+fields. A bounded workflow-definition LRU serves both discovery and hydration.
+Missing pins remain advisory and PostgreSQL checks the worker pins at admission.
+See [candidate metadata enrichment](hub-candidate-metadata-enrichment.md).
 
-Recovery discovery pages now contain bounded task identity fields only. The
-owner registry reuses matching candidate enrichment already in its bounded
-buffer and hydrates only newly seen or expired entries. A separate bounded
-workflow-definition LRU avoids repeating workflow joins across tasks that share
-a workflow; its limits, TTL, unknown-metadata behavior and query shape are
-documented in [candidate metadata enrichment](hub-candidate-metadata-enrichment.md).
-This applies with task-ID hints off and does not change the existing matcher
-default. It removes enrichment joins/aggregation from every indexed page but
-adds a bounded batched hydration for new entries, so runtime benefit remains to
-be qualified with equal candidate topology and hint flags.
 With default coordinator limits, pending exact IDs are capped at 1,024 per
 owner and 32,768 process-wide, charged at 64 bytes each; one hydration batch is
 at most 128 IDs and 64 KiB of metadata. Persistent candidate entries remain
@@ -191,7 +172,7 @@ The 030 notification outbox is transactionally populated and dispatches
 notifications while deleting rows in the same transaction. It is not a
 replayable task feed: a disconnected listener can miss an already-dispatched
 ID, so bootstrap/takeover and periodic indexed recovery remain required.
-Install additive migration 032 in every schema setup path before deploying the
+Install additive migrations 032 and 035 in every schema setup path before deploying the
 new listener. CI fixtures, the development script and Compose initialization
 apply it after 031. Old listeners
 ignore the added JSON field and fall back to typed readiness scans; the new
@@ -295,8 +276,7 @@ retire matching credits, while outstanding SSE deliveries remain charged to
 their worker session. Failover tests verify bounded credits after completion.
 
 Track workflow/task backlog, schedule-to-start p95/p99, actual lease
-expiries, attempt exhaustion, owner epoch changes, admission wait, resource
-locks, active PostgreSQL connections and activity completion p95/p99. Avoid
+expiries, attempt exhaustion, owner epoch changes, admission wait, active PostgreSQL connections and activity completion p95/p99. Avoid
 treating reduced HTTP calls alone as throughput proof.
 
 Candidate matcher attribution is available through
@@ -304,10 +284,9 @@ Candidate matcher attribution is available through
 `workflow_hub_candidate_match_entries_checked`,
 `workflow_hub_candidate_match_compatibility_checks` and
 `workflow_hub_candidate_match_unmatched_credits`. These describe work in
-already indexed task-type/version queues, including workflow-pin, reservation,
-resource-block and deferred-entry checks, as well as the broader scan in
-`AddMatchedCredit`; they do not mean every worker scans every buffered
-candidate. Demand-to-admission latency and batch fill are recorded separately
+indexed task-type/version queues, including workflow-pin, reservation and
+admission-deferral checks. Both ordinary and backpressured credit allocation
+use the same indexed search. Demand-to-admission latency and batch fill are recorded separately
 from PostgreSQL claim duration. The repeatable in-memory 400/4,000
 lane profile is `HubCandidateMatcherProfileTests`; its timings are diagnostic,
 not unit-test thresholds. SQL discovery and admission remain competing costs;
@@ -337,8 +316,7 @@ locked through commit leaves a testable admission-ceiling hypothesis, not a
 proven bottleneck. Four admission groups are not four executing tasks: each
 group can contain multiple leases, and task execution continues after commit.
 Any experiment with concurrent admission for one partition must be opt-in and
-retain owner fencing, SQL claim gating, renewal/takeover safety, FIFO/resource
-ordering, cancellation and uncertain-commit quarantine. No such concurrency
+retain owner fencing, SQL claim gating, renewal/takeover safety, cancellation and uncertain-commit quarantine. No such concurrency
 change is enabled by this instrumentation.
 
 For a controlled follow-up, use an isolated PostgreSQL 17 database and compare
@@ -348,7 +326,7 @@ and `=2` with the same fixed workflow/task mix, pool 12, claim gate 3, batch cap
 disabled as a separate factor, with warmup and multiple measured runs. Capture
 completed tasks/s, queue and admission p95/p99, claim-gate wait, matcher lock
 and scan histograms, SQL statement calls/time/buffer hits, lease uncertainty,
-attempt/history conservation and resource/FIFO outcomes. Compare SQL discovery
+attempt and history conservation. Compare SQL discovery
 and admission costs because the 15 November review found them to be competing
 cost explanations. If these runs still indicate per-partition owner-row
 serialization, prototype a concurrent-per-partition owner-fenced variant only
@@ -431,7 +409,7 @@ make obs-matcher-failover
 The failover suite runs **before-claim**, **after-claim/pre-send**, and
 **during-execution** owner failures against isolated test databases. It asserts
 owner takeover, candidate mode active on both Hubs, reconnected SSE sessions,
-bounded reconnect latency, eventual completion, FIFO non-overlap, side-effect
+bounded reconnect latency, eventual completion, partition routing, side-effect
 observations, stale heartbeat rejection and matching-credit conservation.
 Tests and local benchmark outcomes must be recorded before production rollout.
 

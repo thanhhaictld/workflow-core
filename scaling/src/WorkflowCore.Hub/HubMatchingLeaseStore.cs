@@ -6,7 +6,7 @@ namespace WorkflowCore.Hub;
 /// <summary>
 /// PostgreSQL authority for matching ownership per logical Hub namespace.
 /// Ownership is a performance/routing lease, not permission to bypass
-/// HubTaskStore's independent durable task leases or resource/FIFO guards.
+/// HubTaskStore's independent durable task leases.
 /// </summary>
 public sealed record HubMatchingLease(string HubId, string OwnerId, string OwnerUrl,
     long Epoch, DateTime LeaseUntil);
