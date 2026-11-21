@@ -47,13 +47,19 @@ public sealed class HubNativeCommitOptimizationTests
         // The signal no longer contains task types. Exactly one notification
         // proves that the immediate dispatch woke the bucket, while the
         // future-due dispatch did not emit an early second notification.
-        var notification = Assert.Single(notifications);
+        var notification = Assert.Single(notifications, IsForThisHub);
         using (var signal = JsonDocument.Parse(notification.Payload))
         {
             Assert.Equal(hub,signal.RootElement.GetProperty("hub").GetString());
             Assert.Equal("signal",signal.RootElement.GetProperty("kind").GetString());
             Assert.Equal(lease.PartitionId % 64,signal.RootElement.GetProperty("partition").GetInt32());
             Assert.False(signal.RootElement.TryGetProperty("taskId",out _));
+        }
+
+        bool IsForThisHub(NpgsqlNotificationEventArgs item)
+        {
+            using var signal = JsonDocument.Parse(item.Payload);
+            return signal.RootElement.GetProperty("hub").GetString() == hub;
         }
 
         Guid activityTaskId;

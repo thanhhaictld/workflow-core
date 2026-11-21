@@ -18,8 +18,8 @@ K6_POLICY_COUNT ?= 300
 K6_POLICY_VUS ?= 60
 K6_POLICY_TIMEOUT_SECONDS ?= 600
 
-GOLDEN_TARGETS := ups-16 obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test
-.PHONY: help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test obs-matcher-failover
+GOLDEN_TARGETS := ups-16 obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test obs-test-light
+.PHONY: help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test obs-test-light obs-matcher-failover
 
 $(GOLDEN_TARGETS): export WFC_HUB_REUSE_SNAPSHOT_CONTRACTS := true
 $(GOLDEN_TARGETS): export WFC_HUB_METRICS_SAMPLER_ENABLED := false
@@ -67,8 +67,11 @@ obs-test: K6_POLICY_COUNT := 16000
 obs-test: K6_POLICY_VUS := 200
 obs-test: K6_POLICY_TIMEOUT_SECONDS := 1800
 
+obs-test-light: K6_POLICY_COUNT := 100
+obs-test-light: K6_POLICY_VUS := 10
+
 help:
-	@$(PWSH) -NoProfile -Command "Write-Output 'Targets: help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test obs-matcher-failover'; Write-Output 'obs-clean removes the ups-16 Compose stack and its volumes.'; Write-Output 'Use pwsh -NoProfile -File scripts/dev.ps1 help for the development stack.'"
+	@$(PWSH) -NoProfile -Command "Write-Output 'Targets: help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-clean obs-test-4k obs-test obs-test-light obs-matcher-failover'; Write-Output 'obs-test-light runs 100 workflows with 10 VUs.'; Write-Output 'obs-clean removes the ups-16 Compose stack and its volumes.'; Write-Output 'Use pwsh -NoProfile -File scripts/dev.ps1 help for the development stack.'"
 
 obs-setup:
 	@$(PWSH) -NoProfile -Command "if (Test-Path -LiteralPath '$(OBS_ENV_FILE)') { Write-Host 'Keeping existing $(OBS_ENV_FILE)' } else { Copy-Item -LiteralPath 'scaling/observability/.env.example' -Destination '$(OBS_ENV_FILE)'; Write-Host 'Created $(OBS_ENV_FILE); edit its token and password before starting.' }"
@@ -83,6 +86,5 @@ obs-matcher-failover:
 	@dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
 	@$(PWSH) -NoProfile -File scaling/benchmarks/hub-matching-failover-suite.ps1
 
-# Large durable audit uses the stress-test path; test runs only small cohorts.
-obs-test:
+obs-test obs-test-light:
 	@$(PWSH) -NoProfile -File scripts/owner-recovery.ps1 stress-test -ComposeFile "$(OBS_COMPOSE_FILE)" -EnvFile "$(OBS_ENV_FILE)" -Project "$(OWNER_PROJECT)" -PortBase $(OWNER_PORT_BASE) -Processors 16 -Results "$(OWNER_RESULTS)" -Python "$(OWNER_PYTHON)" -Filter "$(OWNER_TEST_FILTER)" -Victim "$(OWNER_FAULT_VICTIM)" -Mode "$(OWNER_FAULT_MODE)" -Repeat $(OWNER_FAULT_REPEAT) -StressMode "$(K6_POLICY_MODE)" -Count $(K6_POLICY_COUNT) -Vus $(K6_POLICY_VUS) -TimeoutSeconds $(K6_POLICY_TIMEOUT_SECONDS)
