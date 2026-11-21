@@ -1,5 +1,7 @@
 # Parallel candidate discovery and fenced admission (MVP)
 
+See [lightweight, coalesced shard-level PostgreSQL signals](hub-lightweight-ready-signals.md) for the CPU-reduction protocol, throttle, recovery, and migration.
+
 See [multi-Hub matching and async SSE delivery](hub-multi-hub-sse-admission-mvp.md) for an end-to-end architecture diagram, current REST/SSE endpoints, and failover sequence.
 
 
