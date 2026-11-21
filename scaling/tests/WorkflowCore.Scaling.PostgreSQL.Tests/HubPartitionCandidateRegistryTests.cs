@@ -459,6 +459,29 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.Equal(1,registry.Snapshot().CompletedSweeps);
     }
 
+
+    [Fact]
+    public async Task ThrottledSignalQueryRotatesBucketsDuringAHotBucketStorm()
+    {
+        var clock = new Clock();
+        var source = new Discovery();
+        var hub = "signal-bucket-fairness";
+        using var registry = new HubPartitionCandidateRegistry(source,
+            Options() with { SignalThrottleCadence = TimeSpan.FromMilliseconds(100) }, clock);
+        registry.StartGeneration(Owner(hub),32);
+        await Pump(registry,clock,6);
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
+        var before = source.Calls.Count;
+        for (var i=0;i<20;i++) registry.Notify(hub,0,1,bucket:0);
+        registry.Notify(hub,0,1,bucket:32);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        clock.Advance(TimeSpan.FromMilliseconds(101));
+        for (var i=0;i<20;i++) registry.Notify(hub,0,1,bucket:0);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(new[] {0,32},source.Calls.Skip(before).Select(x => x.Bucket).ToArray());
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
+    }
+
     [Fact]
     public async Task RecoverySweepsRevisitWorkWithoutNotifications()
     {
