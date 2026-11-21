@@ -83,6 +83,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         // resets its cursor without restarting the full recovery sweep.
         public readonly Dictionary<int, (HubCandidateCursor? Cursor, int Version)> SignalBuckets = [];
         public DateTimeOffset NextSignalQuery;
+        public int NextSignalBucket;
         public readonly Queue<Guid> ExactIds = new();
         public readonly HashSet<Guid> ExactSet = [];
         public int WaitingDemands;
@@ -504,7 +505,11 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 {
                     // Single indexed ReadyDue page, without scanning every
                     // physical bucket or capturing a global sequence horizon.
-                    var first = p.SignalBuckets.First();
+                    // Round-robin physical buckets, so one saturated bucket
+                    // cannot starve a second bucket with ready work.
+                    var first = p.SignalBuckets.OrderBy(pair =>
+                        pair.Key >= p.NextSignalBucket ? pair.Key : pair.Key + 64).First();
+                    p.NextSignalBucket = (first.Key + 1) % 64;
                     targetedBucket = first.Key; targetedVersion = first.Value.Version;
                     stream = new(first.Key, HubCandidateStream.ReadyDue) { Cursor = first.Value.Cursor };
                     if (!BookPageLocked(p)) return false;
