@@ -429,6 +429,36 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.True(registry.AddCredit(hub,0,2,Credit("two",hub)));
     }
 
+
+    [Fact]
+    public async Task BucketSignalUsesThrottledTargetedQueryWithoutRestartingRecovery()
+    {
+        var clock = new Clock();
+        var source = new Discovery();
+        var hub = "light-signal";
+        using var registry = new HubPartitionCandidateRegistry(source,
+            Options() with { SignalThrottleCadence = TimeSpan.FromMilliseconds(100) }, clock);
+        registry.StartGeneration(Owner(hub), 64);
+        await Pump(registry,clock,4); // Finish initial durable recovery sweep.
+        Assert.Equal(1, registry.Snapshot().CompletedSweeps);
+        var initialCaptures = source.Captures;
+        var before = source.Calls.Count;
+        for (var n=0;n<100;n++) registry.Notify(hub,0,1,bucket:0);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(initialCaptures,source.Captures);
+        Assert.Equal(before+1,source.Calls.Count);
+        Assert.Equal(0,source.Calls[^1].Bucket);
+        Assert.Equal(HubCandidateStream.ReadyDue,source.Calls[^1].Stream);
+        for (var n=0;n<100;n++) registry.Notify(hub,0,1,bucket:0);
+        Assert.False(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(before+1,source.Calls.Count); // Still throttled.
+        clock.Advance(TimeSpan.FromMilliseconds(101));
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(before+2,source.Calls.Count);
+        Assert.Equal(initialCaptures,source.Captures);
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
+    }
+
     [Fact]
     public async Task RecoverySweepsRevisitWorkWithoutNotifications()
     {

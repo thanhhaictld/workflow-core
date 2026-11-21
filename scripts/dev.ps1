@@ -158,6 +158,9 @@ function Apply-DatabaseSchema {
     Write-Host 'Applying 035_hub_ready_notifications.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/035_hub_ready_notifications.sql')
+    Write-Host 'Applying 036_hub_lightweight_shard_signals.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/036_hub_lightweight_shard_signals.sql')
 }
 
 function Install-Monitor {

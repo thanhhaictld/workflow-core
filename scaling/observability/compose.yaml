@@ -63,6 +63,7 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/033_hub_business_compatibility.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/034_hub_task_admission.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/035_hub_ready_notifications.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/036_hub_lightweight_shard_signals.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
