@@ -7,20 +7,22 @@ internal sealed record HubCandidateCoordinatorOptions(
     long PartitionBytes = 4 * 1024 * 1024, long ProcessBytes = 64 * 1024 * 1024,
     int PartitionCredits = 2048, int ProcessCredits = 16384, int ProcessPartitions = 1024,
     int SequenceProbeEverySweeps = 8, TimeSpan? RecoveryCadence = null,
-    TimeSpan? AdmissionCooldown = null, bool RequireDemand = false)
+    TimeSpan? AdmissionCooldown = null, bool RequireDemand = false,
+    TimeSpan? SignalThrottleCadence = null)
 {
     // Reserve both page objects and temporary materialization. UTF-8 wire bytes
     // alone undercount managed UTF-16 strings, array slots and object headers.
     internal long PageReservationBytes => (long)PageWireBytes * 4 + (long)PageSize * 1024;
     internal TimeSpan Recovery => RecoveryCadence ?? TimeSpan.FromSeconds(10);
     internal TimeSpan Cooldown => AdmissionCooldown ?? TimeSpan.FromSeconds(1);
+    internal TimeSpan SignalThrottle => SignalThrottleCadence ?? TimeSpan.FromMilliseconds(100);
     internal void Validate()
     {
         if (PageSize is < 1 or > 1024 || PageWireBytes is < 256 or > 16 * 1024 * 1024 ||
             PartitionEntries < PageSize || ProcessEntries < PartitionEntries ||
             PartitionBytes < PageReservationBytes || ProcessBytes < PartitionBytes ||
             PartitionCredits < 1 || ProcessCredits < PartitionCredits || ProcessPartitions < 1 || SequenceProbeEverySweeps < 1 ||
-            Recovery <= TimeSpan.Zero || Cooldown <= TimeSpan.Zero)
+            Recovery <= TimeSpan.Zero || Cooldown <= TimeSpan.Zero || SignalThrottle <= TimeSpan.Zero)
             throw new ArgumentException("Invalid candidate coordinator limits");
     }
 }
@@ -77,6 +79,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public readonly LinkedList<Guid> Pending = new();
         public readonly List<Stream> Streams = [];
         public readonly HashSet<int> HintedBuckets = [];
+        // At most 64 independent signal buckets per owner; an updated signal
+        // resets its cursor without restarting the full recovery sweep.
+        public readonly Dictionary<int, (HubCandidateCursor? Cursor, int Version)> SignalBuckets = [];
+        public DateTimeOffset NextSignalQuery;
         public readonly Queue<Guid> ExactIds = new();
         public readonly HashSet<Guid> ExactSet = [];
         public int WaitingDemands;
@@ -186,7 +192,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             // Dispatched claims may have committed. The candidate and credit
             // stay charged until the caller supplies a definite resolution.
         }
-        p.Pending.Clear();
+        p.Pending.Clear(); p.SignalBuckets.Clear();
         ReleaseStoppedPartitionLocked(p);
     }
 
@@ -382,9 +388,20 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         lock (_sync)
             if (GetLocked(hub, partition, epoch, out var p))
             {
-                p.Dirty = true;
-                p.HeadRequested = true;
-                if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition) p.HintedBuckets.Add(bucket.Value);
+                if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition)
+                {
+                    // Bucket signals are advisory, not full sweep requests.
+                    if (!p.SignalBuckets.TryGetValue(bucket.Value, out var previous))
+                        p.SignalBuckets[bucket.Value] = (null, 1);
+                    else p.SignalBuckets[bucket.Value] = (null, unchecked(previous.Version + 1));
+                    p.HintedBuckets.Add(bucket.Value);
+                }
+                else
+                {
+                    // Unknown bucket is a deliberate hub-wide recovery signal.
+                    p.Dirty = true;
+                    p.HeadRequested = true;
+                }
                 MatchLocked(p, _clock.GetUtcNow());
             }
     }
@@ -423,6 +440,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     {
         Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null;
         bool capture = false; bool booked = false; bool head = false;
+        int? targetedBucket = null; int targetedVersion = 0;
         try
         {
             lock (_sync)
@@ -439,7 +457,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     if (_options.RequireDemand && !candidate.Credits.Any(c => !c.Granted && c.Reservation is null) &&
                         (candidate.WaitingDemands == 0 || GroupCredits(candidate.Owner.HubId, candidate.Owner.Partition) >= _options.PartitionCredits ||
                          _credits.Count >= _options.ProcessCredits)) continue;
-                    if (candidate.ExactIds.Count == 0 && candidate.Horizon is null && !candidate.Dirty && now < candidate.NextSweep) continue;
+                    var targetedDue = candidate.SignalBuckets.Count > 0 && now >= candidate.NextSignalQuery;
+                    if (candidate.ExactIds.Count == 0 && candidate.Horizon is null &&
+                        !candidate.Dirty && now < candidate.NextSweep && !targetedDue) continue;
                     p = candidate; p.TurnInFlight = true;
                     _nextPartition = (index + 1) % all.Length; break;
                 }
@@ -474,6 +494,18 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     }
                     p.ExactHydrationsSinceRecovery++;
                     booked = true;
+                }
+                else if (p.Horizon is null && !p.Dirty && now < p.NextSweep &&
+                         p.SignalBuckets.Count > 0 && now >= p.NextSignalQuery)
+                {
+                    // Single indexed ReadyDue page, without scanning every
+                    // physical bucket or capturing a global sequence horizon.
+                    var first = p.SignalBuckets.First();
+                    targetedBucket = first.Key; targetedVersion = first.Value.Version;
+                    stream = new(first.Key, HubCandidateStream.ReadyDue) { Cursor = first.Value.Cursor };
+                    if (!BookPageLocked(p)) return false;
+                    booked = true;
+                    p.NextSignalQuery = now + _options.SignalThrottle;
                 }
                 else if (p.Horizon is null) { capture = true; p.Dirty = false; p.HeadRequested = false; p.ForwardSinceHead = 0; }
                 else
@@ -531,7 +563,8 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 }
                 return true;
             }
-            var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, p.Horizon!, stream.Cursor,
+            var horizon = p.Horizon ?? new HubCandidateHorizon(long.MaxValue, now.UtcDateTime);
+            var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, horizon, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
             if (page.WorkflowMetadataError is { } metadataError) reportError?.Invoke(metadataError);
@@ -573,7 +606,18 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     p.Bytes += size; _bytes += size; _entries++;
                     MatchLocked(p, now);
                 }
-                if (!head)
+                if (targetedBucket is int bucket)
+                {
+                    // A newer notification invalidates the cursor captured by
+                    // this query. Never drop a newly committed wake-up.
+                    if (p.SignalBuckets.TryGetValue(bucket, out var current) &&
+                        current.Version == targetedVersion)
+                    {
+                        if (page.EndOfStream) p.SignalBuckets.Remove(bucket);
+                        else p.SignalBuckets[bucket] = (page.Next, current.Version);
+                    }
+                }
+                else if (!head)
                 {
                     stream.Cursor = page.Next;
                     stream.Done = page.EndOfStream;
