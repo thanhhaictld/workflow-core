@@ -22,6 +22,8 @@ The default PostgreSQL statement trigger emits signals **only for tasks becoming
 
 Multiple rows in one statement for the same `(hub, partition_id % 64)` generate **one matching notification**. PostgreSQL also deduplicates identical `(channel,payload)` notifications within a transaction. The legacy `wfc_hub_task_ready` channel still receives hub-wide signals for older listeners; those also dedupe transaction-locally. Separate transactions are **not** coalesced in PostgreSQL, so the Hub coalesces them separately.
 
+Workflow and task mutation endpoints still wake legacy matchers and readiness SSE subscribers. With PostgreSQL notifications enabled, their unpartitioned wakeups leave candidate discovery to the committed database signal and periodic recovery. Setting `WFC_HUB_PG_NOTIFY_ENABLED=false` retains local hub-wide candidate wakeups.
+
 **Experimental exact-ID mode:** Explicit `wfc.hub_candidate_task_id_hints='on'` retains the existing per-row exact-task-ID trigger, including invalidations after a claim or completion. It is not the standard MVP path; `make ups-16` keeps this mode disabled. Explicit legacy outbox sessions remain supported as a compatibility/test path. **Never enable an outbox dispatcher without configuring the producer to write to that outbox.**
 
 ### Targeted discovery

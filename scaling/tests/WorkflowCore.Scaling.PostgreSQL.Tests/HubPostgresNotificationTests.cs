@@ -493,24 +493,54 @@ public sealed class HubPostgresNotificationTests
         finally { await listener.StopAsync(CancellationToken.None); }
     }
 
-    [Fact]
-    public async Task LocalFallbackAndReadyHubReconciliationRequestCandidateRecovery()
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("FaLsE", false)]
+    [InlineData("0", false)]
+    public async Task UnpartitionedLocalFallbackDefersCandidateDiscoveryWhenNotificationsAreEnabled(
+        string? notifyFlag, bool notificationsEnabled)
     {
-        if (Database is null) return;
+        if (Database is not { } database) return;
+        const string setting = "WFC_HUB_PG_NOTIFY_ENABLED";
+        var previous = Environment.GetEnvironmentVariable(setting);
+        try
+        {
+            Environment.SetEnvironmentVariable(setting, notifyFlag);
+            await VerifyLocalFallbackAsync(database, notificationsEnabled);
+        }
+        finally { Environment.SetEnvironmentVariable(setting, previous); }
+    }
+
+    private static async Task VerifyLocalFallbackAsync(string database, bool notificationsEnabled)
+    {
         var hub = Hub();
-        await using var store = new HubTaskStore(Database);
+        await using var store = new HubTaskStore(database);
         using var readiness = new HubReadinessBroadcaster(store,
             new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         var rescans = new List<(string Hub, int? Partition)>();
         readiness.CandidateRescanRequested += (observed, _, _, partition) => rescans.Add((observed, partition));
-        readiness.PublishFallback(hub, "local", 1, 64);
-        Assert.Contains(rescans, hint => hint == (hub, 64));
+        var legacyHints = new List<(string Hub, string? Type, int Version, int? Partition)>();
+        readiness.TaskReady += (observed, type, version, partition) => legacyHints.Add((observed, type, version, partition));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var subscriber = readiness.Subscribe([hub], timeout.Token).GetAsyncEnumerator();
+        Assert.True(await subscriber.MoveNextAsync()); // Initial SSE wakeup.
+
+        readiness.PublishFallback(hub, "local", 1);
+        Assert.Equal((hub, "local", 1, (int?)null), Assert.Single(legacyHints));
+        Assert.True(await subscriber.MoveNextAsync());
+        Assert.Equal(hub, subscriber.Current);
+        if (notificationsEnabled) Assert.Empty(rescans);
+        else Assert.Equal((hub, (int?)null), Assert.Single(rescans));
+
         rescans.Clear();
-        await using var writer = new NpgsqlConnection(Database); await writer.OpenAsync();
+        readiness.PublishFallback(hub, "local", 1, 64);
+        Assert.Equal((hub, (int?)64), Assert.Single(rescans));
+        rescans.Clear();
+        await using var writer = new NpgsqlConnection(database); await writer.OpenAsync();
         await InsertTaskAsync(writer, hub);
         await readiness.ReconcileReadyAsync(default);
-        Assert.Contains(rescans, hint => hint.Hub == hub);
+        Assert.Contains(rescans, hint => hint == (hub, null));
     }
 
     [Fact]

@@ -19,6 +19,7 @@ public sealed class HubReadinessBroadcaster(
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
     private readonly bool _pushEnabled =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
+    private readonly bool _postgresNotificationsEnabled = PostgresHubNotificationListener.Enabled;
     private long _lastMatchingRecoveryAt;
     private long _lastHubWideRecoveryAt;
     private readonly bool _candidateSignalsEnabled =
@@ -45,16 +46,15 @@ public sealed class HubReadinessBroadcaster(
 
     /// <summary>
     /// Wake legacy matchers and SSE subscribers after a local durable mutation,
-    /// and request bounded indexed recovery. Exact PostgreSQL task-ID events use
-    /// PublishCandidateTaskChanged and do not dirty every owner bucket.
+    /// and forward any available partition hint. PostgreSQL signals drive candidate
+    /// discovery for unpartitioned hints unless the listener is disabled.
     /// </summary>
     public void PublishFallback(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
-        if (!string.IsNullOrEmpty(hub))
-        {
-            TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
-            CandidateRescanRequested?.Invoke(hub, taskType, version, taskPartitionId);
-        }
+        if (taskPartitionId.HasValue || !_postgresNotificationsEnabled)
+            PublishMatchingHint(hub, taskType, version, taskPartitionId);
+        else
+            PublishMatchingFallbackHint(hub, taskType, version, taskPartitionId);
         PublishLegacy(hub);
     }
 

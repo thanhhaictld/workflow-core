@@ -22,6 +22,14 @@ public sealed class PostgresHubNotificationListener : BackgroundService
     private int _listening;
     private int _recoveryRequired;
     public bool IsListening => Volatile.Read(ref _listening) == 1;
+    internal static bool Enabled
+    {
+        get
+        {
+            var flag = Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_ENABLED");
+            return flag != "0" && !string.Equals(flag, "false", StringComparison.OrdinalIgnoreCase);
+        }
+    }
     private readonly string _connectionString;
     private readonly HubReadinessBroadcaster _readiness;
     private readonly ILogger<PostgresHubNotificationListener> _logger;
