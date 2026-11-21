@@ -10,7 +10,7 @@ lease admission and SSE push delivery. See [current runtime](current-runtime.md)
 | --- | --- |
 | `distributed-runtime.yml` | Compile .NET / PostgreSQL runtime, integration tests, Next.js monitor and 1,000 native workflow end-to-end |
 | `workflow-hub-candidate-sse-failover.yml` | Crash owner before claim, after COMMIT before send and during execution; assert fencing, no duplicates, credit cleanup and recovery |
-| `workflow-hub-sse-push-e2e.yml` | Two Hubs / four matching partitions, eight workers, all three explicit ordering policies and post-crash worker reuse using the **primary** SSE transport |
+| `workflow-hub-sse-push-e2e.yml` | Two Hubs / four matching partitions, eight workers, both routed workflow types and post-crash worker reuse using the **primary** SSE transport |
 | `workflow-hub-observability.yml` | Candidate registry Prometheus metrics, Grafana, Next.js live proxy and SSE worker registrations |
 
 The upstream `dotnet.yml` validates legacy Workflow Core libraries on

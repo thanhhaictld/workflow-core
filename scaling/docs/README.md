@@ -2,7 +2,7 @@
 
 ## Start here — primary architecture
 
-**[Hub-native architecture: partition candidate matching + fenced SSE push](current-runtime.md)** is the canonical description of the current distributed runtime, its configuration, failure recovery and tests. PostgreSQL is the sole lease and resource/FIFO authority; in-memory matching is advisory.
+**[Hub-native architecture: partition candidate matching + fenced SSE push](current-runtime.md)** is the canonical description of the current distributed runtime, its configuration, failure recovery and tests. PostgreSQL is the sole lease authority; in-memory matching is advisory.
 
 This is one selected architecture, not a menu of recommended polling/streaming alternatives. Adaptive HTTP claims and historical stream adapters remain implementation-level compatibility and emergency rollback paths. The development preset uses two Hub replicas, matching partitions and SSE push.
 
@@ -13,9 +13,6 @@ This is one selected architecture, not a menu of recommended polling/streaming a
 | [Native workflow contracts](hub-native-fluent-runtime.md) | C# workflow definitions, activity registration, supported constructs and version compatibility |
 | [Scheduler and remote hosts](hub-remote-scheduler-implementation.md) | Generic Gateway, internal scheduling module, and separate processor/provisioner hosts |
 | [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, discovery/hydration shape, and conservative unknown metadata behavior |
-| [Activity policy updates](activity-policy-update.md) | Controlled updates to concurrency and resource policy |
-| [Ordering](explicit-partition-ordering.md) | Business ordering and strict FIFO, independently of matching partition routing |
-| [Keyed resource removal plan](hub-keyed-resource-removal-plan.md) | Proposed removal of all business-key policies, compatibility drain, and simpler partition/quota admission |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
 | [CI contract](ci-primary-architecture.md) | Current correctness gates, manual 16-processor stress, removed historical CI |
 | [Monitoring service](../monitor/README.md) | Next.js monitor and development API |

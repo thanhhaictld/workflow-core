@@ -254,8 +254,8 @@ def workload(run_id, count, mode='unordered'):
             try:
                 code, result = http(PORTS['lb'], '/api/hub/workflows', {
                     'hubId': 'policy-benchmark', 'definitionId': {
-                        'unordered': 'policy-unordered', 'keyed': 'policy-keyed-fifo',
-                        'partition': 'policy-partition-fifo'}[mode],
+                        'unordered': 'policy-unordered',
+                        'partition': 'policy-partition-routed'}[mode],
                     'version': 1, 'runId': run_id, 'idempotencyKey': f'{run_id}:{i}',
                     'input': {'resourceId': 'account-' + str(i % 8)}}, timeout=15)
                 if code == 202:
@@ -433,7 +433,7 @@ if __name__ == '__main__':
     parser.add_argument('--seconds', type=int, default=85)
     parser.add_argument('--fault', choices=['kill', 'pause', 'database'], default='kill')
     parser.add_argument('--count', type=int, default=200)
-    parser.add_argument('--mode', choices=['unordered', 'keyed', 'partition'], default='unordered')
+    parser.add_argument('--mode', choices=['unordered', 'partition'], default='unordered')
     args = parser.parse_args()
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,60}', args.project):
         raise ValueError('Project must be a lowercase Docker-safe name')

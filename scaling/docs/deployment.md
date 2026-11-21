@@ -2,21 +2,13 @@
 
 **Status:** reference procedure; not a production-approved runbook.
 
-For this in-progress branch, migration `033_hub_business_compatibility.sql` follows `032_hub_candidate_task_id_hints.sql`;
-quiesce all old Hub/task writers before applying it and resume only gate-aware writers.
-Existing executions retain compatibility; retain original remote worker binaries for any old versions that can still continue. See the [removal plan](hub-keyed-resource-removal-plan.md) before rollout. Apply migrations
-as configured in Compose and the development script, skipping retired index-only
-migrations 023 and 025–027. Migration 031 requires autocommit, outside a transaction
-block; see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 032
-only changes advisory readiness hints and trigger coverage; it does not rewrite
-task history. Start with the
-[current runtime guide](current-runtime.md) and
-follow the [native Provisioner guide](hub-native-fluent-runtime.md). Migration 012
-preserves existing sequential runs. The procedure below describes the direct
-PostgreSQL runtime.
+For the Hub runtime, apply the migrations listed in the Compose setup through
+`035_hub_ready_notifications.sql`. This setup skips retired migrations 033 and
+034 and leaves existing historical data intact. Migration 031 requires
+autocommit outside a transaction block. See the [current Hub runtime guide](current-runtime.md).
 
-The distributed runtime is incompatible with the old Workflow Core
-dispatch/control-plane path for the **same workflow rows**.
+The procedure below covers the direct PostgreSQL runtime. Use a separate
+workflow ledger from Hub-managed execution and the upstream dispatch path.
 
 ## 1. Prerequisites
 
@@ -28,7 +20,7 @@ dispatch/control-plane path for the **same workflow rows**.
   deployment version across worker replicas.
 - Secrets provisioned through a secret manager, not source files.
 - An authorization layer if exposing any API outside the isolated test lab.
-- Sufficient connection pool capacity for `Concurrency × replicas`, transaction
+- Sufficient connection pool capacity for `Concurrency Ã— replicas`, transaction
   times and heartbeat traffic; validate with load tests.
 
 ## 2. Database install
@@ -93,7 +85,7 @@ Completion is asynchronous; 202 means accepted, not finished.
 flowchart TB
     ingress["Authenticated API / ingress (to be implemented)"]
     subgraph cluster["Kubernetes, one region"]
-        api["API replicas — optional separation"]
+        api["API replicas â€” optional separation"]
         w1["Worker pod 1"]
         w2["Worker pod 2"]
         w3["Worker pod N"]

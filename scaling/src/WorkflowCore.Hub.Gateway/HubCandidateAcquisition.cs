@@ -238,7 +238,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if(!Enabled) return;
-        using var timer=new PeriodicTimer(TimeSpan.FromMilliseconds(50));
+        using var timer=new PeriodicTimer(TimeSpan.FromMilliseconds(100));
         var timerTick=timer.WaitForNextTickAsync(stoppingToken).AsTask();
         var wake=_wake.Reader.ReadAsync(stoppingToken).AsTask();
         var reaper=0;
@@ -357,26 +357,17 @@ public sealed class HubCandidateAcquisition : BackgroundService
             var picked=new List<HubCandidateReservation>();
             for(var i=0;i<_batchSize;i++)
             { var r=_registry.TakeReservation(owner.HubId,owner.Partition,owner.Epoch); if(r is null) break; picked.Add(r); }
-            if (_crossWorkerBatch)
+            if (_crossWorkerBatch && picked.Count > 1)
             {
-                var mixed = picked.Where(r => r.Candidate.ResourceKeysComplete && r.Candidate.ResourceKeys.Length == 0).ToList();
-                if (mixed.Count > 1)
-                {
-                    await AdmitMixedAsync(mixed, ct);
-                    picked.RemoveAll(mixed.Contains);
-                }
+                await AdmitMixedAsync(picked, ct);
+                return;
             }
             foreach(var group in picked.GroupBy(x=>_demands.TryGetValue(x.Credit.Id,out var d)?d:null))
             {
                 var reservations=group.ToList(); var demand=group.Key;
                 if(demand is null || demand.Result.Task.IsCompleted)
                 { foreach(var r in reservations) _registry.AbandonBeforeAdmission(r.Id); continue; }
-                // Only metadata with a complete empty resource set may take the
-                // atomic batch path. Other tasks use a single fenced claim.
-                var first=reservations[0]; var unconstrained=first.Candidate.ResourceKeysComplete && first.Candidate.ResourceKeys.Length==0;
-                var batch=unconstrained ? reservations.Where(r=>r.Candidate.ResourceKeysComplete && r.Candidate.ResourceKeys.Length==0).ToList() : [first];
-                foreach(var extra in reservations.Except(batch)) { _registry.AbandonBeforeAdmission(extra.Id); _demands.TryRemove(extra.Credit.Id,out _); }
-                await AdmitAsync(demand,batch,ct);
+                await AdmitAsync(demand,reservations,ct);
             }
     }
 
@@ -476,21 +467,16 @@ public sealed class HubCandidateAcquisition : BackgroundService
         HubTelemetry.CandidateDemandToAdmissionDuration.Record(
             System.Diagnostics.Stopwatch.GetElapsedTime(demand.CreatedAt).TotalSeconds);
         var first=reservations[0]; var request=demand.Request;
-        HubCandidateClaimStatus status; IReadOnlyList<HubLeasedTask> leases; string? blocked=null;
+        HubCandidateClaimStatus status; IReadOnlyList<HubLeasedTask> leases;
         try
         {
-            if(reservations.Count>1)
-            {
-                var batch=new HubCandidateBatchClaim(reservations.Select(r=>new HubCandidateBatchItem(r.Candidate.Id,r.Candidate.Epoch)).ToArray(),
-                    request.WorkerId,first.Owner.HubId,first.Owner.Partition,first.PartitionCount,request.Capabilities,request.Workflows,first.Owner,TimeSpan.FromSeconds(45));
-                var result=await _tasks.ClaimCandidateBatchAsync(batch,ct); status=result.Status; leases=result.Leases;
-            }
-            else
-            {
-                var claim=new HubCandidateClaim(first.Candidate.Id,first.Candidate.Epoch,request.WorkerId,first.Owner.HubId,
-                    first.Owner.Partition,first.PartitionCount,request.Capabilities,request.Workflows,first.Owner,TimeSpan.FromSeconds(45));
-                var result=await _tasks.ClaimCandidateAsync(claim,ct); status=result.Status; leases=result.Lease is null ? [] : [result.Lease]; blocked=result.ResourceKey;
-            }
+            var claim = new HubCandidateBatchClaim(
+                reservations.Select(r => new HubCandidateBatchItem(r.Candidate.Id, r.Candidate.Epoch)).ToArray(),
+                request.WorkerId, first.Owner.HubId, first.Owner.Partition, first.PartitionCount,
+                request.Capabilities, request.Workflows, first.Owner, TimeSpan.FromSeconds(45));
+            var result = await _tasks.ClaimCandidateBatchAsync(claim, ct);
+            status = result.Status;
+            leases = result.Leases;
         }
         catch(Exception error)
         {
@@ -506,11 +492,10 @@ public sealed class HubCandidateAcquisition : BackgroundService
             var outcome=status switch {
                 HubCandidateClaimStatus.Leased when hasLease => HubCandidateResolution.Leased,
                 HubCandidateClaimStatus.CommitOutcomeUnknown when hasLease => HubCandidateResolution.CommitOutcomeUnknown,
-                HubCandidateClaimStatus.ResourceBlocked => HubCandidateResolution.ResourceBlocked,
                 HubCandidateClaimStatus.AdmissionDeferred => HubCandidateResolution.AdmissionDeferred,
                 HubCandidateClaimStatus.OwnerLost => HubCandidateResolution.OwnerLost,
                 _ => HubCandidateResolution.Unavailable };
-            _registry.Complete(r.Id,outcome,DateTimeOffset.UtcNow,blocked);
+            _registry.Complete(r.Id,outcome,DateTimeOffset.UtcNow);
             if(hasLease && outcome is HubCandidateResolution.Leased or HubCandidateResolution.CommitOutcomeUnknown)
                 _retained[(lease!.Id,lease.Epoch)]=new(r.Credit.Id,outcome==HubCandidateResolution.CommitOutcomeUnknown?r.Id:null,lease,request.WorkerId);
         }

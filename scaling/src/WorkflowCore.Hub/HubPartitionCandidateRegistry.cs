@@ -7,13 +7,13 @@ internal sealed record HubCandidateCoordinatorOptions(
     long PartitionBytes = 4 * 1024 * 1024, long ProcessBytes = 64 * 1024 * 1024,
     int PartitionCredits = 2048, int ProcessCredits = 16384, int ProcessPartitions = 1024,
     int SequenceProbeEverySweeps = 8, TimeSpan? RecoveryCadence = null,
-    TimeSpan? ResourceCooldown = null, bool RequireDemand = false)
+    TimeSpan? AdmissionCooldown = null, bool RequireDemand = false)
 {
     // Reserve both page objects and temporary materialization. UTF-8 wire bytes
     // alone undercount managed UTF-16 strings, array slots and object headers.
     internal long PageReservationBytes => (long)PageWireBytes * 4 + (long)PageSize * 1024;
     internal TimeSpan Recovery => RecoveryCadence ?? TimeSpan.FromSeconds(10);
-    internal TimeSpan Cooldown => ResourceCooldown ?? TimeSpan.FromSeconds(1);
+    internal TimeSpan Cooldown => AdmissionCooldown ?? TimeSpan.FromSeconds(1);
     internal void Validate()
     {
         if (PageSize is < 1 or > 1024 || PageWireBytes is < 256 or > 16 * 1024 * 1024 ||
@@ -29,7 +29,7 @@ internal sealed record HubCandidateCredit(string Id, string WorkerId,
     IReadOnlyList<HubCapability> Capabilities, IReadOnlyList<HubWorkflowCapability>? Workflows);
 internal sealed record HubCandidateReservation(Guid Id, HubMatchingPartitionLease Owner,
     int PartitionCount, HubCandidateCredit Credit, HubTaskCandidate Candidate, CancellationToken OwnerStopped);
-internal enum HubCandidateResolution { Leased, Unavailable, ResourceBlocked, AdmissionDeferred, OwnerLost, CommitOutcomeUnknown }
+internal enum HubCandidateResolution { Leased, Unavailable, AdmissionDeferred, OwnerLost, CommitOutcomeUnknown }
 internal enum HubCandidateUncertainResolution { LeaseConfirmed, AuthoritativeNoCommit, RetireExpiredCredit }
 internal sealed record HubCandidateOversizedObservation(string Hub, int Bucket, HubCandidateStream Stream, HubCandidateOversized Entry);
 internal sealed record HubCandidateCoordinatorSnapshot(int Partitions, int Entries, long Bytes,
@@ -50,7 +50,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public long Order = order;
         public DateTimeOffset DeferredUntil;
         public Guid? Reservation;
-        public bool RefreshPending;
     }
     private sealed class Credit(HubCandidateCredit value, long bytes)
     {
@@ -75,7 +74,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public readonly Dictionary<(string Type, int Version), SortedSet<(long Sequence, Guid Id)>> Capabilities = new();
         public readonly LinkedList<Credit> Credits = new();
         public readonly LinkedList<Guid> Pending = new();
-        public readonly Dictionary<string, DateTimeOffset> Blocked = new(StringComparer.Ordinal);
         public readonly List<Stream> Streams = [];
         public readonly HashSet<int> HintedBuckets = [];
         public readonly Queue<Guid> ExactIds = new();
@@ -188,30 +186,48 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             // stay charged until the caller supplies a definite resolution.
         }
         p.Pending.Clear();
-        foreach (var key in p.Blocked.Keys.ToArray()) RemoveBlockedLocked(p,key);
         ReleaseStoppedPartitionLocked(p);
     }
 
     internal bool AddCredit(string hub, int partition, long epoch, HubCandidateCredit credit)
+    {
+        var item = CreateCredit(credit);
+        lock (_sync)
+        {
+            if (!GetLocked(hub, partition, epoch, out var p) || !CanAddCreditLocked(p, item)) return false;
+            InstallCreditLocked(p, item);
+            MatchLocked(p, _clock.GetUtcNow());
+            return true;
+        }
+    }
+
+    private static Credit CreateCredit(HubCandidateCredit credit)
     {
         ArgumentNullException.ThrowIfNull(credit);
         if (string.IsNullOrWhiteSpace(credit.Id) || credit.Id.Length > 256 ||
             string.IsNullOrWhiteSpace(credit.WorkerId) || credit.WorkerId.Length > 128 ||
             credit.Capabilities.Count is < 1 or > 128 || credit.Workflows?.Count > 128)
             throw new ArgumentException("Invalid candidate credit");
+
         var copy = credit with { Capabilities = credit.Capabilities.ToArray(), Workflows = credit.Workflows?.ToArray() };
-        var bytes = CreditSize(copy);
-        lock (_sync)
-        {
-            if (!GetLocked(hub, partition, epoch, out var p) || _credits.ContainsKey(credit.Id) ||
-                GroupCredits(hub,partition) >= _options.PartitionCredits || _credits.Count >= _options.ProcessCredits ||
-                GroupBytes(hub,partition) + bytes > _options.PartitionBytes || _bytes + bytes > _options.ProcessBytes) return false;
-            var item = new Credit(copy, bytes); p.Credits.AddLast(item); _credits.Add(copy.Id, (p, item));
-            p.Bytes += bytes; _bytes += bytes;
-            MatchLocked(p, _clock.GetUtcNow());
-            return true;
-        }
+        return new Credit(copy, CreditSize(copy));
     }
+
+    private bool CanAddCreditLocked(Partition p, Credit credit) =>
+        !_credits.ContainsKey(credit.Value.Id) &&
+        GroupCredits(p.Owner.HubId, p.Owner.Partition) < _options.PartitionCredits &&
+        _credits.Count < _options.ProcessCredits &&
+        GroupBytes(p.Owner.HubId, p.Owner.Partition) + credit.Bytes <= _options.PartitionBytes &&
+        _bytes + credit.Bytes <= _options.ProcessBytes;
+
+    private void InstallCreditLocked(Partition p, Credit credit)
+    {
+        p.Credits.AddLast(credit);
+        _credits.Add(credit.Value.Id, (p, credit));
+        p.Bytes += credit.Bytes;
+        _bytes += credit.Bytes;
+    }
+
     internal bool HasCandidateCapacity(string hub, int partition, long epoch)
     {
         lock (_sync)
@@ -239,33 +255,17 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         {
             if (!GetLocked(hub, partition, epoch, out var p)) return false;
             var now = _clock.GetUtcNow();
-            var started = System.Diagnostics.Stopwatch.GetTimestamp();
-            var checkedEntries = 0;
-            var compatibilityChecks = 0;
-            var matched = false;
-            foreach (var e in p.Entries.Values)
-            {
-                checkedEntries++;
-                if (e.Reservation is not null || e.RefreshPending || e.DeferredUntil > now ||
-                    _reservedTasks.Contains((hub, e.Candidate.Id)) ||
-                    (e.Candidate.ResourceKeysComplete && e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
-                    continue;
-                compatibilityChecks++;
-                if (Compatible(credit, e.Candidate)) { matched = true; break; }
-            }
-            HubTelemetry.CandidateMatcherLockDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
-            HubTelemetry.CandidateMatcherEntriesChecked.Record(checkedEntries);
-            HubTelemetry.CandidateMatcherCompatibilityChecks.Record(compatibilityChecks);
-            if (!matched) HubTelemetry.CandidateMatcherUnmatchedCredits.Record(1);
-            if (!matched) return false;
-            if (!AddCredit(hub, partition, epoch, credit)) return false;
-            var item = _credits[credit.Id].Credit;
-            if (item.Reservation is not null) return true;
-            // An older credit won the available candidate during matching.
-            RemoveCreditLocked(p, item);
-            return false;
+            MatchLocked(p, now);
+            var entry = FindEligibleCandidateLocked(p, credit, now);
+            if (entry is null) return false;
+            var item = CreateCredit(credit);
+            if (!CanAddCreditLocked(p, item)) return false;
+            InstallCreditLocked(p, item);
+            ReserveLocked(p, item, entry);
+            return true;
         }
     }
+
     internal bool CancelCredit(string creditId)
     {
         lock (_sync)
@@ -303,7 +303,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             while (p.Pending.First is not null)
             {
                 var id = p.Pending.First.Value; p.Pending.RemoveFirst();
-                if (_reservations.TryGetValue(id, out var r) && !r.Dispatched && !r.Entry.RefreshPending)
+                if (_reservations.TryGetValue(id, out var r) && !r.Dispatched)
                 { r.Dispatched = true; return r.Value; }
             }
             return null;
@@ -330,7 +330,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     }
     internal IReadOnlyList<HubMatchingPartitionLease> ActiveOwners()
     { lock (_sync) return _partitions.Values.Where(x=>x.Active).Select(x=>x.Owner).ToArray(); }
-    internal void Complete(Guid id, HubCandidateResolution result, DateTimeOffset now, string? blockedResource = null)
+    internal void Complete(Guid id, HubCandidateResolution result, DateTimeOffset now)
     {
         if (!Enum.IsDefined(result)) throw new ArgumentOutOfRangeException(nameof(result));
         lock (_sync)
@@ -346,19 +346,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 return;
             }
             if (result == HubCandidateResolution.AdmissionDeferred) r.Entry.DeferredUntil = now + _options.Cooldown;
-            if (result == HubCandidateResolution.ResourceBlocked)
-            {
-                var until = now + _options.Cooldown;
-                r.Entry.DeferredUntil = until;
-                if (!string.IsNullOrEmpty(blockedResource))
-                {
-                    AddBlockedLocked(r.Partition,blockedResource,until,now);
-                    foreach (var e in r.Partition.Entries.Values)
-                        if (e.Reservation is null && e.Candidate.ResourceKeysComplete && e.Candidate.ResourceKeys.Contains(blockedResource, StringComparer.Ordinal))
-                            e.DeferredUntil = until;
-                }
-            }
-            FinishLocked(r, result is HubCandidateResolution.ResourceBlocked or HubCandidateResolution.AdmissionDeferred,
+            FinishLocked(r, result == HubCandidateResolution.AdmissionDeferred,
                 result == HubCandidateResolution.Leased);
             if (r.Partition.Active) MatchLocked(r.Partition, now);
         }
@@ -388,7 +376,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         else { p.Credits.Remove(credit); p.Credits.AddLast(credit); }
         ReleaseStoppedPartitionLocked(p);
     }
-    internal void Notify(string hub, int partition, long epoch, string? resource = null, int? bucket = null)
+    internal void Notify(string hub, int partition, long epoch, int? bucket = null)
     {
         lock (_sync)
             if (GetLocked(hub, partition, epoch, out var p))
@@ -396,19 +384,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 p.Dirty = true;
                 p.HeadRequested = true;
                 if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition) p.HintedBuckets.Add(bucket.Value);
-                if (resource is not null)
-                {
-                    RemoveBlockedLocked(p, resource);
-                    foreach (var e in p.Entries.Values)
-                        if (!e.Candidate.ResourceKeysComplete || e.Candidate.ResourceKeys.Contains(resource, StringComparer.Ordinal)) e.DeferredUntil = default;
-                }
-                else
-                {
-                    // A hub-wide wake may represent permit release or policy
-                    // capacity change; reconsider blocked metadata conservatively.
-                    foreach (var key in p.Blocked.Keys.ToArray()) RemoveBlockedLocked(p, key);
-                    foreach (var e in p.Entries.Values) e.DeferredUntil = default;
-                }
                 MatchLocked(p, _clock.GetUtcNow());
             }
     }
@@ -446,7 +421,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         Action<Exception>? reportError = null)
     {
         if (!await _scheduler.WaitAsync(0, ct)) return false;
-        Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null; List<Guid>? pageEnrichmentIds = null;
+        Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null;
         bool capture = false; bool booked = false; bool head = false;
         try
         {
@@ -555,86 +530,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, p.Horizon!, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
-            IReadOnlyList<HubTaskCandidate> pageItems = page.Items;
-            var enrichmentIds = new List<Guid>(page.Items.Count);
-            pageEnrichmentIds = enrichmentIds;
-            var enrichedByCache = new Dictionary<Guid, HubTaskCandidate>(page.Items.Count);
-            var cacheReuseIds = new HashSet<Guid>();
-            lock (_sync)
-            {
-                if (!p.Active) return true;
-                foreach (var item in page.Items)
-                {
-                    if (p.Entries.TryGetValue(item.Id, out var existing) && existing.Candidate.EnrichmentLoaded &&
-                        (existing.Candidate.TaskType is not ("__workflow__" or "__native_workflow__") ||
-                            !existing.Candidate.WorkflowId.HasValue || existing.Candidate.WorkflowMetadataExpiresAt > now) &&
-                        existing.Candidate.Epoch <= item.Epoch && SameStableMetadataIdentity(existing.Candidate, item))
-                    {
-                        cacheReuseIds.Add(item.Id);
-                        enrichedByCache[item.Id] = item with
-                        {
-                            DefinitionId = existing.Candidate.DefinitionId,
-                            DefinitionVersion = existing.Candidate.DefinitionVersion,
-                            ResourceKeys = existing.Candidate.ResourceKeys,
-                            ResourceKeysComplete = existing.Candidate.ResourceKeysComplete,
-                            WorkflowMetadataComplete = existing.Candidate.WorkflowMetadataComplete,
-                            WorkflowMetadataExpiresAt = existing.Candidate.WorkflowMetadataExpiresAt,
-                            EnrichmentLoaded = true
-                        };
-                    }
-                    else if (item.EnrichmentLoaded)
-                    {
-                        // Eligible pages already contain the task metadata and
-                        // resource keys; only exact-ID hints need hydration.
-                        enrichedByCache[item.Id] = item;
-                    }
-                    else
-                    {
-                        if (existing is not null && existing.Reservation is null &&
-                            !_reservedTasks.Contains((p.Owner.HubId, item.Id))) existing.RefreshPending = true;
-                        enrichmentIds.Add(item.Id);
-                    }
-                }
-            }
-            if (page.WorkflowMetadataError is { } pageMetadataError) reportError?.Invoke(pageMetadataError);
-            if (enrichmentIds.Count != 0)
-            {
-                HubTelemetry.CandidateHydrationCalls.Add(1);
-                HubCandidateHydrationPage enriched;
-                try
-                {
-                    enriched = await _reader.HydrateAsync(p.Owner.HubId, p.Owner.Partition, p.Count,
-                        enrichmentIds, _options.PageWireBytes, linked.Token);
-                }
-                catch (Exception error) when (!linked.IsCancellationRequested)
-                {
-                    // Keep this bounded page from monopolizing the owner. Its
-                    // cursor can advance because a dirty fresh horizon will
-                    // retry every eligible ID; meanwhile later streams/pages
-                    // and other admissions keep getting service.
-                    lock (_sync) if (p.Active)
-                    {
-                        stream.Cursor = page.Next;
-                        stream.Done = page.EndOfStream;
-                        p.Dirty = true;
-                        foreach (var id in enrichmentIds)
-                            if (p.Entries.TryGetValue(id, out var stale) && stale.Reservation is null &&
-                                !_reservedTasks.Contains((p.Owner.HubId, id))) RemoveEntryLocked(p, stale);
-                        if (head) { p.HeadRequested = true; p.ForwardSinceHead = 8; }
-                        else p.ForwardSinceHead++;
-                        if (p.Streams.All(x => x.Done)) EndSweepLocked(p, now);
-                    }
-                    HubTelemetry.CandidateRecoveryRequests.Add(1,
-                        new KeyValuePair<string, object?>("reason", "page_enrichment_failure"));
-                    reportError?.Invoke(error);
-                    return true;
-                }
-                HubTelemetry.CandidateHydrationRows.Add(enriched.Items.Count);
-                HubTelemetry.CandidateHydrationOversized.Add(enriched.Oversized);
-                if (enriched.WorkflowMetadataError is { } workflowError) reportError?.Invoke(workflowError);
-                foreach (var item in enriched.Items) enrichedByCache[item.Id] = item;
-            }
-            pageItems = enrichedByCache.Values.ToArray();
+            if (page.WorkflowMetadataError is { } metadataError) reportError?.Invoke(metadataError);
             // A base identity larger than the entire configured page cannot be
             // safely materialized within this owner's memory reservation. Surface
             // the limit rather than silently dropping the row on every sweep.
@@ -650,32 +546,10 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     if (p.Entries.TryGetValue(marker.Id, out var old) && old.Reservation is null &&
                         !_reservedTasks.Contains((p.Owner.HubId, marker.Id))) RemoveEntryLocked(p, old);
                 }
-                foreach (var unresolved in page.Items.Where(x => !enrichedByCache.ContainsKey(x.Id)))
-                {
-                    if (p.Entries.TryGetValue(unresolved.Id, out var stale) && stale.Reservation is null &&
-                        !_reservedTasks.Contains((p.Owner.HubId, unresolved.Id)) && stale.Candidate.Epoch <= unresolved.Epoch)
-                        RemoveEntryLocked(p, stale);
-                }
-                foreach (var item in pageItems)
+                foreach (var item in page.Items)
                 {
                     if (item.HubId != p.Owner.HubId || item.PartitionId % p.Count != p.Owner.Partition || item.PartitionId % 64 != stream.Bucket)
                         throw new InvalidOperationException("Discovery returned a candidate outside its owner stream");
-                    if (cacheReuseIds.Contains(item.Id) && p.Entries.TryGetValue(item.Id, out var cached))
-                    {
-                        if (cached.Reservation is not null || cached.Candidate.Epoch > item.Epoch ||
-                            _reservedTasks.Contains((p.Owner.HubId, item.Id))) continue;
-                        var cachedSize = CandidateSize(item);
-                        var sizeDelta = cachedSize - cached.Size;
-                        if (sizeDelta > p.InFlightBytes)
-                            throw new InvalidOperationException("Cached candidate update exceeded its managed memory reservation");
-                        cached.Candidate = item;
-                        cached.Size = cachedSize;
-                        cached.RefreshPending = false;
-                        if (sizeDelta > 0) p.InFlightBytes -= sizeDelta;
-                        else if (sizeDelta < 0) p.InFlightBytes += -sizeDelta;
-                        MatchLocked(p, now);
-                        continue;
-                    }
                     var deferredUntil = default(DateTimeOffset);
                     if (p.Entries.TryGetValue(item.Id, out var old))
                     {
@@ -711,8 +585,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         {
             if (p is not null) lock (_sync) if (p.Active)
             {
-                foreach (var id in pageEnrichmentIds ?? [])
-                    if (p.Entries.TryGetValue(id, out var entry)) entry.RefreshPending = false;
                 p.Dirty = true;
             }
             throw;
@@ -722,9 +594,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             if (p is not null) lock (_sync) if (p.Active)
             {
                 if (capture || hydrateIds is not null) p.Dirty = true;
-                foreach (var id in pageEnrichmentIds ?? [])
-                    if (p.Entries.TryGetValue(id, out var entry)) entry.RefreshPending = false;
-                if (pageEnrichmentIds is not null) p.Dirty = true;
                 if (hydrateIds is not null) p.ExactHydrationsSinceRecovery = Math.Max(8, p.ExactHydrationsSinceRecovery);
                 if (hydrateIds is not null) RequeueExactLocked(p, hydrateIds);
                 if (hydrateIds is not null) HubTelemetry.CandidateRecoveryRequests.Add(1,
@@ -825,7 +694,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         // Evict only unreserved metadata; never evict a claim or uncertain credit.
         while (GroupEntries(p.Owner.HubId,p.Owner.Partition) + count > _options.PartitionEntries ||
                GroupBytes(p.Owner.HubId,p.Owner.Partition) + bytes > _options.PartitionBytes)
-            if (!EvictOneLocked(p) && !EvictBlockedLocked(p)) return false;
+            if (!EvictOneLocked(p)) return false;
         while (_entries + count > _options.ProcessEntries || _bytes + bytes > _options.ProcessBytes)
             if (!EvictOneLocked(null)) return false;
         p.InFlightEntries += count; p.InFlightBytes += bytes; p.Bytes += bytes;
@@ -856,66 +725,58 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private void MatchLocked(Partition p, DateTimeOffset now)
     {
         if (!p.Active) return;
+        foreach (var credit in p.Credits)
+        {
+            if (credit.Reservation is not null || credit.Granted) continue;
+            var entry = FindEligibleCandidateLocked(p, credit.Value, now);
+            if (entry is not null) ReserveLocked(p, credit, entry);
+        }
+    }
+
+    private Entry? FindEligibleCandidateLocked(Partition p, HubCandidateCredit credit, DateTimeOffset now)
+    {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var checkedEntries = 0;
         var compatibilityChecks = 0;
-        var unmatchedCredits = 0;
-        foreach (var key in p.Blocked.Where(x => x.Value <= now).Select(x => x.Key).ToArray()) RemoveBlockedLocked(p,key);
-        foreach (var credit in p.Credits.ToArray())
+        Entry? best = null;
+        foreach (var capability in credit.Capabilities)
         {
-            if (credit.Reservation is not null || credit.Granted) continue;
-            Entry? entry = null;
-            foreach (var capability in credit.Value.Capabilities)
+            if (capability.HubId != p.Owner.HubId ||
+                !p.Capabilities.TryGetValue((capability.TaskType, capability.Version), out var queue)) continue;
+            foreach (var (sequence, taskId) in queue)
             {
-                if (capability.HubId != p.Owner.HubId || !p.Capabilities.TryGetValue((capability.TaskType,capability.Version), out var queue)) continue;
-                foreach (var (_, taskId) in queue)
-                {
-                    checkedEntries++;
-                    var e = p.Entries[taskId];
-                    if (entry is not null && e.Candidate.Sequence >= entry.Candidate.Sequence) break;
-                    if (e.Reservation is null && !e.RefreshPending && e.DeferredUntil <= now &&
-                        !_reservedTasks.Contains((p.Owner.HubId,e.Candidate.Id)) &&
-                        (!e.Candidate.ResourceKeysComplete || !e.Candidate.ResourceKeys.Any(p.Blocked.ContainsKey)))
-                    {
-                        compatibilityChecks++;
-                        if (Compatible(credit.Value,e.Candidate)) { entry = e; break; }
-                    }
-                }
+                checkedEntries++;
+                if (best is not null &&
+                    (sequence, taskId).CompareTo((best.Candidate.Sequence, best.Candidate.Id)) >= 0) break;
+                var entry = p.Entries[taskId];
+                if (entry.Reservation is not null || entry.DeferredUntil > now ||
+                    _reservedTasks.Contains((p.Owner.HubId, taskId))) continue;
+                compatibilityChecks++;
+                if (!CompatibleWorkflow(credit, entry.Candidate)) continue;
+                best = entry;
+                break;
             }
-            if (entry is null) { unmatchedCredits++; continue; }
-            var id = Guid.NewGuid();
-            var value = new HubCandidateReservation(id,p.Owner,p.Count,credit.Value,entry.Candidate,p.Stop.Token);
-            var reservation = new Reservation(value,p,entry,credit);
-            entry.Reservation = id; credit.Reservation = id; _reservedTasks.Add((p.Owner.HubId,entry.Candidate.Id));
-            _reservations.Add(id,reservation); p.Pending.AddLast(id);
         }
         HubTelemetry.CandidateMatcherLockDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
         HubTelemetry.CandidateMatcherEntriesChecked.Record(checkedEntries);
         HubTelemetry.CandidateMatcherCompatibilityChecks.Record(compatibilityChecks);
-        if (unmatchedCredits > 0) HubTelemetry.CandidateMatcherUnmatchedCredits.Record(unmatchedCredits);
+        if (best is null) HubTelemetry.CandidateMatcherUnmatchedCredits.Record(1);
+        return best;
     }
-    private void AddBlockedLocked(Partition p, string key, DateTimeOffset until, DateTimeOffset now)
+
+    private void ReserveLocked(Partition p, Credit credit, Entry entry)
     {
-        if (key.Length > 4096) return;
-        foreach (var expired in p.Blocked.Where(x => x.Value <= now).Select(x => x.Key).ToArray()) RemoveBlockedLocked(p,expired);
-        if (p.Blocked.ContainsKey(key)) { p.Blocked[key] = until; return; }
-        var size = 128 + StringSize(key);
-        while (p.Blocked.Count >= _options.PartitionEntries) if (!EvictBlockedLocked(p)) return;
-        if (GroupBytes(p.Owner.HubId,p.Owner.Partition) + size > _options.PartitionBytes || _bytes + size > _options.ProcessBytes) return;
-        p.Blocked.Add(key,until); p.Bytes += size; _bytes += size;
+        var id = Guid.NewGuid();
+        var value = new HubCandidateReservation(id, p.Owner, p.Count, credit.Value, entry.Candidate, p.Stop.Token);
+        entry.Reservation = id;
+        credit.Reservation = id;
+        _reservedTasks.Add((p.Owner.HubId, entry.Candidate.Id));
+        _reservations.Add(id, new Reservation(value, p, entry, credit));
+        p.Pending.AddLast(id);
     }
-    private void RemoveBlockedLocked(Partition p, string key)
+
+    private static bool CompatibleWorkflow(HubCandidateCredit credit, HubTaskCandidate task)
     {
-        if (p.Blocked.Remove(key)) { var size = 128 + StringSize(key); p.Bytes -= size; _bytes -= size; }
-    }
-    private bool EvictBlockedLocked(Partition p)
-    {
-        if (p.Blocked.Count == 0) return false;
-        var key = p.Blocked.MinBy(x => x.Value).Key; RemoveBlockedLocked(p,key); return true;
-    }
-    private static bool Compatible(HubCandidateCredit credit, HubTaskCandidate task)
-    {
-        if (!credit.Capabilities.Any(c => c.HubId == task.HubId && c.TaskType == task.TaskType && c.Version == task.Version)) return false;
         if (task.TaskType is not ("__workflow__" or "__native_workflow__") || credit.Workflows is null) return true;
         // A missing/oversized workflow definition is advisory-unknown. Let the
         // fenced DB admission check decide so unavailable metadata cannot strand
@@ -924,9 +785,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         return task.DefinitionId is not null && task.DefinitionVersion.HasValue && credit.Workflows.Any(w =>
             w.HubId == task.HubId && w.DefinitionId == task.DefinitionId && w.Version == task.DefinitionVersion);
     }
-    private static bool SameStableMetadataIdentity(HubTaskCandidate old, HubTaskCandidate current) =>
-        old.HubId == current.HubId && old.PartitionId == current.PartitionId && old.TaskType == current.TaskType &&
-        old.Version == current.Version && old.WorkflowId == current.WorkflowId && old.Sequence == current.Sequence;
     private long GroupBytes(string hub, int partition) => _accountedPartitions
         .Where(p => p.Owner.HubId == hub && p.Owner.Partition == partition).Sum(p => p.Bytes);
     private int GroupEntries(string hub, int partition) => _accountedPartitions
@@ -935,7 +793,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         .Where(p => p.Owner.HubId == hub && p.Owner.Partition == partition).Sum(p => p.Credits.Count);
     private static long StringSize(string? value) => value is null ? 0 : 32L + 2L * value.Length;
     private static long CandidateSize(HubTaskCandidate c) => 512L + StringSize(c.HubId) + StringSize(c.TaskType) +
-        StringSize(c.DefinitionId) + c.ResourceKeys.Sum(k => 16L + StringSize(k));
+        StringSize(c.DefinitionId);
     private static long CreditSize(HubCandidateCredit c) => 512L + StringSize(c.Id) + StringSize(c.WorkerId) +
         c.Capabilities.Sum(x => 128L + StringSize(x.HubId) + StringSize(x.TaskType)) +
         (c.Workflows?.Sum(x => 128L + StringSize(x.HubId) + StringSize(x.DefinitionId)) ?? 0);

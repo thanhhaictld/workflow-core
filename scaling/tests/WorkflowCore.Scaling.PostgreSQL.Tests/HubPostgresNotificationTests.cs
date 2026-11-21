@@ -64,10 +64,10 @@ public sealed class HubPostgresNotificationTests
         await using var storeA = new HubTaskStore(Database, 3);
         await using var storeB = new HubTaskStore(Database, 3);
         using var readyA = new HubReadinessBroadcaster(storeA,
-            new HubWorkflowStore(storeA, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(storeA, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var readyB = new HubReadinessBroadcaster(storeB,
-            new HubWorkflowStore(storeB, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(storeB, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         var a = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var b = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -208,12 +208,7 @@ public sealed class HubPostgresNotificationTests
             complete.Parameters.AddWithValue("id", id); await complete.ExecuteNonQueryAsync();
         }
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        while (received.Count < 2) await listener.WaitAsync(timeout.Token);
-        Assert.Contains(received, payload =>
-        {
-            using var json = System.Text.Json.JsonDocument.Parse(payload);
-            return json.RootElement.TryGetProperty("kind", out var kind) && kind.GetString() == "permit-release";
-        });
+        while (!received.Any(HasTaskId)) await listener.WaitAsync(timeout.Token);
         Assert.Contains(received, payload =>
         {
             using var json = System.Text.Json.JsonDocument.Parse(payload);
@@ -249,7 +244,7 @@ public sealed class HubPostgresNotificationTests
         await using (var listen = new NpgsqlCommand("LISTEN wfc_hub_matching_ready", listener)) await listen.ExecuteNonQueryAsync();
         await using var writer = new NpgsqlConnection(Database); await writer.OpenAsync();
         await using (var initialSetting = new NpgsqlCommand(
-            "SELECT COALESCE(current_setting('wfc.hub_candidate_task_id_hints',true),'off')", writer))
+            "SELECT COALESCE(NULLIF(current_setting('wfc.hub_candidate_task_id_hints',true),''),'off')", writer))
             Assert.Equal("off", (string?)await initialSetting.ExecuteScalarAsync());
         var id = Guid.NewGuid();
         await using (var insert = new NpgsqlCommand("""
@@ -283,13 +278,11 @@ public sealed class HubPostgresNotificationTests
         {
             complete.Parameters.AddWithValue("id", id); await complete.ExecuteNonQueryAsync();
         }
-        using var releaseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (received is null) await listener.WaitAsync(releaseTimeout.Token);
-        Assert.Equal(2, Volatile.Read(ref readyNotifications));
-        using var release = System.Text.Json.JsonDocument.Parse(received);
-        Assert.Equal(hub, release.RootElement.GetProperty("hub").GetString());
-        Assert.False(release.RootElement.TryGetProperty("kind", out _));
-        Assert.False(release.RootElement.TryGetProperty("taskId", out _));
+        using var quietAfterCompletion = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        try { await listener.WaitAsync(quietAfterCompletion.Token); }
+        catch (OperationCanceledException) when (quietAfterCompletion.IsCancellationRequested) { }
+        Assert.Null(received);
+        Assert.Equal(1, Volatile.Read(ref readyNotifications));
     }
 
     [Fact]
@@ -300,7 +293,7 @@ public sealed class HubPostgresNotificationTests
         using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var store = new HubTaskStore(Database);
         using var readiness = new HubReadinessBroadcaster(store,
-            new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var listener = new PostgresHubNotificationListener(Database, readiness,
             NullLogger<PostgresHubNotificationListener>.Instance, taskIdHintsEnabled: false);
@@ -343,7 +336,7 @@ public sealed class HubPostgresNotificationTests
         using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var store = new HubTaskStore(Database);
         using var readiness = new HubReadinessBroadcaster(store,
-            new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var listener = new PostgresHubNotificationListener(Database, readiness,
             NullLogger<PostgresHubNotificationListener>.Instance, taskIdHintsEnabled: true);
@@ -379,7 +372,7 @@ public sealed class HubPostgresNotificationTests
         using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var store = new HubTaskStore(Database);
         using var readiness = new HubReadinessBroadcaster(store,
-            new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var listener = new PostgresHubNotificationListener(Database, readiness,
             NullLogger<PostgresHubNotificationListener>.Instance, taskIdHintsEnabled: true);
@@ -422,7 +415,7 @@ public sealed class HubPostgresNotificationTests
         var hub = Hub();
         await using var store = new HubTaskStore(Database);
         using var readiness = new HubReadinessBroadcaster(store,
-            new HubWorkflowStore(store, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         var rescans = new List<(string Hub, int? Partition)>();
         readiness.CandidateRescanRequested += (observed, _, _, partition) => rescans.Add((observed, partition));
@@ -502,14 +495,14 @@ public sealed class HubPostgresNotificationTests
     }
 
     [Fact]
-    public async Task ReleasingLeaseNotifiesWaitingWork()
+    public async Task ImmediateRetryNotifiesWaitingWork()
     {
         if (Database is null) return;
         var hub = Hub();
         await using var writer = new NpgsqlConnection(Database);
         await writer.OpenAsync();
         var id = await InsertTaskAsync(writer, hub);
-        // Set up a leased task; completing it releases potentially blocked permits.
+        // Set up a leased task; a retry can make it ready again.
         await using (var lease = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task
             SET state = 1, owner = 'worker', lease_until = now() + interval '1 minute'
@@ -523,7 +516,7 @@ public sealed class HubPostgresNotificationTests
         await using var listener = await ListenAsync(Database, received.Add);
         await using (var complete = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task
-            SET state = 2, owner = NULL, lease_until = NULL WHERE id = @id
+            SET state = 0, owner = NULL, lease_until = NULL, due_at = now() WHERE id = @id
             """, writer))
         {
             complete.Parameters.AddWithValue("id", id);
@@ -540,10 +533,10 @@ public sealed class HubPostgresNotificationTests
         await using var storeOne = new HubTaskStore(Database, 2);
         await using var storeTwo = new HubTaskStore(Database, 2);
         using var readinessOne = new HubReadinessBroadcaster(storeOne,
-            new HubWorkflowStore(storeOne, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(storeOne, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var readinessTwo = new HubReadinessBroadcaster(storeTwo,
-            new HubWorkflowStore(storeTwo, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+            new HubWorkflowStore(storeTwo, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         using var listenerOne = new PostgresHubNotificationListener(Database, readinessOne,
             NullLogger<PostgresHubNotificationListener>.Instance);

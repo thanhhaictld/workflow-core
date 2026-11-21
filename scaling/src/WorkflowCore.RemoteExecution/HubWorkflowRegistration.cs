@@ -54,15 +54,6 @@ public sealed class HubActivityOptions<TStep> where TStep : class, IStepBody
     internal PropertyInfo? ResultProperty { get; private set; }
     internal PropertyInfo? ParametersProperty { get; private set; }
     public int Partitions { get; set; } = 32;
-    public int HubConcurrency { get; set; } = 100;
-    public int Concurrency { get; set; } = 100;
-    public string? ResourceName { get; set; }
-    public string? ResourceField { get; set; }
-    public int ResourceCapacity { get; set; } = 1;
-    public bool StrictFifo { get; set; }
-    // New definitions should opt in explicitly. Legacy preserves older
-    // registrations until they can be migrated without policy drift.
-    public HubActivityOrdering Ordering { get; set; } = HubActivityOrdering.Legacy;
     public HubActivityOptions<TStep> Input<T>(Expression<Func<TStep,T>> property) { Inputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> Output<T>(Expression<Func<TStep,T>> property) { Outputs.Add(Property(property));return this; }
     public HubActivityOptions<TStep> SequentialOutput<T>(Expression<Func<TStep,T>> property) { SequentialOutputs.Add(Property(property));return this; }
@@ -82,7 +73,7 @@ public sealed class HubActivityOptions<TStep> where TStep : class, IStepBody
 internal sealed record HubWorkflowRegistration(string HubId, int Partitions, Type WorkflowType, Type DataType,
     Func<IWorkflowRegistry,IServiceProvider,WorkflowDefinition> Register);
 
-public sealed record HubTypedActivity(Type StepType, HubActivityRegistration Policy,
+public sealed record HubTypedActivity(Type StepType, HubActivityRegistration Registration,
     IReadOnlyList<PropertyInfo> Inputs, IReadOnlyList<PropertyInfo> Outputs, PropertyInfo? ResultProperty = null,
     PropertyInfo? ParametersProperty = null, IReadOnlyList<PropertyInfo>? SequentialOutputs = null)
 {
@@ -132,25 +123,13 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
     {
         var options=new HubActivityOptions<TStep>();configure(options);
         if(string.IsNullOrWhiteSpace(hubId)||hubId.Length>80||string.IsNullOrWhiteSpace(name)||name.Length>80||
-           name.StartsWith("__",StringComparison.Ordinal)||version<1||options.Partitions is <1 or >4096||
-           options.Concurrency<1||options.HubConcurrency<1||options.ResourceCapacity<1||
-           !Enum.IsDefined(options.Ordering))
+           name.StartsWith("__",StringComparison.Ordinal)||version<1||options.Partitions is <1 or >4096)
             throw new ArgumentException("Invalid typed activity registration");
         if(options.Inputs.Distinct().Count()!=options.Inputs.Count || options.Outputs.Distinct().Count()!=options.Outputs.Count ||
            options.SequentialOutputs.Distinct().Count()!=options.SequentialOutputs.Count)
             throw new ArgumentException("Duplicate activity properties");
         if(options.ParametersProperty is not null && options.Inputs.Count!=1)
             throw new ArgumentException("ActivityParameters maps the entire native Activity input to one declared property");
-        if(options.ResourceField is not null && !options.Inputs.Any(p=>HubTypedActivity.PropertyName(p)==options.ResourceField))
-            throw new ArgumentException("Resource field must be a declared activity input");
-        var keyed = options.Ordering is HubActivityOrdering.KeyedExclusive or
-            HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded;
-        if(keyed && (string.IsNullOrWhiteSpace(options.ResourceName) ||
-                     string.IsNullOrWhiteSpace(options.ResourceField)))
-            throw new ArgumentException("Keyed activity ordering requires ResourceName and ResourceField");
-        if((options.Ordering is HubActivityOrdering.Unordered or HubActivityOrdering.PartitionSerial) &&
-           (options.ResourceName is not null || options.ResourceField is not null))
-            throw new ArgumentException("Resource fields are invalid for unordered/partition policy");
         var contract=JsonSerializer.SerializeToElement(new{
             inputs=options.Inputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
             outputs=options.Outputs.Select(p=>new{name=HubTypedActivity.PropertyName(p),type=p.PropertyType.FullName}).ToArray(),
@@ -159,9 +138,7 @@ public sealed class HubRuntimeRegistrationBuilder(IServiceCollection services)
             implementation=typeof(TStep).Assembly.ManifestModule.ModuleVersionId
         });
         services.TryAddTransient<TStep>();
-        services.AddSingleton(new HubTypedActivity(typeof(TStep),new(hubId,name,version,options.Partitions,
-            options.HubConcurrency,options.Concurrency,options.ResourceName,options.ResourceField,
-            options.ResourceCapacity,options.StrictFifo,contract,options.Ordering),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
+        services.AddSingleton(new HubTypedActivity(typeof(TStep),new(hubId,name,version,options.Partitions,contract),options.Inputs.ToArray(),options.Outputs.ToArray(),options.ResultProperty,options.ParametersProperty,
             options.SequentialOutputs.ToArray()));
         return this;
     }
@@ -219,10 +196,10 @@ public sealed class HubNativeCatalog
         IWorkflowRegistry registry,IServiceProvider sp,HubRuntimeOptions options)
     {
         Activities=activities.ToArray();
-        if(options.SequentialVersionOneCompatibility && Activities.GroupBy(a=>(a.Policy.HubId,a.Policy.ActivityType)).Any(g=>g.Count()>1))
+        if(options.SequentialVersionOneCompatibility && Activities.GroupBy(a=>(a.Registration.HubId,a.Registration.ActivityType)).Any(g=>g.Count()>1))
             throw new InvalidOperationException("Sequential v1 aliases require one target version per activity name");
-        if(Activities.GroupBy(a=>(a.Policy.HubId,a.StepType)).Any(g=>g.Count()>1) ||
-           Activities.GroupBy(a=>(a.Policy.HubId,a.Policy.ActivityType,a.Policy.Version)).Any(g=>g.Count()>1))
+        if(Activities.GroupBy(a=>(a.Registration.HubId,a.StepType)).Any(g=>g.Count()>1) ||
+           Activities.GroupBy(a=>(a.Registration.HubId,a.Registration.ActivityType,a.Registration.Version)).Any(g=>g.Count()>1))
             throw new InvalidOperationException("Duplicate typed activity identity or routed step type");
         var metadata=new List<HubDefinitionRegistration>();
         foreach(var registration in registrations)
@@ -239,8 +216,8 @@ public sealed class HubNativeCatalog
                     implementation=registration.WorkflowType.Assembly.ManifestModule.ModuleVersionId,
                     steps=definition.Steps.Select(s=>new{stepId=s.Id,name=s.Name,bodyType=s.BodyType.FullName,
                         children=s.Children,compensationStepId=s.CompensationStepId,
-                        activityType=Activities.SingleOrDefault(a=>a.Policy.HubId==registration.HubId && a.StepType==s.BodyType)?.Policy.ActivityType,
-                        kind=Activities.Any(a=>a.Policy.HubId==registration.HubId && a.StepType==s.BodyType)?"Activity":"Native"}).ToArray()})));
+                        activityType=Activities.SingleOrDefault(a=>a.Registration.HubId==registration.HubId && a.StepType==s.BodyType)?.Registration.ActivityType,
+                        kind=Activities.Any(a=>a.Registration.HubId==registration.HubId && a.StepType==s.BodyType)?"Activity":"Native"}).ToArray()})));
         }
         foreach(var activity in Activities)
         {
@@ -258,7 +235,7 @@ public sealed class HubNativeCatalog
     }
     public WorkflowDefinition Find(string hub,string id,int version) => _definitions.GetValueOrDefault((hub,id,version))
         ?? throw new InvalidOperationException("Native workflow version is not registered in this host");
-    internal HubTypedActivity? Route(string hub,Type stepType) => Activities.SingleOrDefault(a=>a.Policy.HubId==hub && a.StepType==stepType);
+    internal HubTypedActivity? Route(string hub,Type stepType) => Activities.SingleOrDefault(a=>a.Registration.HubId==hub && a.StepType==stepType);
     internal WorkflowStep? Step(string hub,string definition,int version,int stepId) =>
         _definitions.GetValueOrDefault((hub,definition,version))?.Steps.FindById(stepId);
 }

@@ -39,7 +39,7 @@ the runtime before running the test, test-4k, smoke-test or stress-test target. 
 k6 targets do not rebuild or start the runtime. Run `pwsh -NoProfile -File scripts/owner-recovery.ps1 db-test`
 separately for the isolated PostgreSQL suite.
 Defaults are `K6_POLICY_COUNT=300`, `K6_POLICY_VUS=60`, and
-`K6_POLICY_TIMEOUT_SECONDS=600`. Partition mode uses the sample's activity-level partition-ordering policy. These are
+`K6_POLICY_TIMEOUT_SECONDS=600`. Partition mode uses a separate routed activity type with the same admission rules. These are
 synthetic 75 ms activities, not production capacity measurements.
 
 The `make ups-16` golden preset always sets `WFC_HUB_METRICS_SAMPLER_ENABLED=false`. For an A/B with the sampler enabled, set `$env:WFC_HUB_METRICS_SAMPLER_ENABLED='true'` and start directly with `pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 16`, then run the same `test` or `stress-test` command. The flag defaults to `true`; `0` and case-insensitive `false` disable it, and it is read at process startup. To return to the golden disabled setting, clear the shell override with `Remove-Item Env:WFC_HUB_METRICS_SAMPLER_ENABLED` and run `make ups-16`.

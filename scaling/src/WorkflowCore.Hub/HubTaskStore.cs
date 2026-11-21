@@ -1,6 +1,4 @@
 using System.Text.Json;
-using System.Security.Cryptography;
-using System.Text;
 using System.Diagnostics;
 using Npgsql;
 using NpgsqlTypes;
@@ -28,10 +26,10 @@ public sealed record HubClaimRequest(string WorkerId, string[] Hubs,
 // deliberately not part of the public worker claim request.
 public sealed record HubClaimOwnerFence(string OwnerId, long Epoch);
 // Captured metadata is advisory; every field is revalidated under the task lock.
-internal enum HubCandidateClaimStatus { Leased, Unavailable, ResourceBlocked, AdmissionDeferred, OwnerLost, CommitOutcomeUnknown }
+internal enum HubCandidateClaimStatus { Leased, Unavailable, AdmissionDeferred, OwnerLost, CommitOutcomeUnknown }
 // Lease is tentative when Status is CommitOutcomeUnknown. It cannot be delivered
 // until a separate durable lookup confirms this exact worker and task epoch.
-internal sealed record HubCandidateClaimResult(HubCandidateClaimStatus Status, HubLeasedTask? Lease = null, string? ResourceKey = null);
+internal sealed record HubCandidateClaimResult(HubCandidateClaimStatus Status, HubLeasedTask? Lease = null);
 internal sealed record HubCandidateClaimTestHooks(
     Func<CancellationToken, Task>? BeforeOwnerRecheck = null,
     Func<NpgsqlTransaction, CancellationToken, Task>? Commit = null);
@@ -67,9 +65,7 @@ public sealed record HubDatabaseDiagnostics(long DatabaseConnections, long Activ
     long ReadyTasks, long LeasedTasks, long DeadTasks);
 
 /// <summary>
-/// PostgreSQL-authoritative Hub task queue. Resources are locked in stable
-/// order before admission; task leases are durable concurrency permits.
-/// Neither SSE nor a client-side semaphore conveys task ownership.
+/// PostgreSQL-authoritative task queue with fenced, durable leases.
 /// </summary>
 public sealed class HubTaskStore : IAsyncDisposable
 {
@@ -107,7 +103,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                       WHEN 1 THEN t.attempts<t.max_attempts AND t.lease_until<now()
                       ELSE false
                   END
-                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w WHERE w.id=t.workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                   AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR o.pins IS NULL OR o.pins = 'null'::jsonb OR EXISTS (
                       SELECT 1 FROM wfc_scale.hub_workflow w,jsonb_to_recordset(o.pins) AS p(hub text,definition text,version integer)
@@ -120,7 +115,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         )
         UPDATE wfc_scale.hub_task t SET state=1,owner=p.worker,last_owner=p.worker,epoch=t.epoch+1,
             attempts=t.attempts+1,lease_until=now()+@lease,updated_at=now()
-        FROM picked p WHERE t.id=p.id
+        -- Give the update target an indexable ID predicate independent of the
+        -- join so a small queue does not get scanned for each batch.
+        FROM picked p WHERE t.id=p.id AND t.id=ANY(ARRAY(SELECT id FROM picked))
         RETURNING t.id,t.hub_id,t.partition_id,t.task_type,t.task_version,t.workflow_id,t.payload::text,
             t.epoch,t.attempts,t.lease_until,COALESCE(t.workflow_step,t.native_step_id)
         """;
@@ -136,7 +133,7 @@ public sealed class HubTaskStore : IAsyncDisposable
     private readonly bool _demandAwareAdmissionEnabled;
     private readonly SemaphoreSlim _claimWaitSlots;
     // Opt-in: atomically lease batches of tasks without any resource constraints.
-    // Constrained tasks retain the original task -> resource row lock path.
+    // REST pulls can also use atomic queue batches.
     private readonly bool _unconstrainedBatchClaimsEnabled;
     // Index-backed filter for matching shard counts dividing 64; explicit opt-out
     // retains the legacy modulo expression for comparison.
@@ -205,120 +202,10 @@ public sealed class HubTaskStore : IAsyncDisposable
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
         Guid? workflowId, string? requestKey, CancellationToken ct)
     {
-        // Direct producers may use only fixed, non-keyed operational quotas.
-        // Compare complete canonical identities, not a caller-controlled prefix.
-        var allowed = new HashSet<string>(StringComparer.Ordinal)
-        {
-            $"hub:{route.HubId}:{HubPolicyDigest(route.HubId)}",
-            $"hub:{route.HubId}:{HubPolicyDigest("all")}",
-            $"activity:{route.HubId}:{route.TaskType}:{HubPolicyDigest(route.TaskType)}",
-            $"activity:{route.HubId}:{route.TaskType}:{HubPolicyDigest("all")}",
-            $"workflow-task:{route.HubId}:{route.TaskType}:{HubPolicyDigest("all")}"
-        };
-        var retired = route.Ordering is HubActivityOrdering.KeyedExclusive or HubActivityOrdering.KeyedFifo or HubActivityOrdering.KeyedBounded ||
-            route.Resources.Any(r => r.StrictFifo || r.Capacity < 1 || !allowed.Contains(r.Key));
         var id = Guid.NewGuid();
         var partition = HubPartitionRouter.ForWorkflow(workflowId ?? id, route.PartitionCount);
-        var constraints = route.ResourcesForPartition(partition);
         await using var db = await _dataSource.OpenConnectionAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
-
-        if (retired)
-        {
-            // Reconcile an already accepted direct enqueue without creating any
-            // resources. A workflow ID supplied by a caller grants no exemption.
-            if (requestKey is not null)
-            {
-                await using var existing = new NpgsqlCommand("""
-                    SELECT id, task_type=@type AND task_version=@version AND payload=@payload
-                      AND workflow_id IS NOT DISTINCT FROM @workflow
-                    FROM wfc_scale.hub_task WHERE hub_id=@hub AND request_key=@request
-                    """,db,tx);
-                existing.Parameters.AddWithValue("hub",route.HubId);
-                existing.Parameters.AddWithValue("request",requestKey);
-                existing.Parameters.AddWithValue("type",route.TaskType);
-                existing.Parameters.AddWithValue("version",route.Version);
-                existing.Parameters.Add("payload",NpgsqlDbType.Jsonb).Value=payload;
-                existing.Parameters.Add("workflow",NpgsqlDbType.Uuid).Value=(object?)workflowId ?? DBNull.Value;
-                await using var replay = await existing.ExecuteReaderAsync(ct);
-                if (await replay.ReadAsync(ct))
-                {
-                    if (!replay.GetBoolean(1))
-                        throw new InvalidOperationException("Idempotency key reused for different Hub task");
-                    var previous = replay.GetGuid(0);
-                    await replay.CloseAsync();
-                    await tx.CommitAsync(ct);
-                    return previous;
-                }
-            }
-            throw new ArgumentException("Direct business-resource policies are retired; applications must coordinate business keys");
-        }
-
-        // Serialize against operator policy changes. Re-resolve declarative routes
-        // inside the transaction after acquiring the registration lock.
-        if (constraints.Any(r => r.Key.StartsWith("hub:" + route.HubId + ":", StringComparison.Ordinal) &&
-                                     r.Key.EndsWith(":" + HubPolicyDigest(route.HubId), StringComparison.Ordinal)))
-        {
-            await HubDefinitionStore.LockPolicyHub(db,tx,route.HubId,ct,shared:true);
-            await using var lockRegistration=new NpgsqlCommand("""
-                SELECT 1 FROM wfc_scale.hub_activity_registration
-                WHERE hub_id=@hub AND activity_type=@type AND version=@version
-                FOR SHARE
-                """,db,tx);
-            lockRegistration.Parameters.AddWithValue("hub",route.HubId);
-            lockRegistration.Parameters.AddWithValue("type",route.TaskType);
-            lockRegistration.Parameters.AddWithValue("version",route.Version);
-            if(await lockRegistration.ExecuteScalarAsync(ct) is not null)
-            {
-                await using var checkPolicy=new NpgsqlCommand("""
-                    SELECT hub_concurrency,activity_concurrency,resource_capacity
-                    FROM wfc_scale.hub_activity_registration
-                    WHERE hub_id=@hub AND activity_type=@type AND version=@version
-                    """,db,tx);
-                checkPolicy.Parameters.AddWithValue("hub",route.HubId);
-                checkPolicy.Parameters.AddWithValue("type",route.TaskType);
-                checkPolicy.Parameters.AddWithValue("version",route.Version);
-                await using var reader=await checkPolicy.ExecuteReaderAsync(ct);
-                if(await reader.ReadAsync(ct))
-                {
-                    var hubCapacity=reader.GetInt32(0);
-                    var activityCapacity=reader.GetInt32(1);
-                    var resourceCapacity=reader.GetInt32(2);
-                    if(constraints.Any(r=>r.Key.StartsWith("hub:",StringComparison.Ordinal) && r.Capacity!=hubCapacity
-                        || r.Key.StartsWith("activity:",StringComparison.Ordinal) && r.Capacity!=activityCapacity
-                        || r.Key.StartsWith("resource:",StringComparison.Ordinal) && r.Capacity!=resourceCapacity))
-                        throw new InvalidOperationException("Activity policy changed while enqueue was preparing; retry with the current policy");
-                }
-            }
-        }
-
-        // Also serialize enqueues for the same FIFO resource. Thus sequence
-        // order is consistent with commit order for each ordering key.
-        foreach (var resource in constraints)
-        {
-            await using (var upsert = new NpgsqlCommand("""
-                INSERT INTO wfc_scale.hub_resource(resource_key, capacity, strict_fifo)
-                VALUES (@key, @capacity, @fifo)
-                ON CONFLICT (resource_key) DO NOTHING
-                """, db, tx))
-            {
-                upsert.Parameters.AddWithValue("key", resource.Key);
-                upsert.Parameters.AddWithValue("capacity", resource.Capacity);
-                upsert.Parameters.AddWithValue("fifo", resource.StrictFifo);
-                await upsert.ExecuteNonQueryAsync(ct);
-            }
-            await using var check = new NpgsqlCommand("""
-                SELECT capacity, strict_fifo FROM wfc_scale.hub_resource
-                WHERE resource_key = @key FOR UPDATE
-                """, db, tx);
-            check.Parameters.AddWithValue("key", resource.Key);
-            await using var reader = await check.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct) ||
-                reader.GetInt32(0) != resource.Capacity ||
-                reader.GetBoolean(1) != resource.StrictFifo)
-                throw new InvalidOperationException(
-                    "Code-first concurrency policy drift for resource: " + resource.Key);
-        }
 
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
@@ -363,16 +250,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                 return (Guid)previous;
             }
         }
-        foreach (var resource in constraints)
-        {
-            await using var constraint = new NpgsqlCommand("""
-                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
-                VALUES (@task,@resource)
-                """, db, tx);
-            constraint.Parameters.AddWithValue("task", id);
-            constraint.Parameters.AddWithValue("resource", resource.Key);
-            await constraint.ExecuteNonQueryAsync(ct);
-        }
         await tx.CommitAsync(ct);
         return id;
     }
@@ -401,7 +278,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             throw new ArgumentException("Invalid worker claim parameters");
 
         // Experimental owner-fenced admission is limited to the atomic,
-        // unconstrained batch. It never falls through to individually
+        // pull batch. It never falls through to individually
         // committed claims, which do not hold the owner lock.
         if (matchingOwner is not null && (!_unconstrainedBatchClaimsEnabled ||
             hubs.Count != 1 || matchingPartition is null || matchingPartitionCount is null ||
@@ -492,15 +369,11 @@ public sealed class HubTaskStore : IAsyncDisposable
         span?.SetTag("db.connection_acquire_seconds", connectionWaitSeconds);
         if (_unconstrainedBatchClaimsEnabled)
         {
-            // Keep all existing filtering, lease epochs, attempt closure and
-            // native/workflow claim events in one fenced PostgreSQL transaction.
-            // The legacy path then fills any remaining slots, including all
-            // resource-constrained work (FIFO / capacity permits).
             var batchLeases = await ClaimUnconstrainedBatchAsync(db, workerId,
                 hubs, supported, pins, maxTasks, lease, matchPartition, matchCount, matchingBuckets, ct,
                 matchingOwner, ownerFence);
             results.AddRange(batchLeases);
-            span?.SetTag("tasks.unconstrained_batch_claimed", batchLeases.Count);
+            span?.SetTag("tasks.batch_claimed", batchLeases.Count);
         }
         var initialBatchCount = results.Count;
         if (_unconstrainedBatchClaimsEnabled)
@@ -511,10 +384,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                 new KeyValuePair<string, object?>("outcome", batchOutcome));
         }
         var fallbackStarted = Stopwatch.GetTimestamp();
-        // Native SSE batches must never combine an atomic batch with the
-        // individually committed fallback: cancellation after a fallback
-        // commit could otherwise strand earlier leases. If no atomic task was
-        // found, probe at most one fallback task for unusual constrained work.
+        // Keep owner-directed pull batches atomic.
         var nativeOnlyBatch = _unconstrainedBatchClaimsEnabled && maxTasks > 1 &&
             capabilities.All(c => c.TaskType == "__native_workflow__");
         var fallbackLimit = matchingOwner is not null ? results.Count :
@@ -571,8 +441,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             HubLeasedTask? found = null;
             foreach (var taskId in candidates)
             {
-                found = (await AdmitCandidateAsync(db, taskId, hubs[0], workerId, lease,
-                    matchPartition, matchCount, matchingBuckets, pins, ownerFence, span, ct)).Lease;
+                found = await ClaimPullCandidateAsync(db, taskId, hubs[0], workerId, lease,
+                    matchPartition, matchCount, matchingBuckets, supported, pins, ownerFence, ct);
                 if (found is not null) break;
             }
 
@@ -620,31 +490,14 @@ public sealed class HubTaskStore : IAsyncDisposable
         }
     }
 
-    // Internal building block only: discovery and delivery do not yet call it.
-    // Any exception during commit must be treated as an uncertain outcome by a
-    // future caller; it must not release the reserved credit on that basis.
-    internal async Task<HubCandidateClaimResult> ClaimCandidateAsync(HubCandidateClaim request, CancellationToken ct, HubCandidateClaimTestHooks? testHooks = null)
+    internal async Task<HubCandidateClaimResult> ClaimCandidateAsync(
+        HubCandidateClaim request, CancellationToken ct, HubCandidateClaimTestHooks? testHooks = null)
     {
-        if (request.TaskId == Guid.Empty || request.ObservedEpoch < 0 ||
-            string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length > 128 ||
-            string.IsNullOrWhiteSpace(request.HubId) || request.HubId.Length > 80 ||
-            request.PartitionCount is < 1 or > 64 || request.Partition < 0 ||
-            request.Partition >= request.PartitionCount || request.Owner.HubId != request.HubId ||
-            request.Owner.Partition != request.Partition || request.Owner.Epoch < 1 ||
-            request.Capabilities.Count is < 1 or > 128 || request.Workflows?.Count > 128 ||
-            request.Lease < TimeSpan.FromSeconds(10) || request.Lease > TimeSpan.FromMinutes(5))
-            throw new ArgumentException("Invalid candidate claim parameters");
-
-        if (!await _claimGate.WaitAsync(0, ct)) return new(HubCandidateClaimStatus.AdmissionDeferred);
-        try
-        {
-            var pins = request.Workflows is null ? null : JsonSerializer.Serialize(
-                request.Workflows.Select(w => new { hub = w.HubId, definition = w.DefinitionId, version = w.Version }));
-            await using var db = await _dataSource.OpenConnectionAsync(ct);
-            return await AdmitCandidateAsync(db, request.TaskId, request.HubId, request.WorkerId,
-                request.Lease, request.Partition, request.PartitionCount, null, pins, null, null, ct, request, testHooks);
-        }
-        finally { _claimGate.Release(); }
+        var result = await ClaimCandidateBatchAsync(new(
+            [new(request.TaskId, request.ObservedEpoch)], request.WorkerId, request.HubId,
+            request.Partition, request.PartitionCount, request.Capabilities, request.Workflows,
+            request.Owner, request.Lease), ct, testHooks);
+        return new(result.Status, result.Leases.SingleOrDefault());
     }
 
     // A positive lookup confirms this exact live lease. A negative lookup is
@@ -701,7 +554,7 @@ public sealed class HubTaskStore : IAsyncDisposable
     }
 
     // One owner, worker and transaction: callers must have a real reserved
-    // credit for every item. Constrained rows are never admitted on this path.
+    // credit for every item.
     internal async Task<HubCandidateBatchResult> ClaimCandidateBatchAsync(HubCandidateBatchClaim request,
         CancellationToken ct, HubCandidateClaimTestHooks? testHooks = null)
     {
@@ -779,32 +632,22 @@ public sealed class HubTaskStore : IAsyncDisposable
         finally { _claimGate.Release(); }
     }
 
-    // Shared transactional admission for one discovered task. The caller owns
-    // claim admission and the connection; this method owns the transaction.
-    private static async Task<HubCandidateClaimResult> AdmitCandidateAsync(
+    private static async Task<HubLeasedTask?> ClaimPullCandidateAsync(
         NpgsqlConnection db, Guid taskId, string ownerHub, string workerId, TimeSpan lease,
-        int matchPartition, int matchCount, int[]? matchingBuckets, string? pins,
-        HubClaimOwnerFence? ownerFence, Activity? span, CancellationToken ct,
-        HubCandidateClaim? candidate = null, HubCandidateClaimTestHooks? testHooks = null)
+        int matchPartition, int matchCount, int[]? matchingBuckets, string[] supported, string? pins,
+        HubClaimOwnerFence? ownerFence, CancellationToken ct)
     {
-        HubLeasedTask? found = null;
+        HubLeasedTask found;
         await using var tx = await db.BeginTransactionAsync(ct);
-        if (candidate is not null && !await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
-                db, tx, candidate.Owner, candidate.PartitionCount, ct))
-            return new(HubCandidateClaimStatus.OwnerLost);
         await CheckClaimOwnerAsync(db, tx, ownerHub, matchPartition, ownerFence, true, ct);
         Guid id; string hub; string taskType; int version, partition, attempts;
         int? workflowStep;
-        long sequence; Guid? workflow; string payload;
+        Guid? workflow; string payload;
         await using (var row = new NpgsqlCommand("""
             SELECT id,hub_id,partition_id,task_type,task_version,workflow_id,
-                   payload::text,sequence,attempts,COALESCE(workflow_step,native_step_id)
+                   payload::text,attempts,COALESCE(workflow_step,native_step_id)
             FROM wfc_scale.hub_task t WHERE id = @id
-              AND (@candidate = false OR (t.hub_id = @candidateHub AND t.epoch = @observedEpoch
-                AND EXISTS (SELECT 1 FROM jsonb_to_recordset(@candidateCapabilities)
-                    AS capability(hub text, task_type text, version integer)
-                    WHERE capability.hub = t.hub_id AND capability.task_type = t.task_type
-                      AND capability.version = t.task_version)))
+              AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
               AND /*indexed_partition_filter*/
               AND (task_type NOT IN ('__workflow__','__native_workflow__') OR @pins IS NULL OR EXISTS(
                 SELECT 1 FROM wfc_scale.hub_workflow w,
@@ -825,18 +668,13 @@ public sealed class HubTaskStore : IAsyncDisposable
                     : "partition_id % @matchCount = @matchPartition"), db, tx))
         {
             row.Parameters.AddWithValue("id", taskId);
-            row.Parameters.AddWithValue("candidate", candidate is not null);
-            row.Parameters.AddWithValue("candidateHub", candidate?.HubId ?? "");
-            row.Parameters.AddWithValue("observedEpoch", candidate?.ObservedEpoch ?? 0L);
-            row.Parameters.Add("candidateCapabilities", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(
-                candidate?.Capabilities.Select(c => new { hub = c.HubId, task_type = c.TaskType, version = c.Version })
-                ?? Enumerable.Empty<object>());
+            row.Parameters.AddWithValue("types", supported);
             row.Parameters.AddWithValue("matchCount", matchCount);
             row.Parameters.AddWithValue("matchPartition", matchPartition);
             row.Parameters.AddWithValue("matchingBuckets", matchingBuckets ?? Array.Empty<int>());
             row.Parameters.Add("pins",NpgsqlDbType.Jsonb).Value=(object?)pins??DBNull.Value;
             await using var reader = await row.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct)) return new(HubCandidateClaimStatus.Unavailable);
+            if (!await reader.ReadAsync(ct)) return null;
             id = reader.GetGuid(0);
             hub = reader.GetString(1);
             partition = reader.GetInt32(2);
@@ -844,77 +682,9 @@ public sealed class HubTaskStore : IAsyncDisposable
             version = reader.GetInt32(4);
             workflow = reader.IsDBNull(5) ? null : reader.GetGuid(5);
             payload = reader.GetString(6);
-            sequence = reader.GetInt64(7);
-            attempts = reader.GetInt32(8);
-            workflowStep = reader.IsDBNull(9) ? null : reader.GetInt32(9);
+            attempts = reader.GetInt32(7);
+            workflowStep = reader.IsDBNull(8) ? null : reader.GetInt32(8);
         }
-
-        var constraints = new List<(string Key, int Limit, bool Fifo)>();
-        await using (var query = new NpgsqlCommand("""
-            SELECT c.resource_key, r.capacity, r.strict_fifo
-            FROM wfc_scale.hub_task_constraint c
-            JOIN wfc_scale.hub_resource r ON r.resource_key = c.resource_key
-            WHERE c.task_id = @id ORDER BY c.resource_key
-            """, db, tx))
-        {
-            query.Parameters.AddWithValue("id", id);
-            await using var reader = await query.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-                constraints.Add((reader.GetString(0), reader.GetInt32(1),
-                    reader.GetBoolean(2)));
-        }
-
-        // Canonical resource row lock ordering prevents deadlock when
-        // tasks require multiple independent concurrency permits.
-        var eligible = true;
-        string? blockedKey = null;
-        var permitStarted = Stopwatch.GetTimestamp();
-        foreach (var constraint in constraints)
-        {
-            // Fetch current values *under* the permit lock, never from a stale candidate snapshot.
-            int currentCapacity;
-            bool currentFifo;
-            await using (var resourceLock = new NpgsqlCommand("""
-                SELECT capacity,strict_fifo FROM wfc_scale.hub_resource
-                WHERE resource_key = @key FOR UPDATE
-                """, db, tx))
-            {
-                resourceLock.Parameters.AddWithValue("key", constraint.Key);
-                await using var resourceReader=await resourceLock.ExecuteReaderAsync(ct);
-                if(!await resourceReader.ReadAsync(ct))
-                    throw new InvalidOperationException("Resource missing during claim");
-                currentCapacity=resourceReader.GetInt32(0);
-                currentFifo=resourceReader.GetBoolean(1);
-            }
-
-            await using var check = new NpgsqlCommand("""
-                SELECT count(*) FILTER (WHERE t.state = 1 AND t.lease_until > now()),
-                       count(*) FILTER (WHERE t.sequence < @seq AND t.state IN (0,1))
-                FROM wfc_scale.hub_task_constraint c
-                JOIN wfc_scale.hub_task t ON t.id = c.task_id
-                WHERE c.resource_key = @key
-                """, db, tx);
-            check.Parameters.AddWithValue("key", constraint.Key);
-            check.Parameters.AddWithValue("seq", sequence);
-            await using var reader = await check.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Resource missing");
-            var active = reader.GetInt64(0);
-            var earlier = reader.GetInt64(1);
-            if (active >= currentCapacity || (currentFifo && earlier > 0))
-            {
-                eligible = false;
-                blockedKey = constraint.Key;
-                break;
-            }
-        }
-        if (constraints.Count > 0)
-        {
-            var permitSeconds = Stopwatch.GetElapsedTime(permitStarted).TotalSeconds;
-            HubTelemetry.ClaimPermitCheck.Record(permitSeconds);
-            span?.AddEvent(new ActivityEvent("claim.permits.checked",
-                tags: new ActivityTagsCollection { { "resources", constraints.Count }, { "admitted", eligible }, { "permit.seconds", permitSeconds } }));
-        }
-        if (!eligible) return new(HubCandidateClaimStatus.ResourceBlocked, ResourceKey: blockedKey);
 
         await using var claim = new NpgsqlCommand("""
             UPDATE wfc_scale.hub_task
@@ -939,7 +709,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         // A lease is a durable fencing epoch. Keep one actual claim
         // timestamp per managed workflow activity attempt, including
         // retries and lease takeovers. This is NOT worker CPU time.
-        if (workflowStep is not null && workflow is not null && found is not null)
+        if (workflowStep is not null && workflow is not null)
         {
             await using (var replaced = new NpgsqlCommand("""
                 UPDATE wfc_scale.hub_task_attempt
@@ -963,8 +733,7 @@ public sealed class HubTaskStore : IAsyncDisposable
             attempt.Parameters.AddWithValue("worker", workerId);
             await attempt.ExecuteNonQueryAsync(ct);
         }
-        if (taskType is "__workflow__" or "__native_workflow__" && workflow is Guid processorWorkflow &&
-            found is not null)
+        if (taskType is "__workflow__" or "__native_workflow__" && workflow is Guid processorWorkflow)
         {
             await using var log = new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_workflow_event
@@ -982,31 +751,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             await log.ExecuteNonQueryAsync(ct);
         }
         await CheckClaimOwnerAsync(db, tx, ownerHub, matchPartition, ownerFence, false, ct);
-        if (candidate is not null)
-        {
-            if (testHooks?.BeforeOwnerRecheck is not null) await testHooks.BeforeOwnerRecheck(ct);
-            try
-            {
-                await CheckClaimOwnerAsync(db, tx, ownerHub, matchPartition,
-                    new HubClaimOwnerFence(candidate.Owner.OwnerId, candidate.Owner.Epoch), false, ct);
-            }
-            catch (InvalidOperationException)
-            {
-                return new(HubCandidateClaimStatus.OwnerLost);
-            }
-        }
-        // Once COMMIT is sent, even cancellation or a broken connection cannot
-        // establish whether PostgreSQL committed. The reservation must be reconciled.
-        try
-        {
-            if (testHooks?.Commit is not null) await testHooks.Commit(tx, ct);
-            else await tx.CommitAsync(ct);
-        }
-        catch (Exception) when (candidate is not null)
-        {
-            return new(HubCandidateClaimStatus.CommitOutcomeUnknown, found);
-        }
-        return new(HubCandidateClaimStatus.Leased, found);
+        await tx.CommitAsync(ct);
+        return found;
     }
 
     // Each branch locks at most the requested batch size. Their ordered merge
@@ -1041,7 +787,6 @@ public sealed class HubTaskStore : IAsyncDisposable
             /*hub_filter*/ AND /*indexed_partition_filter*/
             AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
             AND t.attempts < t.max_attempts
-            AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
             AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
                             WHERE w.id=t.workflow_id AND w.execution_mode='native'
                               AND w.native_status<>'Runnable')
@@ -1053,12 +798,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                        AND w.definition_id=p.definition AND w.definition_version=p.version))
             """;
 
-    /// <summary>
-    /// Single-round-trip row selection and lease update for tasks with NO
-    /// hub_task_constraint rows. The SQL must exclude constrained tasks before
-    /// SKIP LOCKED, otherwise resource FIFO/capacity could be bypassed.
-    /// Nothing about this path changes PostgreSQL fencing or task eligibility.
-    /// </summary>
+    // Single-round-trip pull selection and lease update.
     private async Task<IReadOnlyList<HubLeasedTask>> ClaimUnconstrainedBatchAsync(
         NpgsqlConnection db, string workerId, IReadOnlyList<string> hubs,
         string[] supported, string? pins, int maxTasks, TimeSpan lease,
@@ -1084,8 +824,6 @@ public sealed class HubTaskStore : IAsyncDisposable
                   AND t.attempts < t.max_attempts
                   AND ((t.state=0 AND t.due_at<=now()) OR
                        (t.state=1 AND t.lease_until<now()))
-                  AND NOT EXISTS (
-                      SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                   AND NOT EXISTS (
                       SELECT 1 FROM wfc_scale.hub_workflow w
                       WHERE w.id=t.workflow_id AND w.execution_mode='native'
@@ -1459,9 +1197,6 @@ public sealed class HubTaskStore : IAsyncDisposable
         await using var cmd = _dataSource.CreateCommand("SELECT 1");
         await cmd.ExecuteScalarAsync(ct);
     }
-
-    private static string HubPolicyDigest(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     public async ValueTask DisposeAsync()
     {

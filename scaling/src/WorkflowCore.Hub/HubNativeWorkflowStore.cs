@@ -18,6 +18,18 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         WHERE id=@task AND owner=@owner AND epoch=@epoch
           AND CASE state WHEN 1 THEN lease_until>clock_timestamp() ELSE false END
         """;
+
+    // Keep the dispatch predicate outside the primary-key lookup. Statistics
+    // from before an activity burst can make the dispatch index look empty.
+    internal const string LockActivityWorkflowSql = """
+        WITH task_by_id AS MATERIALIZED (
+            SELECT workflow_id,execution_pointer_id,dispatch_key,native_step_id
+            FROM wfc_scale.hub_task WHERE id=@task
+        )
+        SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id
+        FROM task_by_id t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id
+        WHERE w.execution_mode='native' AND t.dispatch_key IS NOT NULL FOR UPDATE OF w
+        """;
     // Fixed per Hub process; false selects the original per-event insert for A/B tests.
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
@@ -183,16 +195,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             HubTelemetry.NativeEventLaneBypass.Add(1,
                 new KeyValuePair<string, object?>("operation","native_commit"),
                 EventLaneModeTag);
-        int partition;long revision;string status;bool businessCompatibility;
+        int partition;long revision;string status;
         var rowLockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await using(var cmd=Command(db,tx,"""
-            SELECT partition_id,revision,native_status,business_policy_compatibility FROM wfc_scale.hub_workflow
+            SELECT partition_id,revision,native_status FROM wfc_scale.hub_workflow
             WHERE id=@id FOR UPDATE
             """,("id",id)))
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
             if(!await r.ReadAsync(ct))return null;
-            partition=r.GetInt32(0);revision=r.GetInt64(1);status=r.GetString(2);businessCompatibility=r.GetBoolean(3);
+            partition=r.GetInt32(0);revision=r.GetInt64(1);status=r.GetString(2);
         }
         HubTelemetry.NativeWorkflowRowLockDuration.Record(
             System.Diagnostics.Stopwatch.GetElapsedTime(rowLockStarted).TotalSeconds,
@@ -205,16 +217,14 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
             if(!await r.ReadAsync(ct))return null;
-            if(r.GetInt16(0) is 2 or 3 && r.GetInt64(3)==request.Epoch && !r.IsDBNull(2) &&
+            if(r.GetInt16(0)==2 && r.GetInt64(3)==request.Epoch && !r.IsDBNull(2) &&
                r.GetString(2)==request.WorkerId && !r.IsDBNull(5))
             {
                 var stored=Json(r.GetString(5));
                 if(stored.TryGetProperty("commit",out var previous) && JsonElement.DeepEquals(previous,Json(canonical)))
                 {
-                    var rejected=stored.TryGetProperty("policyRejected",out var flag) && flag.ValueKind==JsonValueKind.True;
-                    if (r.GetInt16(0)==3 && !rejected) return null;
-                    return new(new(id,stored.GetProperty("revision").GetInt64(),stored.GetProperty("status").GetString()!,true,
-                        rejected,rejected?HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason:null),hub);
+                    return new(new(id,stored.GetProperty("revision").GetInt64(),
+                        stored.GetProperty("status").GetString()!,true),hub);
                 }
                 return null;
             }
@@ -224,9 +234,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         // A status change invalidates in-flight snapshots by incrementing revision.
         if(status is "Complete" or "Terminated")return null;
-        // Validate policy before touching inbox, subscriptions, snapshots or
-        // caller-proposed cancellation. Existing dispatches are idempotent.
-        var registrations=new Dictionary<(string Hub,string Activity,int Version),HubDefinitionStore.ActivityRouteRegistration>();
+        var routes = new Dictionary<(string Activity, int Version), HubTaskRoute>();
         var dispatchKeys=request.Activities.Select(activity=>activity.DispatchKey)
             .Distinct(StringComparer.Ordinal).ToArray();
         var existingDispatchKeys=new HashSet<string>(StringComparer.Ordinal);
@@ -238,42 +246,6 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 """,("id",id),("keys",dispatchKeys));
             await using var rows=await existing.ExecuteReaderAsync(ct);
             while(await rows.ReadAsync(ct))existingDispatchKeys.Add(rows.GetString(0));
-        }
-        if (!businessCompatibility && request.Status is "Runnable" or "Suspended")
-        {
-            foreach (var activity in request.Activities)
-            {
-                if(existingDispatchKeys.Contains(activity.DispatchKey))continue;
-                var key=(hub,activity.ActivityType,activity.Version);
-                if(!registrations.TryGetValue(key,out var registration))
-                {
-                    registration=await definitions.ReadActivityRouteRegistrationAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
-                        ?? throw new KeyNotFoundException("Unregistered native activity");
-                    registrations.Add(key,registration);
-                }
-                if(registration.IsBusinessPolicy)
-                {
-                    const string reason=HubDefinitionStore.ActivityRouteRegistration.RetiredPolicyReason;
-                    var stored=JsonSerializer.Serialize(new{commit=request,revision=revision+1,status="Terminated",policyRejected=true});
-                    await using(var reject=Command(db,tx,"""
-                        UPDATE wfc_scale.hub_task SET state=3,last_owner=@owner,owner=NULL,lease_until=NULL,
-                          last_error=@reason,result_json=@result::jsonb,updated_at=now()
-                        WHERE id=@task AND state=1 AND owner=@owner AND epoch=@epoch AND lease_until>clock_timestamp();
-                        """,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
-                        ("reason",reason),("result",stored)))
-                        if(await reject.ExecuteNonQueryAsync(ct)!=1)return null;
-                    await Execute(db,tx,"""
-                        UPDATE wfc_scale.hub_workflow SET state=3,native_status='Terminated',waiting_for=NULL,
-                          revision=revision+1,last_error=@reason,completed_at=now(),updated_at=now() WHERE id=@id
-                        """,ct,("id",id),("reason",reason));
-                    await RetireAsync(db,tx,id,ct);
-                    await HubRemoteWorkflowStore.JournalAsync(db,tx,id,0,request.TaskId,"__native_workflow__",
-                        "WorkflowPolicyRejected",JsonSerializer.Serialize(new { reason }),ct);
-                    await tx.CommitAsync(ct);
-                    HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
-                    return new(new(id,revision+1,"Terminated",false,true,reason),hub);
-                }
-            }
         }
         foreach(var consumed in request.ConsumedInbox.Distinct())
         {
@@ -290,8 +262,6 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 VALUES(@id,@pointer,@name,@key,@asof)
                 """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
                 ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
-        // Retire cancelled pointer work before taking any activity resource locks.
-        // Claim uses task -> resource, so reversing that order here can deadlock.
         if(request.ActiveDispatches is string[] active)
         {
             await Execute(db,tx,"""
@@ -307,35 +277,22 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         if(request.Status is "Runnable" or "Suspended")
         {
-            var dispatches=new List<(HubNativeDispatch Activity,HubTaskRoute Route)>();
-            // Entries and their shared policy locks live only for this transaction.
             foreach(var activity in request.Activities)
             {
-                // Dispatch keys are stable across transport retries, unique across native retries/iterations.
-                if(existingDispatchKeys.Contains(activity.DispatchKey))continue;
-                var key=(hub,activity.ActivityType,activity.Version);
-                if(!registrations.TryGetValue(key,out var registration))
+                if (!existingDispatchKeys.Add(activity.DispatchKey)) continue;
+                var key = (activity.ActivityType, activity.Version);
+                if (!routes.TryGetValue(key, out var route))
                 {
-                    registration=await definitions.ReadActivityRouteRegistrationAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
+                    route = await definitions.ResolveAsync(hub, activity.ActivityType, activity.Version, ct, db, tx)
                         ?? throw new KeyNotFoundException("Unregistered native activity");
-                    registrations.Add(key,registration);
+                    routes.Add(key, route);
                 }
-                registration.EnsureDispatchAllowed(businessCompatibility);
-                var route=registration.Resolve(hub,activity.ActivityType,activity.Version,activity.Input);
-                if(partition>=route.PartitionCount)throw new InvalidOperationException("Activity partition mismatch");
-                dispatches.Add((activity,route));
-            }
-            // Lock the whole batch in canonical order. Locking per activity
-            // could take a hub permit before another activity's permit while
-            // a concurrent claim holds those resources in the opposite order.
-            await HubRemoteWorkflowStore.LockActivityResourcesAsync(db,tx,
-                dispatches.SelectMany(d=>d.Route.ResourcesForPartition(partition)),ct);
-            foreach(var (activity,route) in dispatches)
-            {
+                if (partition >= route.PartitionCount)
+                    throw new InvalidOperationException("Activity partition mismatch");
                 var task=Guid.NewGuid();
                 await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
                     activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
-                    activity.StepId,activity.NotBefore,resourcesLocked:true);
+                    activity.StepId,activity.NotBefore);
                 await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
                     JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
             }
@@ -584,11 +541,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using var tx=await db.BeginTransactionAsync(ct);
         var lockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         Guid id;string hub,status,pointer,dispatch;int partition,step;
-        await using(var cmd=Command(db,tx,"""
-            SELECT w.id,w.hub_id,w.partition_id,w.native_status,t.execution_pointer_id,t.dispatch_key,t.native_step_id
-            FROM wfc_scale.hub_workflow w JOIN wfc_scale.hub_task t ON t.workflow_id=w.id
-            WHERE t.id=@task AND w.execution_mode='native' AND t.dispatch_key IS NOT NULL FOR UPDATE OF w
-            """,("task",task)))
+        await using(var cmd=Command(db,tx,LockActivityWorkflowSql,("task",task)))
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
             if(!await r.ReadAsync(ct))return false;

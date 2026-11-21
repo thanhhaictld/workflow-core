@@ -12,6 +12,74 @@ public sealed class HubNativeCompletionPlanTests
     [InlineData("force_generic_plan", false)]
     [InlineData("force_custom_plan", true)]
     [InlineData("force_generic_plan", true)]
+    public async Task ActivityCompletionLocksWorkflowAfterBoundedTaskLookup(string planMode, bool freshStatistics)
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
+            ?? throw new InvalidOperationException("WFC_TEST_PG is required");
+        await using var db = new NpgsqlConnection(database);
+        await db.OpenAsync();
+        await using var tx = await db.BeginTransactionAsync();
+        await using (var seed = new NpgsqlCommand("""
+            CREATE TEMP TABLE hub_workflow (
+                id uuid PRIMARY KEY, hub_id text, partition_id integer, native_status text, execution_mode text
+            );
+            CREATE TEMP TABLE hub_task (
+                id uuid PRIMARY KEY, workflow_id uuid, execution_pointer_id text, dispatch_key text,
+                native_step_id integer, payload text
+            );
+            CREATE UNIQUE INDEX hub_task_dispatch ON hub_task(workflow_id,dispatch_key) WHERE dispatch_key IS NOT NULL;
+            INSERT INTO pg_temp.hub_workflow VALUES ('00000000-0000-0000-0000-000000000001','plan',0,'Runnable','native');
+            INSERT INTO pg_temp.hub_task(id,workflow_id,payload)
+            SELECT (lpad(to_hex(sequence),8,'0') || '-0000-0000-0000-000000000000')::uuid,
+                   '00000000-0000-0000-0000-000000000001', repeat('x',1200)
+            FROM generate_series(1,2000) AS rows(sequence);
+            ANALYZE pg_temp.hub_task;
+            INSERT INTO pg_temp.hub_task(id,workflow_id,execution_pointer_id,dispatch_key,native_step_id,payload)
+            SELECT (lpad(to_hex(sequence),8,'0') || '-0000-0000-0000-000000000000')::uuid,
+                   '00000000-0000-0000-0000-000000000001', 'pointer',
+                   sequence::text, 1, repeat('x',1200)
+            FROM generate_series(2001,6000) AS rows(sequence);
+            """, db, tx))
+            await seed.ExecuteNonQueryAsync();
+        if (freshStatistics)
+        {
+            await using var analyze = new NpgsqlCommand("ANALYZE pg_temp.hub_task", db, tx);
+            await analyze.ExecuteNonQueryAsync();
+        }
+        await using (var setMode = new NpgsqlCommand($"SET LOCAL plan_cache_mode={planMode}", db, tx))
+            await setMode.ExecuteNonQueryAsync();
+
+        var sql = HubNativeWorkflowStore.LockActivityWorkflowSql.Replace("wfc_scale.", "pg_temp.");
+        await using var explain = new NpgsqlCommand("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + sql, db, tx);
+        explain.Parameters.AddWithValue("task", new Guid(2001, 0, 0, new byte[8]));
+        await explain.PrepareAsync();
+        using var json = JsonDocument.Parse((string)(await explain.ExecuteScalarAsync())!);
+        var root = json.RootElement[0].GetProperty("Plan");
+        Assert.Equal("LockRows", root.GetProperty("Node Type").GetString());
+        Assert.Equal(1, root.GetProperty("Actual Rows").GetInt32());
+        var task = Assert.Single(EnumerateNodes(root), node =>
+            node.TryGetProperty("Relation Name", out var relation) && relation.GetString() == "hub_task");
+        Assert.Equal("Index Scan", task.GetProperty("Node Type").GetString());
+        Assert.Equal("hub_task_pkey", task.GetProperty("Index Name").GetString());
+        Assert.Contains("id =", task.GetProperty("Index Cond").GetString());
+        Assert.Equal(1, task.GetProperty("Actual Rows").GetInt32());
+        Assert.False(task.TryGetProperty("Rows Removed by Filter", out var removed) && removed.GetInt32() > 0);
+    }
+
+    private static IEnumerable<JsonElement> EnumerateNodes(JsonElement node)
+    {
+        yield return node;
+        if (node.TryGetProperty("Plans", out var children))
+            foreach (var child in children.EnumerateArray())
+                foreach (var descendant in EnumerateNodes(child))
+                    yield return descendant;
+    }
+
+    [Theory]
+    [InlineData("force_custom_plan", false)]
+    [InlineData("force_generic_plan", false)]
+    [InlineData("force_custom_plan", true)]
+    [InlineData("force_generic_plan", true)]
     public async Task CompletionUsesBoundedProbeAndPreservesFencing(string mode, bool freshStatistics)
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG");

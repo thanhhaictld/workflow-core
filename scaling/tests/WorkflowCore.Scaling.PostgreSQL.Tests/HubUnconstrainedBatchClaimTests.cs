@@ -16,11 +16,11 @@ public sealed class HubUnconstrainedBatchClaimTests
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(30);
     private static JsonElement Payload(string key) => JsonSerializer.SerializeToElement(new { resourceId = key });
 
-    private static async Task<Guid> Enqueue(HubTaskStore store, HubPolicyRegistry policies,
+    private static async Task<Guid> Enqueue(HubTaskStore store, HubTaskRouteRegistry policies,
         string hub, string type, string resource)
     {
         var payload = Payload(resource);
-        return await store.EnqueueAsync(policies.Resolve(hub, type, 1, payload),
+        return await store.EnqueueAsync(policies.Resolve(hub, type, 1),
             payload.GetRawText(), null, null, CancellationToken.None);
     }
 
@@ -36,8 +36,8 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry().Register(hub, "a", 1, 1, _ => { })
-            .Register(hub, "b", 1, 1, _ => { }).Register(hub, "c", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry().Register(hub, "a", 1, 1)
+            .Register(hub, "b", 1, 1).Register(hub, "c", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: true);
         var a = await Enqueue(store, registry, hub, "a", "a");
@@ -80,8 +80,8 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry().Register(hub, "a", 1, 1, _ => { })
-            .Register(hub, "b", 1, 1, _ => { }).Register(hub, "c", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry().Register(hub, "a", 1, 1)
+            .Register(hub, "b", 1, 1).Register(hub, "c", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: true);
         var types = new[] { "a", "b", "c" };
@@ -100,34 +100,6 @@ public sealed class HubUnconstrainedBatchClaimTests
         Assert.All(claims, t => Assert.Equal(1L, t.Epoch));
     }
 
-    [Fact]
-    public async Task SplitBatchClaims_LeaveConstrainedTasksToPermitAdmission()
-    {
-        if (Database is null) return;
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
-        var hub = Hub();
-        var registry = new HubPolicyRegistry()
-            .Register(hub, "free", 1, 1, _ => { })
-            .Register(hub, "serial", 1, 1,
-                p => p.SequentialBy("resource", x => x.GetProperty("resourceId").GetString()));
-        await using var store = new HubTaskStore(fixture.ConnectionString, 12, enableUnconstrainedBatchClaims: true,
-            enableSplitBatchClaimCandidates: true);
-        var input=Payload("key"); var route=registry.Resolve(hub,"serial",1,input);
-        var first = await fixture.SeedTaskAsync(route,input.GetRawText());
-        var second = await fixture.SeedTaskAsync(route,input.GetRawText());
-        await fixture.ApplyAsync(33);
-        var free = await Enqueue(store, registry, hub, "free", "free");
-        Task<IReadOnlyList<HubLeasedTask>> ClaimShard(string worker) => store.ClaimAsync(worker, [hub],
-            [new(hub, "serial", 1), new(hub, "free", 1)], 8, Lease, CancellationToken.None,
-            matchingPartition: 0, matchingPartitionCount: 4);
-        var initial = await ClaimShard("first");
-        Assert.True(new[] { first, free }.ToHashSet().SetEquals(initial.Select(t => t.Id)));
-        Assert.Empty(await ClaimShard("second"));
-        var lease = Assert.Single(initial, t => t.Id == first);
-        Assert.True(await store.CompleteAsync(first, "first", lease.Epoch, "{}", CancellationToken.None));
-        Assert.Equal(second, Assert.Single(await ClaimShard("second")).Id);
-        fixture.MarkPassed();
-    }
 
     [Fact]
     public async Task LegacyClaims_FilterHubsAndPreserveGlobalSequence()
@@ -135,9 +107,9 @@ public sealed class HubUnconstrainedBatchClaimTests
         if (Database is null) return;
         var firstHub = Hub();
         var secondHub = Hub();
-        var registry = new HubPolicyRegistry()
-            .Register(firstHub, "work", 1, 1, _ => { })
-            .Register(secondHub, "work", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry()
+            .Register(firstHub, "work", 1, 1)
+            .Register(secondHub, "work", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: false);
         var first = await Enqueue(store, registry, firstHub, "work", "a");
         var second = await Enqueue(store, registry, secondHub, "work", "b");
@@ -158,8 +130,8 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry()
-            .Register(hub, "unconstrained", 1, 16, _ => { });
+        var registry = new HubTaskRouteRegistry()
+            .Register(hub, "unconstrained", 1, 16);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: split);
 
@@ -202,7 +174,7 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: split);
         var expired = await Enqueue(store, registry, hub, "work", "expired");
@@ -236,7 +208,7 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: true);
         var ids = new List<Guid>();
@@ -273,9 +245,9 @@ public sealed class HubUnconstrainedBatchClaimTests
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry()
-            .Register(hub, "work", 1, 1, _ => { })
-            .Register(hub, "other", 1, 1, _ => { });
+        var registry = new HubTaskRouteRegistry()
+            .Register(hub, "work", 1, 1)
+            .Register(hub, "other", 1, 1);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true,
             enableSplitBatchClaimCandidates: true);
         var matching = await Enqueue(store, registry, hub, "work", "matching");
@@ -295,11 +267,11 @@ public sealed class HubUnconstrainedBatchClaimTests
     }
 
     [Fact]
-    public async Task NativeBatchDoesNotMixAtomicAndIndividuallyCommittedClaims()
+    public async Task NativeBatchIgnoresHistoricalConstraintRows()
     {
         if (Database is null) return;
         var hub = Hub();
-        var registry = new HubPolicyRegistry().Register(hub, "__native_workflow__", 1, 8, _ => { });
+        var registry = new HubTaskRouteRegistry().Register(hub, "__native_workflow__", 1, 8);
         await using var store = new HubTaskStore(Database, 12, enableUnconstrainedBatchClaims: true);
         var free = await Enqueue(store, registry, hub, "__native_workflow__", "free");
         var constrained = await Enqueue(store, registry, hub, "__native_workflow__", "constrained");
@@ -316,54 +288,9 @@ public sealed class HubUnconstrainedBatchClaimTests
             cmd.Parameters.AddWithValue("task", constrained);
             await cmd.ExecuteNonQueryAsync();
         }
-        Assert.Equal(free, Assert.Single(await Claim(store, hub, "native-a", 8, "__native_workflow__")).Id);
-        Assert.Equal(constrained, Assert.Single(await Claim(store, hub, "native-b", 8, "__native_workflow__")).Id);
+        var leases = await Claim(store, hub, "native-a", 8, "__native_workflow__");
+        Assert.Equal(new HashSet<Guid> { free, constrained }, leases.Select(x => x.Id).ToHashSet());
+        Assert.Empty(await Claim(store, hub, "native-b", 8, "__native_workflow__"));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task MixedClaims_BatchOnlyUnconstrained_AndPreserveStrictFifo(bool split)
-    {
-        if (Database is null) return;
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
-        var hub = Hub();
-        var registry = new HubPolicyRegistry()
-            .Register(hub, "free", 1, 8, _ => { })
-            .Register(hub, "serialized", 1, 8,
-                policy => policy.SequentialBy("resource",
-                    value => value.GetProperty("resourceId").GetString()));
-        await using var store = new HubTaskStore(fixture.ConnectionString, 12, enableUnconstrainedBatchClaims: true,
-            enableSplitBatchClaimCandidates: split);
-
-        var constrained = new List<Guid>();
-        for (var i = 0; i < 3; i++)
-        {
-            var input=Payload("same-key");
-            constrained.Add(await fixture.SeedTaskAsync(registry.Resolve(hub,"serialized",1,input),input.GetRawText()));
-        }
-        await fixture.ApplyAsync(33);
-        var free = new List<Guid>();
-        for (var i = 0; i < 8; i++)
-            free.Add(await Enqueue(store, registry, hub, "free", i.ToString()));
-
-        var leased = await Claim(store, hub, "A", 16, "serialized", "free");
-        Assert.Equal(9, leased.Count);
-        Assert.True(free.ToHashSet().SetEquals(leased.Where(t => t.TaskType == "free")
-            .Select(t => t.Id)));
-        Assert.Equal(constrained[0], Assert.Single(leased.Where(t =>
-            t.TaskType == "serialized")).Id);
-        Assert.Empty(await Claim(store, hub, "B", 16, "serialized", "free"));
-
-        var first = Assert.Single(leased.Where(t => t.TaskType == "serialized"));
-        Assert.True(await store.CompleteAsync(first.Id, "A", first.Epoch,
-            "{\"ok\":true}", CancellationToken.None));
-        var second = Assert.Single(await Claim(store, hub, "B", 16, "serialized", "free"));
-        Assert.Equal(constrained[1], second.Id);
-        Assert.True(await store.CompleteAsync(second.Id, "B", second.Epoch,
-            "{\"ok\":true}", CancellationToken.None));
-        var third = Assert.Single(await Claim(store, hub, "C", 16, "serialized", "free"));
-        Assert.Equal(constrained[2], third.Id);
-        fixture.MarkPassed();
-    }
 }

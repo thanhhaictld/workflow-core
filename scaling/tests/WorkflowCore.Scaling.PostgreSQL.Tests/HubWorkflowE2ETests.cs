@@ -16,9 +16,9 @@ public sealed class HubWorkflowE2ETests
     private static (HubTaskStore Tasks, HubWorkflowStore Workflows) Create(string hub, string? connection=null)
     {
         var tasks = new HubTaskStore(connection ?? Database!, 5);
-        var policies = new HubPolicyRegistry()
-            .Register(hub, "validate", 1, 8, _ => { })
-            .Register(hub, "provision", 1, 8, _ => { });
+        var policies = new HubTaskRouteRegistry()
+            .Register(hub, "validate", 1, 8)
+            .Register(hub, "provision", 1, 8);
         var definitions = new HubWorkflowRegistry()
             .Register(hub, "onboard", 1, 8, b => b
                 .Activity("validate").Then("provision"));
@@ -111,36 +111,6 @@ public sealed class HubWorkflowE2ETests
         }
     }
 
-    [Fact]
-    public async Task SequentialResource_BlocksOtherWorkflowUntilItsStepsFinish()
-    {
-        if (Database is null) return;
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
-        var hub = NewHub();
-        var (tasks, workflows) = Create(hub,fixture.ConnectionString);
-        await using (tasks)
-        {
-            var a = await workflows.StartAsync(Request(hub, "same-tenant"), CancellationToken.None);
-            var b = await workflows.StartAsync(Request(hub, "same-tenant"), CancellationToken.None);
-            var legacyPolicy=new HubPolicyRegistry().Register(hub,"validate",1,8,p=>
-                p.SequentialBy("tenant",v=>v.GetProperty("tenantId").GetString()));
-            var resource=Assert.Single(legacyPolicy.Resolve(hub,"validate",1,Request(hub,"same-tenant").Input).Resources);
-            await fixture.SeedWorkflowConstraintsAsync(a,resource);
-            await fixture.SeedWorkflowConstraintsAsync(b,resource);
-            await fixture.ApplyAsync(33);
-            var first = await ClaimOne(tasks, hub, "worker-1");
-            Assert.Equal(a, first.WorkflowId);
-            Assert.True(await workflows.CompleteAsync(first.Id, "worker-1", first.Epoch,
-                """{"validated":true}""", CancellationToken.None));
-            var next = await ClaimOne(tasks, hub, "worker-1");
-            Assert.Equal(a, next.WorkflowId);
-            Assert.True(await workflows.CompleteAsync(next.Id, "worker-1", next.Epoch,
-                """{"provisioned":true}""", CancellationToken.None));
-            var other = await ClaimOne(tasks, hub, "worker-2");
-            Assert.Equal(b, other.WorkflowId);
-            fixture.MarkPassed();
-        }
-    }
 
     [Fact]
     public async Task MonitorList_FiltersHubStatusAndSearch_WithNamedDurableHistory()

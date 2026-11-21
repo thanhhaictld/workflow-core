@@ -18,7 +18,6 @@ public sealed class HubCandidateHydrationPlanTests
         var connection = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for plan reproduction");
         var hub = "candidate-plan-" + Guid.NewGuid().ToString("N");
-        var key = hub + "-shared";
         await using var store = new HubTaskStore(connection);
         Guid[] ids;
         await using (var db = new NpgsqlConnection(connection))
@@ -27,20 +26,14 @@ public sealed class HubCandidateHydrationPlanTests
             await using (var seed = new NpgsqlCommand("""
                 BEGIN;
                 SET LOCAL wfc.hub_notification_outbox='off';
-                INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
-                VALUES (@key,128,true);
                 INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,state,due_at)
                 SELECT gen_random_uuid(),@hub,0,'plan-work',1,'{}',0,clock_timestamp()
                 FROM generate_series(1,20000);
-                INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
-                SELECT id,@key FROM wfc_scale.hub_task WHERE hub_id=@hub;
                 ANALYZE wfc_scale.hub_task;
-                ANALYZE wfc_scale.hub_task_constraint;
                 COMMIT;
                 """, db))
             {
                 seed.Parameters.AddWithValue("hub", hub);
-                seed.Parameters.AddWithValue("key", key);
                 await seed.ExecuteNonQueryAsync();
             }
             await using var pick = new NpgsqlCommand("SELECT id FROM wfc_scale.hub_task WHERE hub_id=@hub ORDER BY sequence LIMIT 128", db);
@@ -113,10 +106,9 @@ public sealed class HubCandidateHydrationPlanTests
         };
         await File.WriteAllTextAsync(output, JsonSerializer.Serialize(artifact,
             new JsonSerializerOptions { WriteIndented = true }));
-        await using (var cleanup = store.DataSource.CreateCommand("DELETE FROM wfc_scale.hub_task WHERE hub_id=@hub; DELETE FROM wfc_scale.hub_resource WHERE resource_key=@key"))
+        await using (var cleanup = store.DataSource.CreateCommand("DELETE FROM wfc_scale.hub_task WHERE hub_id=@hub"))
         {
             cleanup.Parameters.AddWithValue("hub", hub);
-            cleanup.Parameters.AddWithValue("key", key);
             await cleanup.ExecuteNonQueryAsync();
         }
         Assert.Equal(128, hydrated.Items.Count);

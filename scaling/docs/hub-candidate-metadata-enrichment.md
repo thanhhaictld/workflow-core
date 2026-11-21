@@ -4,25 +4,17 @@ The normal partition-owned candidate matcher remains enabled with
 `WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`. Discovery scans the existing indexed
 ready and expired task streams by hub, partition bucket, state, due/lease time,
 attempt count, finite horizon and keyset cursor. SQL returns bounded task
-identity and routing fields only. The registry applies its page and process
-memory budgets, reuses cached entries, and hydrates new or stale candidates in
-bounded ID batches.
+identity, routing fields and deadlines. The reader batches workflow-pin lookups
+for `__workflow__` and `__native_workflow__` tasks. A bounded process-local LRU
+reuses that metadata across pages and exact-ID hydration. Missing, oversized or
+failed lookups remain advisory-unknown and can proceed to PostgreSQL admission.
+Exact-ID hydration probes current task eligibility and suppresses oversized
+identity text. Activities can carry a workflow ID without a pin lookup.
 
-Hydration returns resource keys only when the complete set fits a conservative
-per-candidate share of the batch byte budget. Missing or oversized sets remain
-`ResourceKeysComplete=false`; they are unknown advisory constraints and cannot
-enter the confidently-unconstrained batch path. Workflow definitions are
-looked up in a separate bounded batch only for `__workflow__` and
-`__native_workflow__` tasks, then reused through the existing bounded
-process-local LRU. Missing, oversized, or failed workflow lookups remain
-unknown. Activities do not fetch workflow definitions merely because they
-carry a workflow ID.
-
-These values only guide matching. PostgreSQL admission still validates current
-workflow pins, resource capacity, strict FIFO order, owner/task fencing,
-permits, retries and lease state in its authoritative transaction.
+PostgreSQL validates workflow pins, worker capabilities, owner and task epochs,
+retries and lease state in the claim transaction.
 
 Discovery keeps its horizon and keyset cursor across bounded pages, including
 when a row fits individually but not in the remaining page memory budget.
-Periodic recovery, owner-generation checks, refresh-pending exclusion, reserved
+Periodic recovery, owner-generation checks, reserved
 entries and ambiguous-commit quarantine remain registry responsibilities.

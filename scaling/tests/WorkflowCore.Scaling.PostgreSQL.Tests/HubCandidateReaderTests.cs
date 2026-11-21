@@ -29,45 +29,6 @@ public sealed class HubCandidateReaderTests
         { Interlocked.Increment(ref HydrationCalls); return await inner.HydrateAsync(hub, matchingPartition, partitionCount, ids, byteLimit, ct); }
     }
 
-    [Fact]
-    public async Task OversizedResourcesUseUnknownConstraintFallbackWithoutLeasing()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate reader tests");
-        var hub = "candidate-large-" + Guid.NewGuid().ToString("N");
-        var id = Guid.NewGuid(); var key = new string('x', 512) + id;
-        await using var db = new NpgsqlConnection(database);
-        await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
-            VALUES (@id,@hub,0,'activity',1,'{}');
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,false);
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@id,@key);
-            """, db))
-        {
-            command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database);
-        var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
-        var small = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, horizon, null, 1, 256, default);
-        var fallback = Assert.Single(small.Items);
-        Assert.Equal(id, fallback.Id);
-        Assert.False(fallback.ResourceKeysComplete);
-        Assert.Empty(fallback.ResourceKeys);
-        Assert.NotNull(small.Next);
-        var page = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, horizon, null, 1, 2048, default);
-        var item = Assert.Single(page.Items);
-        Assert.Equal(id, item.Id);
-        Assert.Equal(key, Assert.Single(item.ResourceKeys));
-        Assert.True(item.ResourceKeysComplete);
-        Assert.True(item.EnrichmentLoaded);
-        Assert.Equal(0, item.Epoch);
-        var enriched = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [id], 2048, default)).Items);
-        Assert.Equal(key, Assert.Single(enriched.ResourceKeys));
-        Assert.True(enriched.ResourceKeysComplete);
-    }
 
     [Fact]
     public async Task CandidatePageRemainsEnrichedForEitherLegacyFlagValue()
@@ -91,39 +52,34 @@ public sealed class HubCandidateReaderTests
             horizon, null, 8, 4096, default)).Items);
         var enabled = Assert.Single((await enabledReader.ReadPageAsync(hub, 0, HubCandidateStream.Ready,
             horizon, null, 8, 4096, default)).Items);
-        Assert.Equal(id, baseline.Id); Assert.True(baseline.EnrichmentLoaded);
-        Assert.Equal(id, enabled.Id); Assert.True(enabled.EnrichmentLoaded);
+        Assert.Equal(id, baseline.Id);
+        Assert.Equal(id, enabled.Id);
     }
 
     [Fact]
-    public async Task HydrationLoadsOnlyRequestedCurrentEligibleIdsAndKeepsOversizedConstraintsUnknown()
+    public async Task HydrationLoadsOnlyRequestedCurrentEligibleIds()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
         var hub = "candidate-hydrate-" + Guid.NewGuid().ToString("N");
         var eligible = Guid.NewGuid(); var terminal = Guid.NewGuid(); var otherPartition = Guid.NewGuid();
-        var key = new string('k', 512) + eligible;
         await using var db = new NpgsqlConnection(database); await db.OpenAsync();
         await using (var command = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
             VALUES (@eligible,@hub,0,'activity',1,'{}'),(@terminal,@hub,0,'activity',1,'{}'),
                    (@other,@hub,1,'activity',1,'{}');
             UPDATE wfc_scale.hub_task SET state=2 WHERE id=@terminal;
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,false);
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@eligible,@key);
             """, db))
         {
             command.Parameters.AddWithValue("eligible", eligible); command.Parameters.AddWithValue("terminal", terminal);
             command.Parameters.AddWithValue("other", otherPartition); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
+ await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database);
         var reader = new HubCandidateReader(tasks);
         var page = await reader.HydrateAsync(hub, 0, 64, [eligible, terminal, otherPartition], 256, default);
         var item = Assert.Single(page.Items);
         Assert.Equal(eligible, item.Id);
-        Assert.False(item.ResourceKeysComplete);
-        Assert.Empty(item.ResourceKeys);
         Assert.Equal(0, page.Oversized);
     }
 
@@ -134,35 +90,25 @@ public sealed class HubCandidateReaderTests
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
         var hub = "candidate-hydrate-budget-" + Guid.NewGuid().ToString("N");
         var combined = Guid.NewGuid(); var oversized = Guid.NewGuid(); var unicode = Guid.NewGuid();
-        var combinedKey = new string('k', 220) + "-" + combined;
-        var unicodeKey = string.Concat(Enumerable.Repeat("🧪", 70)) + unicode;
         await using var db = new NpgsqlConnection(database); await db.OpenAsync();
         await using (var command = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
             VALUES (@combined,@hub,0,@base,1,'{}'),(@oversized,@hub,0,@large,1,'{}'),(@unicode,@hub,0,'activity',1,'{}');
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo)
-            VALUES (@combinedKey,1,false),(@unicodeKey,1,false);
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key)
-            VALUES (@combined,@combinedKey),(@unicode,@unicodeKey);
             """, db))
         {
             command.Parameters.AddWithValue("combined", combined); command.Parameters.AddWithValue("oversized", oversized);
             command.Parameters.AddWithValue("unicode", unicode); command.Parameters.AddWithValue("hub", hub);
             command.Parameters.AddWithValue("base", new string('b', 180));
             command.Parameters.AddWithValue("large", new string('z', 4096));
-            command.Parameters.AddWithValue("combinedKey", combinedKey); command.Parameters.AddWithValue("unicodeKey", unicodeKey);
+
             await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         var page = await reader.HydrateAsync(hub, 0, 64, [combined, combined], 512, default);
         var combinedItem = Assert.Single(page.Items);
         Assert.Equal(combined, combinedItem.Id);
-        Assert.False(combinedItem.ResourceKeysComplete);
-        Assert.Empty(combinedItem.ResourceKeys);
         Assert.InRange(page.MetadataBytes, 0, 512);
         var unicodePage = await reader.HydrateAsync(hub, 0, 64, [unicode], 512, default);
-        Assert.False(Assert.Single(unicodePage.Items).ResourceKeysComplete);
-        Assert.Empty(unicodePage.Items[0].ResourceKeys);
         Assert.InRange(unicodePage.MetadataBytes, 0, 512);
         var oversizedPage = await reader.HydrateAsync(hub, 0, 64, [oversized], 512, default);
         Assert.Empty(oversizedPage.Items);
@@ -247,12 +193,10 @@ public sealed class HubCandidateReaderTests
         await using (var command = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
             VALUES (@id,@hub,0,'activity',1,'{}');
-            INSERT INTO wfc_scale.hub_resource(resource_key,capacity,strict_fifo) VALUES (@key,1,false);
-            INSERT INTO wfc_scale.hub_task_constraint(task_id,resource_key) VALUES (@id,@key);
             """, db))
         {
             command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("key", key); await command.ExecuteNonQueryAsync();
+ await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database);
         var discovery = new CountingDiscovery(new HubCandidateReader(tasks, metadataEnrichmentEnabled: true));
@@ -279,7 +223,7 @@ public sealed class HubCandidateReaderTests
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate page byte fairness tests");
         var hub = "candidate-long-" + new string('h', 80) + Guid.NewGuid().ToString("N");
-        var longType = new string('t', 80); var unicodeType = string.Concat(Enumerable.Repeat("🧪", 40));
+        var longType = new string('t', 80); var unicodeType = string.Concat(Enumerable.Repeat("\U0001F9EA", 40));
         var readyIds = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
         var future = Guid.NewGuid(); var expired = Guid.NewGuid();
         await using var db = new NpgsqlConnection(database); await db.OpenAsync();
@@ -323,7 +267,6 @@ public sealed class HubCandidateReaderTests
         Assert.InRange(due.MetadataBytes, 0, 65536);
         var hydrated = await reader.HydrateAsync(hub, 0, 64, due.Items.Select(x => x.Id).ToArray(), 65536, default);
         Assert.Equal(3, hydrated.Items.Count);
-        Assert.All(hydrated.Items, x => Assert.True(x.ResourceKeysComplete));
         Assert.InRange(hydrated.MetadataBytes, 0, 65536);
         var expiredPage = await Drain(HubCandidateStream.Expired);
         Assert.Equal(expired, Assert.Single(expiredPage.Items).Id);
@@ -347,8 +290,7 @@ public sealed class HubCandidateReaderTests
         Assert.Equal(readyIds.Order().ToArray(), smallBudgetRows.Select(x => x.Id).Order().ToArray());
         foreach (var candidate in smallBudgetRows)
         {
-            var loaded = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [candidate.Id], 512, default)).Items);
-            Assert.True(loaded.ResourceKeysComplete);
+            Assert.Equal(candidate.Id, Assert.Single((await reader.HydrateAsync(hub, 0, 64, [candidate.Id], 512, default)).Items).Id);
         }
     }
 

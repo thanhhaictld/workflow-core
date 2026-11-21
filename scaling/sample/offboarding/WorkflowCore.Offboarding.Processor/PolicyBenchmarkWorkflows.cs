@@ -4,8 +4,7 @@ using WorkflowCore.Models;
 namespace WorkflowCore.Offboarding.Processor;
 
 /// <summary>
-/// Synthetic, side-effect-free routed-activity workload. All workflows have
-/// identical step duration; only their declared admission policy differs.
+/// Synthetic routed-activity workloads with identical step duration.
 /// </summary>
 public sealed class PolicyBenchmarkData
 {
@@ -25,20 +24,10 @@ public sealed class PolicyUnorderedWorkflow : IWorkflow<PolicyBenchmarkData>
 
 public sealed class PolicyPartitionWorkflow : IWorkflow<PolicyBenchmarkData>
 {
-    public string Id => "policy-partition-fifo";
+    public string Id => "policy-partition-routed";
     public int Version => 1;
     public void Build(IWorkflowBuilder<PolicyBenchmarkData> builder) => builder
         .StartWith<PolicyPartitionStep>()
-        .Input(s => s.ResourceId, d => d.ResourceId)
-        .Output(d => d.Completed, s => s.Completed);
-}
-
-public sealed class PolicyKeyedWorkflow : IWorkflow<PolicyBenchmarkData>
-{
-    public string Id => "policy-keyed-fifo";
-    public int Version => 1;
-    public void Build(IWorkflowBuilder<PolicyBenchmarkData> builder) => builder
-        .StartWith<PolicyKeyedStep>()
         .Input(s => s.ResourceId, d => d.ResourceId)
         .Output(d => d.Completed, s => s.Completed);
 }
@@ -60,4 +49,3 @@ public abstract class PolicyBenchmarkStep : StepBodyAsync
 
 public sealed class PolicyUnorderedStep : PolicyBenchmarkStep { }
 public sealed class PolicyPartitionStep : PolicyBenchmarkStep { }
-public sealed class PolicyKeyedStep : PolicyBenchmarkStep { }

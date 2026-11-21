@@ -1,0 +1,113 @@
+warm-up old:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-before.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 100
+number of transactions actually processed: 100/100
+number of failed transactions: 0 (0.000%)
+latency average = 2.217 ms
+initial connection time = 1.995 ms
+tps = 451.106791 (without initial connection time)
+warm-up new:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-after.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 100
+number of transactions actually processed: 100/100
+number of failed transactions: 0 (0.000%)
+latency average = 1.015 ms
+initial connection time = 1.984 ms
+tps = 984.785071 (without initial connection time)
+measured AB old:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-before.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 1.873 ms
+initial connection time = 2.245 ms
+tps = 533.926490 (without initial connection time)
+measured AB new:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-after.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 1.062 ms
+initial connection time = 2.557 ms
+tps = 941.178242 (without initial connection time)
+measured BA new:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-after.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 0.950 ms
+initial connection time = 2.443 ms
+tps = 1053.103813 (without initial connection time)
+measured BA old:
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-before.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 1.885 ms
+initial connection time = 2.042 ms
+tps = 530.475415 (without initial connection time)
+WAL pair UTC 2026-11-18T15:12:46.8028181+00:00 to 2026-11-18T15:12:53.5482952+00:00
+old LSN 0/67083048 -> 0/67E85CA8
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-before.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 1.946 ms
+initial connection time = 1.842 ms
+tps = 513.754096 (without initial connection time)
+new LSN 0/67E85CA8 -> 0/68702528
+pgbench (17.12 (Debian 17.12-1.pgdg13+1))
+transaction type: /tmp/dispatch-after.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 2000
+number of transactions actually processed: 2000/2000
+number of failed transactions: 0 (0.000%)
+latency average = 0.947 ms
+initial connection time = 1.876 ms
+tps = 1056.199309 (without initial connection time)

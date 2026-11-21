@@ -1,0 +1,49 @@
+Pager usage is off.
+before-insert-default-due
+BEGIN
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Insert on hub_task  (cost=0.00..0.02 rows=0 width=0) (actual time=0.647..0.648 rows=0 loops=1)
+   Buffers: shared hit=351
+   WAL: records=10 bytes=1007
+   ->  Result  (cost=0.00..0.02 rows=1 width=426) (actual time=0.047..0.047 rows=1 loops=1)
+         Buffers: shared hit=10
+ Planning:
+   Buffers: shared hit=16
+ Planning Time: 0.090 ms
+ Trigger trg_hub_work_ready: time=0.962 calls=1
+ Execution Time: 1.639 ms
+(10 rows)
+
+before-metadata-update
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Update on hub_task  (cost=0.42..8.45 rows=0 width=0) (actual time=0.217..0.217 rows=0 loops=1)
+   Buffers: shared hit=43
+   WAL: records=11 bytes=1053
+   ->  Index Scan using hub_task_pkey on hub_task  (cost=0.42..8.45 rows=1 width=82) (actual time=0.006..0.007 rows=1 loops=1)
+         Index Cond: (id = '44444444-4444-4444-4444-444444444441'::uuid)
+         Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=42
+ Planning Time: 0.196 ms
+ Trigger trg_hub_work_ready: time=0.119 calls=1
+ Execution Time: 0.370 ms
+(11 rows)
+
+ROLLBACK
+after-single-insert-final-due
+BEGIN
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Insert on hub_task  (cost=0.00..0.02 rows=0 width=0) (actual time=0.101..0.101 rows=0 loops=1)
+   Buffers: shared hit=30 dirtied=1
+   WAL: records=11 bytes=1111
+   ->  Result  (cost=0.00..0.02 rows=1 width=426) (actual time=0.005..0.005 rows=1 loops=1)
+         Buffers: shared hit=1
+ Planning Time: 0.014 ms
+ Trigger trg_hub_work_ready: time=0.018 calls=1
+ Execution Time: 0.129 ms
+(8 rows)
+
+ROLLBACK

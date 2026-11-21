@@ -41,7 +41,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
 
             var hub = "candidate-credit-" + Guid.NewGuid().ToString("N");
             await using var tasks = new HubTaskStore(database, 12);
-            var policies = new HubPolicyRegistry().Register(hub, "work", 1, 1, _ => { });
+            var policies = new HubTaskRouteRegistry().Register(hub, "work", 1, 1);
             var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(tasks),
                 new HubMatchingPartitionLeaseStore(tasks),
                 NullLogger<HubMatchingOwnership>.Instance);
@@ -65,7 +65,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(40));
                 for (var i = 0; i < 12; i++)
                 {
-                    var expected = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1, payload),
+                    var expected = await tasks.EnqueueAsync(policies.Resolve(hub, "work", 1),
                         payload.GetRawText(), null, null, deadline.Token);
                     readiness.PublishMatchingHint(hub, "work", 1, 0);
                     var leased = Assert.Single(await matcher.AcquireAsync(
@@ -121,7 +121,7 @@ public sealed class HubCandidateAcquisitionRuntimeTests
             using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await using var tasks = new HubTaskStore(database, 12);
             var readiness = new HubReadinessBroadcaster(tasks,
-                new HubWorkflowStore(tasks, new HubPolicyRegistry(), new HubWorkflowRegistry()),
+                new HubWorkflowStore(tasks, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
                 NullLogger<HubReadinessBroadcaster>.Instance);
             var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(tasks),
                 new HubMatchingPartitionLeaseStore(tasks), NullLogger<HubMatchingOwnership>.Instance);

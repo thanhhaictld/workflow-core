@@ -62,30 +62,6 @@ public sealed class HubOperationsStore(HubTaskStore tasks)
             )::text FROM wfc_scale.hub_task
             WHERE (@hub IS NULL OR hub_id=@hub)
             """, hub, windowMinutes, ct);
-        // Capacity/FIFO blocked count is a point-in-time estimate. A worker
-        // without a matching capability can produce further queue delays.
-        var contention = await ReadAsync(db, """
-            WITH occupied AS (
-              SELECT c.resource_key,count(*) AS active
-              FROM wfc_scale.hub_task_constraint c
-              JOIN wfc_scale.hub_task t ON t.id=c.task_id
-              WHERE t.state=1 AND t.lease_until>now() GROUP BY c.resource_key
-            ), blocked AS (
-              SELECT DISTINCT t.id FROM wfc_scale.hub_task t
-              JOIN wfc_scale.hub_task_constraint c ON c.task_id=t.id
-              JOIN wfc_scale.hub_resource r ON r.resource_key=c.resource_key
-              LEFT JOIN occupied o ON o.resource_key=c.resource_key
-              WHERE (@hub IS NULL OR t.hub_id=@hub)
-                AND t.state=0 AND t.due_at<=now() AND t.attempts<t.max_attempts
-                AND (coalesce(o.active,0)>=r.capacity OR
-                  (r.strict_fifo AND EXISTS (
-                    SELECT 1 FROM wfc_scale.hub_task_constraint prior
-                    JOIN wfc_scale.hub_task previous ON previous.id=prior.task_id
-                    WHERE prior.resource_key=c.resource_key
-                    AND previous.sequence<t.sequence AND previous.state IN (0,1))))
-            )
-            SELECT jsonb_build_object('blockedReady',count(*))::text FROM blocked
-            """, hub, windowMinutes, ct);
         var latency = await ReadAsync(db, """
             SELECT jsonb_build_object(
                 'queueP95Seconds',percentile_cont(0.95) WITHIN GROUP
@@ -148,37 +124,6 @@ public sealed class HubOperationsStore(HubTaskStore tasks)
               'hubId',hub_id,'activityType',task_type,'ready',ready,'leased',leased,
               'delayed',delayed,'dead',dead,'retryDue',retry,
               'oldestReadyAgeSeconds',oldest)), '[]'::jsonb)::text FROM rows
-            """, hub, windowMinutes, ct);
-        // Do not reveal hashed constraint keys. Aggregate by resource class.
-        // Concurrency is a lease-permit calculation, not worker CPU usage.
-        var policies = await ReadAsync(db, """
-            WITH relevant AS (
-              SELECT DISTINCT c.resource_key
-              FROM wfc_scale.hub_task_constraint c
-              JOIN wfc_scale.hub_task t ON t.id=c.task_id
-              WHERE (@hub IS NULL OR t.hub_id=@hub)
-            ), usage AS (
-              SELECT c.resource_key,
-                count(*) FILTER (WHERE t.state=1 AND t.lease_until>now()) AS active,
-                count(*) FILTER (WHERE t.state=0 AND t.due_at<=now() AND t.attempts<t.max_attempts) AS queued
-              FROM wfc_scale.hub_task_constraint c
-              JOIN wfc_scale.hub_task t ON t.id=c.task_id
-              WHERE c.resource_key IN (SELECT resource_key FROM relevant)
-              GROUP BY c.resource_key
-            ), rows AS (
-              SELECT regexp_replace(r.resource_key, ':[0-9a-f]{64}$','') AS name,
-                count(*) AS resources,sum(r.capacity) AS capacity,
-                sum(coalesce(u.active,0)) AS active,sum(coalesce(u.queued,0)) AS queued,
-                count(*) FILTER (WHERE coalesce(u.active,0)>=r.capacity) AS saturated
-              FROM wfc_scale.hub_resource r
-              JOIN relevant keys ON keys.resource_key=r.resource_key
-              LEFT JOIN usage u ON u.resource_key=r.resource_key
-              GROUP BY 1 ORDER BY queued DESC LIMIT 80
-            )
-            SELECT coalesce(jsonb_agg(jsonb_build_object(
-              'name',name,'resources',resources,'capacity',capacity,
-              'active',active,'queued',queued,'saturated',saturated)), '[]'::jsonb)::text
-            FROM rows
             """, hub, windowMinutes, ct);
         // Only leased owners are visible, not idle/registered worker fleet.
         var workers = await ReadAsync(db, """
@@ -264,8 +209,8 @@ public sealed class HubOperationsStore(HubTaskStore tasks)
             )::text FROM pg_stat_activity
             """, hub, windowMinutes, ct);
         return new { observedAt=DateTime.UtcNow, windowMinutes, database,
-            workflows, tasks=tasksSummary, contention, latency,
-            partitions, activities, policies, workers, timers, trends };
+            workflows, tasks=tasksSummary, latency,
+            partitions, activities, policies=Array.Empty<object>(), workers, timers, trends };
     }
 
     public async Task PruneSamplesAsync(CancellationToken ct)

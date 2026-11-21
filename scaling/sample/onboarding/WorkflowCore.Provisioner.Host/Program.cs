@@ -19,7 +19,7 @@ builder.Services.AddHubWorkflowRuntime(options=>
     .AddActivity<ValidateTenant>("onboarding","validate-tenant",3,o=>o.Input(s=>s.TenantId).Output(s=>s.Validated))
     .AddActivity<ProvisionTenantV4>("onboarding","provision-tenant",4,o=>
     {
-        o.Concurrency=20;
+
         o.Input(s=>s.TenantId).Output(s=>s.Provisioned).Output(s=>s.WorkspaceId);
     })
     .AddActivity<ConfigureTenantAccess>("onboarding","configure-tenant-access",4,o=>o.Input(s=>s.TenantId).Output(s=>s.AccessConfigured))
@@ -33,10 +33,10 @@ builder.Services.AddHubWorkflowRuntime(options=>
     .AddActivity<ActivateParallelTenant>("onboarding","activate-parallel-tenant",1,o=>o.Input(s=>s.TenantId).Input(s=>s.DatabaseReady).Input(s=>s.RolesReady).Input(s=>s.QuotaReady).Output(s=>s.Activated))
     .AddActivity<RestoreDatabase>("backup","restore-database",4,o=>
     {
-        o.Partitions=16;o.HubConcurrency=16;o.Concurrency=16;o.Input(s=>s.DatabaseId).Output(s=>s.Restored);
+        o.Partitions=16;o.Input(s=>s.DatabaseId).Output(s=>s.Restored);
     })
     .AddActivity<CapturePayment>("billing","capture-payment",4,o=>
     {
-        o.HubConcurrency=64;o.Concurrency=32;o.Input(s=>s.AccountId).Output(s=>s.Captured);
+        o.Input(s=>s.AccountId).Output(s=>s.Captured);
     });
 await builder.Build().RunAsync();

@@ -51,7 +51,7 @@ public sealed class HubCandidateRecoveryLatencyTests
                 Environment.SetEnvironmentVariable(keys[6], requireDemand ? "true" : "false");
                 var hub = "recovery-latency-" + Guid.NewGuid().ToString("N");
                 await using var tasks = new HubTaskStore(database, 12);
-                var policies = new HubPolicyRegistry().Register(hub, "recovery-work", 1, 1, _ => { });
+                var policies = new HubTaskRouteRegistry().Register(hub, "recovery-work", 1, 1);
                 var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(tasks),
                     new HubMatchingPartitionLeaseStore(tasks), NullLogger<HubMatchingOwnership>.Instance);
                 var readiness = new HubReadinessBroadcaster(tasks,

@@ -46,7 +46,7 @@ public sealed class HubCandidateMatcherProfileTests(ITestOutputHelper output)
             var hub = $"matcher-profile-{lanes}-{compatible}";
             var candidates = Enumerable.Range(1, lanes).Select(i => new HubTaskCandidate(
                 Guid.NewGuid(), i, hub, 0, "__workflow__", 1, Guid.NewGuid(),
-                "target-flow", 1, 1, DateTime.UtcNow.AddHours(1), [], true)).ToArray();
+                "target-flow", 1, 1, DateTime.UtcNow.AddHours(1))).ToArray();
             var pageSize = 256;
             var options = new HubCandidateCoordinatorOptions(
                 PageSize: pageSize, PageWireBytes: 1024 * 1024,

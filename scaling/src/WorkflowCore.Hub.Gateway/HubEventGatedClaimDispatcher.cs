@@ -12,7 +12,7 @@ namespace WorkflowCore.Hub.Gateway;
 /// Empty claims stop the drain until a new hint or a bounded catch-up probe.
 ///
 /// This is deliberately NOT an in-memory task queue: PostgreSQL remains the
-/// authority for eligibility, FIFO permits, task leasing and fencing.
+/// authority for eligibility, durable task leasing and fencing.
 /// </summary>
 public sealed class HubEventGatedClaimDispatcher
 {

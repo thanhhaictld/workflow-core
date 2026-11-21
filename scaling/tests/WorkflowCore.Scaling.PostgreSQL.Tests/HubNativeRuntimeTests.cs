@@ -26,7 +26,7 @@ public sealed class HubNativeRuntimeTests
             var hub = "cancel-attempt-" + Guid.NewGuid().ToString("N");
             await definitions.RegisterAsync(new(hub, "native", 2, 4, 2,
                 JsonSerializer.SerializeToElement(new { executionMode = "native" })), default);
-            await definitions.RegisterActivityAsync(new(hub, "act", 2, 4, 10, 10), default);
+            await definitions.RegisterActivityAsync(new(hub, "act", 2, 4), default);
             var id = await remote.StartAsync(new(hub, "native", 2, empty), default);
             var workflow = Assert.Single(await tasks.ClaimAsync("worker", [hub],
                 [new(hub, "__native_workflow__", 1)], 1, TimeSpan.FromMinutes(5), default));
@@ -128,7 +128,7 @@ public sealed class HubNativeRuntimeTests
         var definitions=new HubDefinitionStore(tasks);var native=new HubNativeWorkflowStore(tasks,definitions);
         var hub="exhaust-"+Guid.NewGuid().ToString("N");
         await definitions.RegisterAsync(new(hub,"native",2,4,1,JsonSerializer.SerializeToElement(new{executionMode="native"})),default);
-        await definitions.RegisterActivityAsync(new(hub,"act",2,4,10,10),default);
+        await definitions.RegisterActivityAsync(new(hub,"act",2,4),default);
         var id=await new HubRemoteWorkflowStore(tasks,definitions).StartAsync(new(hub,"native",2,JsonSerializer.SerializeToElement(new{})),default);
         var workflow=Assert.Single(await tasks.ClaimAsync("worker",[hub],[new(hub,"__native_workflow__",1)],1,TimeSpan.FromSeconds(30),default));
         Assert.NotNull(await native.CommitAsync(id,new(1,"worker",workflow.Epoch,0,workflow.Id,JsonSerializer.SerializeToElement(new{}),
@@ -146,7 +146,7 @@ public sealed class HubNativeRuntimeTests
         var message=Assert.Single(runtime.Inbox);
         Assert.Equal("exhausted-dispatch",message.Payload.GetProperty("dispatchKey").GetString());
         Assert.Contains("transport attempts exhausted",message.Payload.GetProperty("error").GetString());
-        var trace=Assert.Single(await new HubWorkflowStore(tasks,new HubPolicyRegistry(),new HubWorkflowRegistry()).TraceAsync(id,default));
+        var trace=Assert.Single(await new HubWorkflowStore(tasks,new HubTaskRouteRegistry(),new HubWorkflowRegistry()).TraceAsync(id,default));
         var attempt=Assert.Single(trace.Attempts);
         Assert.Equal("Failed",attempt.Outcome);Assert.NotNull(attempt.FinishedAt);
         Assert.Single(await tasks.ClaimAsync("worker",[hub],[new(hub,"__native_workflow__",1)],1,TimeSpan.FromSeconds(30),default));
@@ -210,7 +210,7 @@ public sealed class HubNativeRuntimeTests
         var definitions=new HubDefinitionStore(tasks);var native=new HubNativeWorkflowStore(tasks,definitions);
         var hub="suspend-"+Guid.NewGuid().ToString("N");
         await definitions.RegisterAsync(new(hub,"native",2,4,2,JsonSerializer.SerializeToElement(new{executionMode="native"})),default);
-        await definitions.RegisterActivityAsync(new(hub,"act",2,4,10,10),default);
+        await definitions.RegisterActivityAsync(new(hub,"act",2,4),default);
         var id=await new HubRemoteWorkflowStore(tasks,definitions).StartAsync(new(hub,"native",2,JsonSerializer.SerializeToElement(new{})),default);
         async Task<HubLeasedTask> Claim(string kind)=>Assert.Single(await tasks.ClaimAsync("worker",[hub],[new(hub,kind,kind=="act"?2:1)],1,TimeSpan.FromSeconds(30),default));
         var first=await Claim("__native_workflow__");

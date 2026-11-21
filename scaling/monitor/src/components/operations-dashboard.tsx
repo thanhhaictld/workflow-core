@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, BarChart3, GitBranch, History, Layers3,
-  ListChecks, LockKeyhole, Network, RefreshCcw, Server
+  ListChecks, Network, RefreshCcw, Server
 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, EmptyState, Select, cn } from "./ui";
 import type { OperationsSnapshot, OperationsWindow } from "@/lib/operations";
@@ -17,7 +17,6 @@ const sections = [
   { id: "activities", title: "Activities", icon: ListChecks },
   { id: "partitions", title: "Partitions", icon: Layers3 },
   { id: "hub", title: "Hub & scheduler", icon: Network },
-  { id: "concurrency", title: "Concurrency", icon: LockKeyhole },
   { id: "workers", title: "Workers", icon: Server },
   { id: "history", title: "History", icon: History }
 ] as const;
@@ -124,21 +123,6 @@ function ActivityRows({ data }: { data: OperationsSnapshot }) {
     </tr>)}</tbody>
   </TableFrame>;
 }
-function PolicyRows({ data }: { data: OperationsSnapshot }) {
-  return <TableFrame title="Resource concurrency" description="Shared-resource capacity and active permits, aggregated by policy class; resource identifiers are never exposed.">
-    <thead><tr>{["Policy class", "Resources", "Total slots", "In use", "Contending requests", "Saturated resources", "Slot occupancy"].map(x => <th key={x} className={th}>{x}</th>)}</tr></thead>
-    <tbody>{data.policies.map(p => <tr key={p.name} className="hover:bg-muted/30">
-      <td className={td + " font-medium"}>{p.name}</td>
-      <td className={td}>{formatCount(p.resources)}</td><td className={td}>{formatCount(p.capacity)}</td>
-      <td className={td}>{formatCount(p.active)}</td><td className={td}>{formatCount(p.queued)}</td>
-      <td className={td}>{formatCount(p.saturated)}</td>
-      <td className={td}><div className="h-2 min-w-24 overflow-hidden rounded-full bg-muted">
-        <div className={cn("h-full rounded-full", p.active >= p.capacity ? "bg-red-500" : "bg-emerald-600")}
-          style={{ width: Math.min(100, p.capacity ? 100 * p.active / p.capacity : 0) + "%" }} />
-      </div></td>
-    </tr>)}</tbody>
-  </TableFrame>;
-}
 function WorkerRows({ data }: { data: OperationsSnapshot }) {
   return <TableFrame title="Active lease owners" description="Derived from unexpired PostgreSQL task leases. Idle workers and processor registrations are not observable here.">
     <thead><tr>{["Lease owner", "Tasks in flight", "Partitions touched", "Last claim / update"].map(x => <th key={x} className={th}>{x}</th>)}</tr></thead>
@@ -203,7 +187,7 @@ export function OperationsDashboard() {
         <div className="flex items-center gap-2"><h1 className="text-2xl font-bold tracking-tight">Workflow operations</h1>
           <Badge tone="blue">Hub runtime</Badge></div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Live PostgreSQL state · durable backlog history · auto-refresh every 15 seconds
+          Live PostgreSQL state Â· durable backlog history Â· auto-refresh every 15 seconds
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -234,10 +218,10 @@ export function OperationsDashboard() {
       <p className="mt-2 text-sm text-muted-foreground">{error}</p>
       <p className="mt-1 text-xs text-muted-foreground">Configure WORKFLOW_HUB_URL and WORKFLOW_HUB_TOKEN; apply migration 011. No fake metrics are displayed.</p>
     </Card>}
-    {!data && !error && <Card className="p-8 text-sm text-muted-foreground">{loading ? "Reading Hub metrics…" : "No metrics returned"}</Card>}
+    {!data && !error && <Card className="p-8 text-sm text-muted-foreground">{loading ? "Reading Hub metricsâ€¦" : "No metrics returned"}</Card>}
     {data && <>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>Sampled {new Date(data.observedAt).toLocaleString()} · {hub || "All hubs"}</span>
+        <span>Sampled {new Date(data.observedAt).toLocaleString()} Â· {hub || "All hubs"}</span>
         <span>{data.latency.queueSamples} first-claim latency samples in last hour</span>
       </div>
       {section === "overview" && <>
@@ -245,9 +229,8 @@ export function OperationsDashboard() {
           <Kpi label="Active workflow instances" value={summary!.active} caption="Ready + running; may be waiting" />
           <Kpi label="Runnable workflow backlog" value={tasks!.runnableWorkflows} caption="Distinct workflows with eligible task" />
           <Kpi label="Activity ready backlog" value={tasks!.ready} caption="Due, unclaimed task rows" />
-          <Kpi label="Capacity / FIFO blocked" value={data.contention.blockedReady} caption="Subset of ready tasks; sampled" critical={data.contention.blockedReady > 0} />
           <Kpi label="Activity leases in flight" value={tasks!.leased} caption="Unexpired owned task leases" />
-          <Kpi label="Oldest ready age" value={formatAge(tasks!.oldestReadyAgeSeconds)} caption="Due timestamp → now" />
+          <Kpi label="Oldest ready age" value={formatAge(tasks!.oldestReadyAgeSeconds)} caption="Due timestamp â†’ now" />
           <Kpi label="Queue wait P95" value={formatAge(data.latency.queueP95Seconds)} caption="First claim only, 1h" />
           <Kpi label="Completed / min" value={formatCount(summary!.completedPerMinute)} caption="Last 5m average" />
         </div>
@@ -278,7 +261,7 @@ export function OperationsDashboard() {
       {section === "partitions" && <>
         <div className="grid gap-3 sm:grid-cols-3">
           <Kpi label="Partitions observed" value={data.partitions.length} caption="Limited to 200 busiest partitions" />
-          <Kpi label="Ready backlog skew" value={skew === null ? "N/A" : formatCount(skew) + "×"} caption="Max ready / mean ready across returned partitions" />
+          <Kpi label="Ready backlog skew" value={skew === null ? "N/A" : formatCount(skew) + "Ã—"} caption="Max ready / mean ready across returned partitions" />
           <Kpi label="Reclaimable leases" value={tasks!.reclaimable} caption="Expired and below retry limit" />
         </div>
         <PartitionRows data={data} />
@@ -349,15 +332,6 @@ export function OperationsDashboard() {
             {" "}Detailed worker/process trends, HTTP routes and SSE counters remain in Grafana.
           </p>
         </Card>
-      </>}
-      {section === "concurrency" && <>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Kpi label="Capacity / FIFO blocked" value={data.contention.blockedReady} caption="Unique currently ready tasks" />
-          <Kpi label="Policy classes" value={data.policies.length} caption="Aggregated, no raw resource keys" />
-          <Kpi label="Configured resources" value={data.policies.reduce((n, p) => n + p.resources, 0)} caption="Resources referenced by tasks" />
-        </div>
-        <PolicyRows data={data} />
-        <p className="text-xs text-muted-foreground">A task can hold several resource constraints. Class queue totals may count the same task more than once; use the distinct blocked count for the system-wide estimate.</p>
       </>}
       {section === "workers" && <>
         <div className="grid gap-3 sm:grid-cols-3">

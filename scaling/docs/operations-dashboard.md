@@ -36,7 +36,6 @@ are not database facts.
 | Activity delayed | \`hub_task\` | Ready with future due time |
 | Retry-due | \`hub_task\` | Due, ready, attempts greater than zero |
 | Dead letters | \`hub_task\` | Terminal state 3 |
-| Capacity/FIFO blocked | Resource and constraint tables | Distinct ready tasks blocked by active permits or older FIFO tasks |
 | Oldest ready age | \`now()-due_at\` | Due-age, not created-age |
 | Waiting workflows | \`hub_workflow.waiting_for\` | Active and waiting for external condition |
 | Scheduled workflows | Pending \`hub_timer\` | Active workflow with future pending timer |
@@ -44,18 +43,14 @@ are not database facts.
 | Lease duration P95 | \`hub_task_attempt\` | Claim-to-finish duration, not CPU time |
 | Throughput | \`hub_workflow.completed_at\` | Completed workflows in last five minutes divided by five |
 | Partition skew | Task backlog grouped by partition | Maximum ready tasks / average ready tasks among returned partitions |
-| Concurrency occupancy | Leased constraints / configured resource slots | Aggregated by non-sensitive resource class |
 | Worker activity | Active \`hub_task.owner\` | Currently active **lease owners** only |
 | Scheduler backlog | \`hub_timer\` | Pending and overdue timer counts |
 | Database connections | \`pg_stat_activity\` | Total/active connections to current database |
 | Historical backlog | \`hub_monitor_sample\` | Aggregate minute samples; seven-day retention |
 
-Important qualifiers: Active workflows are not runnable backlog. A task
-can be ready **and** policy blocked. A queued task can be unclaimable due to
-missing worker capabilities; that condition cannot be inferred from resource
-capacity alone. Per-policy contention counts can count the same task more
-than once because a task may require several resources. Missing trend samples
-remain null rather than being rendered as healthy zeros.
+Runnable workflow backlog counts due or reclaimable work. Ready tasks await
+worker credits with compatible capabilities. Gaps in trend samples appear as
+missing values.
 
 First-claim queue P95 is **only available for persisted attempt rows**.
 This does not represent every standalone task or a retry-specific wait.
@@ -87,12 +82,11 @@ dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Sca
 cd scaling/monitor && corepack pnpm run check-types && corepack pnpm run build
 \`\`\`
 
-The PostgreSQL acceptance test asserts queue/lease separation, resource
-contention, worker identification and persisted trend reads. CI provisions
+The PostgreSQL acceptance test asserts queue/lease separation, worker identification and persisted trend reads. CI provisions
 PostgreSQL and applies migration 011 before those tests.
 
 **Suggested operational triage:** Runnable workflow backlog, oldest ready
-age, activity backlog, blocked resources, partition skew, active lease owners,
+age, activity backlog, partition skew, active lease owners,
 first-claim latency and workflow execution history.
 
 

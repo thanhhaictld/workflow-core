@@ -27,7 +27,6 @@ export interface OperationsSnapshot {
     dead: number; reclaimable: number; runnableWorkflows: number;
     oldestReadyAgeSeconds: number | null;
   };
-  contention: { blockedReady: number };
   latency: { queueP95Seconds: number | null; leaseP95Seconds: number | null; queueSamples: number };
   partitions: Array<{
     hubId: string; partitionId: number; activeWorkflows: number; ready: number;
@@ -36,10 +35,6 @@ export interface OperationsSnapshot {
   activities: Array<{
     hubId: string; activityType: string; ready: number; leased: number;
     delayed: number; dead: number; retryDue: number; oldestReadyAgeSeconds: number | null;
-  }>;
-  policies: Array<{
-    name: string; resources: number; capacity: number; active: number;
-    queued: number; saturated: number;
   }>;
   workers: Array<{
     workerId: string; leasedTasks: number; partitions: number; lastClaimAt: string | null;

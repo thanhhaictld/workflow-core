@@ -33,20 +33,19 @@ if (!policyOnly)
     registrations.AddWorkflow<OffboardingWorkflow, OffboardingData>("offboarding", partitions: 64);
 if (Environment.GetEnvironmentVariable("POLICY_BENCHMARK_ENABLED") == "true")
 {
-    // Partition is placement, not ordering. Only opted-in activities get permits.
     registrations
         .AddWorkflow<PolicyUnorderedWorkflow, PolicyBenchmarkData>("policy-benchmark", 8)
         .AddWorkflow<PolicyPartitionWorkflow, PolicyBenchmarkData>("policy-benchmark", 8)
         .AddActivity<PolicyUnorderedStep>("policy-benchmark", "policy-unordered-step", 1, o =>
         {
             o.Partitions = 8;
-            o.Ordering = WorkflowCore.Hub.HubActivityOrdering.Unordered;
+
             o.Input(s => s.ResourceId).Output(s => s.Completed);
         })
         .AddActivity<PolicyPartitionStep>("policy-benchmark", "policy-partition-step", 1, o =>
         {
             o.Partitions = 8;
-            o.Ordering = WorkflowCore.Hub.HubActivityOrdering.PartitionSerial;
+
             o.Input(s => s.ResourceId).Output(s => s.Completed);
         });
 }

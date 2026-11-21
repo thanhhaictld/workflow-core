@@ -9,19 +9,14 @@ public sealed class HubOperationsStoreTests
     private static string? Database => Environment.GetEnvironmentVariable("WFC_TEST_PG");
 
     [Fact]
-    public async Task Snapshot_SeparatesReadyLeasedAndBlockedTasks_AndPersistsTrend()
+    public async Task Snapshot_SeparatesReadyAndLeasedTasks_AndPersistsTrend()
     {
         if (Database is null) return;
-        await using var fixture=await LegacyDatabaseFixture.CreateAsync(Database);
         var hub = "ops-" + Guid.NewGuid().ToString("N")[..12];
-        await using var tasks = new HubTaskStore(fixture.ConnectionString, 4);
-        var policy = new HubPolicyRegistry().Register(hub, "test-activity", 1, 4, p =>
-            p.LimitBy("scope", 1, json => json.GetProperty("resource").GetString()));
-        var payload = JsonSerializer.SerializeToElement(new { resource = "same" });
-        var route = policy.Resolve(hub, "test-activity", 1, payload);
-        await fixture.SeedTaskAsync(route, payload.GetRawText());
-        await fixture.SeedTaskAsync(route, payload.GetRawText());
-        await fixture.ApplyAsync(33);
+        await using var tasks = new HubTaskStore(Database, 4);
+        var route = new HubTaskRoute(hub, "test-activity", 1, 4);
+        await tasks.EnqueueAsync(route, "{}", null, null, default);
+        await tasks.EnqueueAsync(route, "{}", null, null, default);
         var leased = Assert.Single(await tasks.ClaimAsync(
             "ops-test-worker", [hub], [new HubCapability(hub, "test-activity", 1)],
             1, TimeSpan.FromSeconds(30), default));
@@ -31,9 +26,8 @@ public sealed class HubOperationsStoreTests
             await operations.SnapshotAsync(hub, 60, default));
         Assert.Equal(1, snapshot.GetProperty("tasks").GetProperty("ready").GetInt64());
         Assert.Equal(1, snapshot.GetProperty("tasks").GetProperty("leased").GetInt64());
-        Assert.Equal(1, snapshot.GetProperty("contention").GetProperty("blockedReady").GetInt64());
         Assert.NotEmpty(snapshot.GetProperty("partitions").EnumerateArray());
-        Assert.NotEmpty(snapshot.GetProperty("policies").EnumerateArray());
+        Assert.Empty(snapshot.GetProperty("policies").EnumerateArray());
         Assert.NotEmpty(snapshot.GetProperty("workers").EnumerateArray());
         Assert.Equal(0, snapshot.GetProperty("tasks").GetProperty("runnableWorkflows").GetInt64());
         Assert.True(snapshot.GetProperty("database").GetProperty("connections").GetInt64() > 0);
@@ -48,9 +42,7 @@ public sealed class HubOperationsStoreTests
             leased.Epoch, "{}", default));
         snapshot = JsonSerializer.SerializeToElement(
             await operations.SnapshotAsync(hub, 60, default));
-        Assert.Equal(0, snapshot.GetProperty("contention").GetProperty("blockedReady").GetInt64());
         Assert.Equal(0, snapshot.GetProperty("tasks").GetProperty("leased").GetInt64());
-        fixture.MarkPassed();
     }
 
     [Fact]

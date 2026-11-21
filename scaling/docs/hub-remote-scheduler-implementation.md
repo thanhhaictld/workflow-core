@@ -21,11 +21,11 @@ diagnosing 503, and do not infer recovery from health checks alone.
 ## Implemented boundaries
 
 - `scaling/src/WorkflowCore.Hub.Gateway` is generic REST/SSE. It registers no business definitions or concurrency policies.
-- `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted current workflow metadata, serializable concurrency policies), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
+- `scaling/src/WorkflowCore.Hub` contains `HubDefinitionStore` (PostgreSQL-persisted current workflow metadata and activity registrations), `HubRemoteWorkflowStore` (fenced state transitions and wakeups) and `HubTimerStore` (durable timer firing).
 - `scaling/src/WorkflowCore.Hub.Scheduling` is an independent library with `AddHubScheduling` and a bounded `BackgroundService`. `scaling/src/WorkflowCore.Hub.Server/Program.cs` registers it **inside the Hub process**.
 - `scaling/src/WorkflowCore.Hub.Client` provides REST transport. `scaling/src/WorkflowCore.RemoteExecution` reuses native builders, executor, mappings, pointers, error handlers, and middleware. The sequential registry remains for v1 runs.
 - Experimental native push is opt-in on Hub and worker with `WFC_HUB_PUSH_ENABLED=true`, in addition to the Hub matching configuration. A single-Hub lane advertises its effective concurrency as credits, subject to its worker cap and session limits. It uses SSE for committed assignments and REST for lease heartbeat and result commits; see [primary Hub runtime](current-runtime.md#sse-sessions-and-capacity) for routing, fallback and recovery limits.
-- Push sessions reserve and claim up to four credits per acquisition turn. The Gateway records one delivery for every committed lease and attempts to send every assignment in the batch; constrained work still follows the single-candidate admission path. Candidate discovery is kicked by coalesced readiness/credit wakeups, drains bounded turns with periodic recovery, and keeps database admission owner-fenced. Confirmed grants retire their one-shot candidate-match credits promptly while the SSE session retains delivery/worker-slot accounting; ambiguous commits remain quarantined until a valid completion/failure acknowledgement or authoritative lease retirement. A disconnected worker can still occupy an outstanding durable task lease for its full lease window.
+- Push sessions reserve and claim up to four credits per acquisition turn. The Gateway records one delivery for every committed lease and attempts to send every assignment in the batch. Candidate discovery is kicked by coalesced readiness/credit wakeups, drains bounded turns with periodic recovery, and keeps database admission owner-fenced. Confirmed grants retire their one-shot candidate-match credits promptly while the SSE session retains delivery/worker-slot accounting; ambiguous commits remain quarantined until a valid completion/failure acknowledgement or authoritative lease retirement. A disconnected worker can still occupy an outstanding durable task lease for its full lease window.
 - `workflow_hub_worker_inflight` now has a low-cardinality `task_kind` label (`activity` or `workflow`) for native worker occupancy. Candidate registry credits, reservations, cached entries, estimated bytes, and credit-capacity fallback counts are exported as process-wide gauges/counters; per-shard `oldestReadyAgeSeconds` remains in the Hub operations snapshot rather than a Prometheus label series.
 - `scaling/sample/onboarding/WorkflowCore.Provisioner.Host` publishes registrations and runs separately bounded workflow/activity lanes using **REST/SSE only**.
 - `scaling/sample/onboarding/WorkflowCore.Processor.Host` was historical v1-only tooling; the project has been removed. New deployments use the combined native workflow/activity lanes in `WorkflowCore.Provisioner.Host`. The reusable sequential runtime remains in `WorkflowCore.RemoteExecution` for v1 compatibility.
@@ -52,18 +52,17 @@ avoids enumerating every eligible task when many tasks share a hub and uses
 existing indexes without a migration. Dead index entries can still require
 visibility checks; performance under concurrent load remains to be validated.
 
-Candidate-mode acquisition pages now return eligible task identity and bounded
-resource keys together from indexed keyset scans; discovery no longer issues a
+Candidate-mode acquisition pages now return bounded eligible task identity from indexed keyset scans; discovery no longer issues a
 second ID-to-task hydration query for every page. Exact task-ID notification
 hints still use bounded hydration because an ID hint is advisory and must be
 revalidated against current PostgreSQL state. Stable workflow definition
 matching metadata is resolved in a deduplicated batch and cached by
 `(HubId, WorkflowId)` for up to ten minutes, with a 10,000-entry and 32 MiB
 per-process bound. Missing, failed, or oversized metadata remains unknown and
-cannot match a workflow worker. This cache contains only stable matching
+defers pin checks to PostgreSQL admission. This cache contains only stable matching
 metadata; workflow execution state and task eligibility remain authoritative
 in PostgreSQL. Page row and byte limits, owner generation fencing, cursor
-progress, and lease/resource admission behavior are unchanged.
+progress, and lease admission remains authoritative.
 
 ## Local startup: Docker Compose
 
@@ -107,8 +106,8 @@ To stage 1,000 concurrently *pending* workflows rather than 1,000 submissions wh
 | Endpoint | Description |
 | --- | --- |
 | `POST /api/hub/definitions` | Upsert current workflow metadata by ID/version |
-| `POST /api/hub/activity-registrations` | Persist declarative resource concurrency constraints |
-| `GET /api/hub/definitions` and `/policies` | Read published business metadata, including previous in-memory definitions |
+| `POST /api/hub/activity-registrations` | Publish route identity, version, partition count and optional contract |
+| `GET /api/hub/definitions` | Read published business metadata, including previous in-memory definitions |
 | `POST /api/hub/workflows` | Idempotently create a remote workflow and its first workflow task |
 | `GET /api/hub/workflows/{id}/runtime` | Processor retrieves revision, input, persisted results, state, definition identity |
 | `POST /api/hub/workflows/{id}/transitions` | Commit `ScheduleActivity`, `ScheduleTimer` or `CompleteWorkflow` with expected revision and fenced lease |
@@ -126,17 +125,16 @@ All mutating workflow operations are SQL transactions. A workflow waits by persi
 Native commits return the already-read Hub ID to the gateway internally for
 readiness publication, avoiding a post-commit snapshot/inbox reload. The REST
 acknowledgement remains `HubTransitionResult`, including on idempotent replay.
-Within one native commit, activity registration reads are reused by
-`(hub, activity type, version)` under the existing shared policy locks. Each
-dispatch still validates its input and derives its own resource keys; the
-registration cache is discarded with the transaction so later commits observe
-registration and capacity updates.
+Within one native commit, activity routes are read once per activity type and
+version. Routes are scoped to the transaction so later commits observe changes
+to registration metadata. Native dispatch inserts the final due time and
+journals scheduling in the same transaction.
 
 Workflow and activity registration updates metadata under the supplied identity
 and version. Developers keep same-version changes backward compatible and define
 a new code version for breaking changes, retaining earlier registrations while
 their runs finish. Assembly fingerprints are informational. Registration leaves
-existing run state and operator-controlled capacities unchanged.
+existing run state intact.
 
 ## Scheduler controls and future extraction
 

@@ -1,5 +1,5 @@
 """Validate retained lab evidence. Results distinguish invalid and stalled runs."""
-from collections import Counter, defaultdict
+from collections import Counter
 import argparse
 import datetime as dt
 import json
@@ -87,42 +87,10 @@ def audit(directory):
         assert completions[w['id']] == 1
         assert results[w['id']] == 1
     by_task = Counter(a['task_id'] for a in attempts)
-    keyed = {t['id']: t for t in tasks if t['task_type'] == 'policy-keyed-step'}
-    fifo = {}
-    if keyed:
-        groups = defaultdict(list)
-        for attempt in attempts:
-            if attempt['task_id'] in keyed:
-                task = keyed[attempt['task_id']]
-                groups[task['payload']['resourceId']].append((task, attempt))
-        inversions = overlaps = spanning = 0
-        for entries in groups.values():
-            entries.sort(key=lambda pair: stamp(pair[1]['claimed_at']))
-            spanning += len({t['partition_id'] for t, _ in entries}) > 1
-            for (previous, a), (current, b) in zip(entries, entries[1:]):
-                inversions += current['sequence'] < previous['sequence']
-                overlaps += a['finished_at'] is None or stamp(a['finished_at']) > stamp(b['claimed_at'])
-        assert inversions == overlaps == 0, directory.name + ': keyed FIFO/capacity violation'
-        fifo = {'keys': len(groups), 'keysSpanningPartitions': spanning,
-                'sequenceInversions': inversions, 'overlappingAttemptIntervals': overlaps}
-    partition_tasks = {t['id']: t for t in tasks if t['task_type'] == 'policy-partition-step'}
-    partition_fifo = {}
-    if partition_tasks:
-        groups = defaultdict(list)
-        for attempt in attempts:
-            if attempt['task_id'] in partition_tasks:
-                task = partition_tasks[attempt['task_id']]
-                groups[(task['hub_id'], task['partition_id'])].append((task, attempt))
-        inversions = overlaps = 0
-        for entries in groups.values():
-            entries.sort(key=lambda pair: stamp(pair[1]['claimed_at']))
-            for (previous, a), (current, b) in zip(entries, entries[1:]):
-                inversions += current['sequence'] < previous['sequence']
-                overlaps += a['finished_at'] is None or stamp(a['finished_at']) > stamp(b['claimed_at'])
-        assert inversions == overlaps == 0, directory.name + ': partition activity FIFO/capacity violation'
-        partition_fifo = {'partitions': len(groups), 'sequenceInversions': inversions,
-                          'overlappingAttemptIntervals': overlaps}
-    return {'submitted': len(workflows), 'completed': len(complete), 'keyedFifo': fifo, 'partitionFifo': partition_fifo,
+    partitions = {w['id']: w['partition_id'] for w in workflows}
+    assert all(t['partition_id'] == partitions[t['workflow_id']] for t in tasks), (
+        directory.name + ': task outside its workflow partition')
+    return {'submitted': len(workflows), 'completed': len(complete),
         'failed': sum(w['state'] == 3 for w in workflows),
         'activityAttempts': len(attempts), 'extraActivityAttempts': sum(max(0, n-1) for n in by_task.values()),
         'durableCompletions': sum(completions.values()), 'durableResults': sum(results.values()),
@@ -260,6 +228,8 @@ for directory in sorted(root.iterdir()):
         result = audit(directory)
         assert result['submitted'] == result['completed'] == expected, directory.name + ': incomplete cohort'
         assert result['failed'] == 0
+        assert result['activityAttempts'] == expected and result['extraActivityAttempts'] == 0, (
+            directory.name + ': unexpected durable activity attempt totals')
         cohorts.append({'label': directory.name, 'audit': result})
 document = {'faults': recovered, 'benchmarks': benchmarks}
 if cohorts:

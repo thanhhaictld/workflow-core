@@ -1,0 +1,13 @@
+Pager usage is off.
+sparse-ready-64-bucket-page-probes
+sparse-ready|64|64|0|
+active-ready-64-bucket-page-probes
+active-ready|64|0|8192|409
+active-nonexpired-lease-setup
+UPDATE 60000
+active-nonexpired-expiry-64-bucket-page-probes
+active-nonexpired-expiry|64|64|0|
+expired-lease-setup
+UPDATE 5000
+expired-lease-64-bucket-page-probes
+expired-lease|64|0|5000|250
