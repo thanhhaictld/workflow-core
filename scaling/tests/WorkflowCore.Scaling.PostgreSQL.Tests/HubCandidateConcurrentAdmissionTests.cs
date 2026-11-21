@@ -87,6 +87,125 @@ public sealed class HubCandidateConcurrentAdmissionTests
         }
     }
 
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
+    public async Task OneDemandReturnsEveryLeaseCommittedForIt(int batchSize, bool crossWorkerBatch)
+    {
+        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG") ??
+            throw new InvalidOperationException("WFC_TEST_PG is required");
+        var hub = "single-demand-" + Guid.NewGuid().ToString("N");
+        var settings = new Dictionary<string, string>
+        {
+            ["WFC_HUB_MATCHING_ENABLED"] = "true",
+            ["WFC_HUB_MATCHING_CANDIDATES_ENABLED"] = "true",
+            ["WFC_HUB_MATCHING_NODE_ID"] = "same-shard-test",
+            ["WFC_HUB_MATCHING_ADVERTISE_URL"] = "http://localhost:5100",
+            ["WFC_HUB_MATCHING_PEERS"] = "http://localhost:5100",
+            ["WFC_HUB_MATCHING_PARTITIONS"] = "64",
+            ["WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION"] = "true",
+            ["WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY"] = "2",
+            ["WFC_HUB_CANDIDATE_ADMISSION_PER_PARTITION"] = "2",
+            ["WFC_HUB_CANDIDATE_BATCH_SIZE"] = batchSize.ToString(),
+            ["WFC_HUB_CANDIDATE_CROSS_WORKER_BATCH"] = crossWorkerBatch ? "true" : "false",
+        };
+        var original = settings.Keys.ToDictionary(x => x, Environment.GetEnvironmentVariable);
+        try
+        {
+            foreach (var (name, value) in settings) Environment.SetEnvironmentVariable(name, value);
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var ct = stop.Token;
+            var taskCount = batchSize * 2;
+            await using var db = new NpgsqlConnection(database);
+            await db.OpenAsync(ct);
+            await using (var insert = new NpgsqlCommand("""
+                INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
+                SELECT gen_random_uuid(),@hub,0,'work',1,'{}' FROM generate_series(1,@count)
+                """, db))
+            {
+                insert.Parameters.AddWithValue("hub", hub);
+                insert.Parameters.AddWithValue("count", taskCount);
+                await insert.ExecuteNonQueryAsync(ct);
+            }
+            var matcherDatabase = new NpgsqlConnectionStringBuilder(database) { ApplicationName = hub };
+            await using var store = new HubTaskStore(matcherDatabase.ConnectionString, 12);
+            using var ownership = new HubMatchingOwnership(new HubMatchingLeaseStore(store),
+                new HubMatchingPartitionLeaseStore(store), NullLogger<HubMatchingOwnership>.Instance);
+            var ready = new HubReadinessBroadcaster(store,
+                new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
+                NullLogger<HubReadinessBroadcaster>.Instance);
+            var bothDrainsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseDrains = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var entered = 0;
+            using var candidate = new HubCandidateAcquisition(store, ownership, ready,
+                NullLogger<HubCandidateAcquisition>.Instance, null, true,
+                async (_, token) =>
+                {
+                    if (Interlocked.Increment(ref entered) == 2) bothDrainsStarted.TrySetResult();
+                    await releaseDrains.Task.WaitAsync(token);
+                });
+            await ownership.StartAsync(ct);
+            await candidate.StartAsync(ct);
+            try
+            {
+                await ownership.AcquirePartitionAsync(hub, 0, ct);
+                Task<IReadOnlyList<HubLeasedTask>> claim;
+                await using (var fence = new NpgsqlConnection(database))
+                {
+                    await fence.OpenAsync(ct);
+                    await using var tx = await fence.BeginTransactionAsync(ct);
+                    // Keep either drain from committing before the other can try admission.
+                    await using var lockOwner = new NpgsqlCommand("""
+                        SELECT epoch FROM wfc_scale.hub_matching_partition_owner
+                        WHERE hub_id=@hub AND matching_partition=0 FOR UPDATE
+                        """, fence, tx);
+                    lockOwner.Parameters.AddWithValue("hub", hub);
+                    Assert.NotNull(await lockOwner.ExecuteScalarAsync(ct));
+                    claim = candidate.AcquireAsync(new("worker", [hub], [new(hub, "work", 1)],
+                        taskCount, null, 0, 64), ct);
+                    await bothDrainsStarted.Task.WaitAsync(ct);
+                    releaseDrains.TrySetResult();
+
+                    await using var blocked = new NpgsqlCommand("""
+                        SELECT count(*) FROM pg_stat_activity
+                        WHERE application_name=@hub AND wait_event_type='Lock'
+                          AND query LIKE '%WITH locked_owner AS MATERIALIZED%'
+                        """, db);
+                    blocked.Parameters.AddWithValue("hub", hub);
+                    while ((long)(await blocked.ExecuteScalarAsync(ct))! < 2 && candidate.AdmissionActive > 1)
+                        await Task.Delay(20, ct);
+                    await tx.CommitAsync(ct);
+                }
+                var returned = await claim.WaitAsync(ct);
+                while (candidate.AdmissionActive != 0) await Task.Delay(20, ct);
+
+                await using var leased = new NpgsqlCommand("""
+                    SELECT id FROM wfc_scale.hub_task WHERE hub_id=@hub AND state=1 AND owner='worker'
+                    """, db);
+                leased.Parameters.AddWithValue("hub", hub);
+                await using var rows = await leased.ExecuteReaderAsync(ct);
+                var persisted = new List<Guid>();
+                while (await rows.ReadAsync(ct)) persisted.Add(rows.GetGuid(0));
+                Assert.Equal(returned.Select(lease => lease.Id).Order(), persisted.Order());
+                Assert.Equal(batchSize, returned.Count);
+
+                var remaining = await candidate.AcquireAsync(new("next-worker", [hub], [new(hub, "work", 1)],
+                    batchSize, null, 0, 64), ct);
+                Assert.Equal(taskCount, returned.Concat(remaining).Select(lease => lease.Id).Distinct().Count());
+            }
+            finally
+            {
+                releaseDrains.TrySetResult();
+                await candidate.StopAsync(default);
+                await ownership.StopAsync(default);
+            }
+        }
+        finally
+        {
+            foreach (var (name, value) in original) Environment.SetEnvironmentVariable(name, value);
+        }
+    }
+
     [Fact]
     public async Task TwoPartitionsMayAdmitTogetherButTheThirdWaitsForCapacity()
     {

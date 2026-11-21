@@ -21,6 +21,17 @@ public sealed class HubCandidateAcquisition : BackgroundService
         public CancellationToken Cancellation;
         public readonly List<string> Credits = [];
         public readonly TaskCompletionSource<IReadOnlyList<HubLeasedTask>> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool TryBeginAdmission()
+        {
+            lock (Gate)
+            {
+                // Each request has one result. Only one batch may commit leases for it at a time.
+                if (Admitting || CancelRequested || Result.Task.IsCompleted) return false;
+                Admitting = true;
+                return true;
+            }
+        }
     }
     private sealed record Retained(string Credit, Guid? Reservation, HubLeasedTask Lease, string Worker);
     private readonly HubTaskStore _tasks;
@@ -309,7 +320,11 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 catch(Exception ex)
                 {
                     _logger.LogWarning(ex,"Candidate acquisition loop failed");
-                    foreach(var demand in _demands.Values.Distinct()) demand.Result.TrySetException(ex);
+                    foreach (var demand in _demands.Values.Distinct())
+                    {
+                        lock (demand.Gate)
+                            if (!demand.Admitting) demand.Result.TrySetException(ex);
+                    }
                 }
             }
         }
@@ -393,7 +408,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
             foreach(var group in picked.GroupBy(x=>_demands.TryGetValue(x.Credit.Id,out var d)?d:null))
             {
                 var reservations=group.ToList(); var demand=group.Key;
-                if(demand is null || demand.Result.Task.IsCompleted)
+                if(demand is null)
                 { foreach(var r in reservations) _registry.AbandonBeforeAdmission(r.Id); continue; }
                 await AdmitAsync(demand,reservations,ct);
             }
@@ -406,14 +421,12 @@ public sealed class HubCandidateAcquisition : BackgroundService
         foreach (var group in groups)
         {
             var items = group.ToList(); var demand = group.Key;
-            if (demand is null) { foreach (var r in items) _registry.AbandonBeforeAdmission(r.Id); continue; }
-            lock (demand.Gate)
+            if (demand is null || !demand.TryBeginAdmission())
             {
-                if (demand.Result.Task.IsCompleted || demand.CancelRequested)
-                { foreach (var r in items) _registry.AbandonBeforeAdmission(r.Id); continue; }
-                demand.Admitting = true;
-                active.Add((demand, items));
+                foreach (var r in items) _registry.AbandonBeforeAdmission(r.Id);
+                continue;
             }
+            active.Add((demand, items));
         }
         if (active.Count == 0) return;
         var first = active[0].Reservations[0]; var firstRequest = active[0].Demand.Request;
@@ -485,11 +498,10 @@ public sealed class HubCandidateAcquisition : BackgroundService
     }
     private async Task AdmitAsync(Demand demand,List<HubCandidateReservation> reservations,CancellationToken ct)
     {
-        lock(demand.Gate)
+        if (!demand.TryBeginAdmission())
         {
-            if(demand.Result.Task.IsCompleted)
-            { foreach(var r in reservations) _registry.AbandonBeforeAdmission(r.Id); return; }
-            demand.Admitting=true;
+            foreach (var r in reservations) _registry.AbandonBeforeAdmission(r.Id);
+            return;
         }
         HubTelemetry.CandidateBatchFill.Record(reservations.Count);
         HubTelemetry.CandidateDemandToAdmissionDuration.Record(

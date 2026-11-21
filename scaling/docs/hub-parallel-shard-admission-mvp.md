@@ -20,6 +20,8 @@ It **does not claim** that 1,000 activity starts/s have been demonstrated.
    deadline/epoch check is still required *before commit*.
 4. The gateway defaults to bounded concurrent admission, two admission slots
    per shard (and two total per Hub unless separately configured).
+   Each worker demand has one in-flight admission at a time, so a confirmed
+   batch can return all of its leases in the demand's single response.
    Claims still observe the PostgreSQL claim-admission gate and connection pool.
 5. Only tasks with persisted `admission=1` and no
    `hub_task_constraint` row are eligible for the fast batch-by-ID path.
