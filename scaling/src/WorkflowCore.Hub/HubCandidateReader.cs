@@ -7,7 +7,7 @@ namespace WorkflowCore.Hub;
 // One stream is one stable bucket and one state. These types are deliberately
 // internal until the generation-scoped coordinator enforces process budgets.
 internal enum HubCandidateStream { Ready, Expired, ReadyDue }
-internal sealed record HubCandidateHorizon(long UpperSequence, DateTime Cutoff);
+internal sealed record HubCandidateHorizon(long UpperSequence, DateTime Cutoff, bool HasExpiredCandidates);
 internal sealed record HubCandidateCursor(long Sequence, DateTime? Deadline = null);
 internal sealed record HubTaskCandidate(Guid Id, long Sequence, string HubId, int PartitionId,
     string TaskType, int Version, Guid? WorkflowId, string? DefinitionId, int? DefinitionVersion,
@@ -26,7 +26,7 @@ internal sealed record HubCandidateHydrationPage(IReadOnlyList<HubTaskCandidate>
 
 internal interface IHubCandidateDiscovery
 {
-    Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct);
+    Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct);
     Task<HubCandidatePage> ReadPageAsync(string hub, int bucket, HubCandidateStream stream,
         HubCandidateHorizon horizon, HubCandidateCursor? cursor, int pageSize, int byteLimit, CancellationToken ct);
     Task<HubCandidateHydrationPage> HydrateAsync(string hub, int matchingPartition, int partitionCount,
@@ -122,18 +122,27 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         ORDER BY p.sequence,p.id
         """;
 
-    public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct)
+    public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct)
     {
-        // The global committed maximum is a conservative finite bound for any
-        // hub and uses the existing unique sequence index, without scanning
-        // historical rows belonging to that hub or adding another index.
+        // Both lookups use the same statement snapshot, so any lease visible to
+        // EXISTS is already within the global sequence bound. The statement
+        // timestamp gives the probe and subsequent pages the same cutoff.
         await using var command = tasks.DataSource.CreateCommand("""
-            SELECT COALESCE(max(sequence),0), clock_timestamp()
-            FROM wfc_scale.hub_task
+            SELECT COALESCE((SELECT max(sequence) FROM wfc_scale.hub_task),0),
+                   statement_timestamp(),
+                   EXISTS (
+                       SELECT 1
+                       FROM wfc_scale.hub_task
+                       WHERE hub_id=@hub AND partition_id % @partitionCount=@matchingPartition
+                         AND state=1 AND attempts < max_attempts AND lease_until<statement_timestamp()
+                   )
             """);
+        command.Parameters.AddWithValue("hub", hub);
+        command.Parameters.AddWithValue("matchingPartition", matchingPartition);
+        command.Parameters.AddWithValue("partitionCount", partitionCount);
         await using var reader = await command.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
-        return new(reader.GetInt64(0), reader.GetDateTime(1));
+        return new(reader.GetInt64(0), reader.GetDateTime(1), reader.GetBoolean(2));
     }
 
     // One bounded keyset page returns eligible task identity.

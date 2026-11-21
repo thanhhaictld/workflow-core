@@ -20,7 +20,8 @@ public sealed class HubCandidateReaderTests
     {
         public int PageCalls;
         public int HydrationCalls;
-        public Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct) => inner.CaptureHorizonAsync(hub, ct);
+        public Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct) =>
+            inner.CaptureHorizonAsync(hub, matchingPartition, partitionCount, ct);
         public async Task<HubCandidatePage> ReadPageAsync(string hub, int bucket, HubCandidateStream stream,
             HubCandidateHorizon horizon, HubCandidateCursor? cursor, int pageSize, int byteLimit, CancellationToken ct)
         { Interlocked.Increment(ref PageCalls); return await inner.ReadPageAsync(hub, bucket, stream, horizon, cursor, pageSize, byteLimit, ct); }
@@ -43,7 +44,7 @@ public sealed class HubCandidateReaderTests
             """, db))
         { command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hub", hub); await command.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database);
-        var horizon = await new HubCandidateReader(tasks, metadataEnrichmentEnabled: false).CaptureHorizonAsync(hub, default);
+        var horizon = await new HubCandidateReader(tasks, metadataEnrichmentEnabled: false).CaptureHorizonAsync(hub, 0, 1, default);
         var baselineReader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: false);
         var enabledReader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
         Assert.True(baselineReader.MetadataEnrichmentEnabled);
@@ -243,7 +244,7 @@ public sealed class HubCandidateReaderTests
             await command.ExecuteNonQueryAsync();
         }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         async Task<HubCandidatePage> Drain(HubCandidateStream stream)
         {
             var rows = new List<HubTaskCandidate>(); var oversized = new List<HubCandidateOversized>();
@@ -321,7 +322,7 @@ public sealed class HubCandidateReaderTests
         Assert.Equal("pool-flow", hydrated.DefinitionId);
 
         var coldPageReader = new HubCandidateReader(tasks);
-        var horizon = await coldPageReader.CaptureHorizonAsync(hub,default);
+        var horizon = await coldPageReader.CaptureHorizonAsync(hub, 0, 1, default);
         var page = await coldPageReader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,8,4096,default)
             .WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("pool-flow", Assert.Single(page.Items, x => x.Id == task).DefinitionId);
@@ -450,7 +451,7 @@ public sealed class HubCandidateReaderTests
         }
         await using var tasks = new HubTaskStore(database);
         var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var actual = new List<Guid>(); HubCandidateCursor? cursor = null;
         while (true)
         {
@@ -480,7 +481,7 @@ public sealed class HubCandidateReaderTests
         for (var i = 0; i < 5; i++) expected.Add(await Insert());
         await using var tasks = new HubTaskStore(database);
         var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var late = await Insert();
         var all = new List<Guid>(); HubCandidateCursor? cursor = null;
         do
@@ -490,7 +491,7 @@ public sealed class HubCandidateReaderTests
             if (page.EndOfStream) break;
         } while (all.Count <= 5);
         Assert.Equal(expected, all);
-        var nextHorizon = await reader.CaptureHorizonAsync(hub, default);
+        var nextHorizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var fresh = await reader.ReadPageAsync(hub, 0, HubCandidateStream.Ready, nextHorizon, cursor, 3, 1024, default);
         Assert.Equal(late, Assert.Single(fresh.Items).Id);
         var empty = await reader.ReadPageAsync(hub, 1, HubCandidateStream.Ready, nextHorizon, null, 3, 1024, default);
@@ -518,7 +519,8 @@ public sealed class HubCandidateReaderTests
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("due",due); cmd.Parameters.AddWithValue("head",head); cmd.Parameters.AddWithValue("expired",expired); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database);
         var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 4, default);
+        Assert.False(horizon.HasExpiredCandidates);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,4096,default);
         Assert.Equal(head, Assert.Single(first.Items).Id);
         await tx.CommitAsync();
@@ -526,7 +528,9 @@ public sealed class HubCandidateReaderTests
         { cmd.Parameters.AddWithValue("due",due); cmd.Parameters.AddWithValue("expired",expired); await cmd.ExecuteNonQueryAsync(); }
         var remainder = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,first.Next,10,4096,default);
         Assert.Empty(remainder.Items);
-        var fresh = await reader.CaptureHorizonAsync(hub,default);
+        var fresh = await reader.CaptureHorizonAsync(hub, 0, 4, default);
+        Assert.True(fresh.HasExpiredCandidates);
+        Assert.False((await reader.CaptureHorizonAsync(hub, 1, 4, default)).HasExpiredCandidates);
         var wrapped = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,fresh,null,10,4096,default);
         Assert.Contains(wrapped.Items, x => x.Id == late);
         Assert.Contains(wrapped.Items, x => x.Id == due);
@@ -548,7 +552,7 @@ public sealed class HubCandidateReaderTests
             """,db))
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("later",later); cmd.Parameters.AddWithValue("earlier",earlier); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
-        var horizon = await reader.CaptureHorizonAsync(hub, default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.ReadyDue,horizon,null,1,1024,default);
         Assert.Equal(earlier, Assert.Single(first.Items).Id);
         var second = await reader.ReadPageAsync(hub,0,HubCandidateStream.ReadyDue,horizon,first.Next,1,1024,default);
@@ -568,7 +572,7 @@ public sealed class HubCandidateReaderTests
             SELECT gen_random_uuid(),@hub,64,'activity',1,'{}' FROM generate_series(1,10);
             """,db)) { cmd.Parameters.AddWithValue("hub",hub); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub,default); var total = 0;
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default); var total = 0;
         for (var bucket = 0; bucket < 64; bucket++)
         {
             HubCandidateCursor? cursor = null; var count = 0;
@@ -593,14 +597,14 @@ public sealed class HubCandidateReaderTests
                    (@b,@hub,0,'activity',1,'{}',1,'worker',now()+interval '1 hour');
             """,db)) { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("a",a); cmd.Parameters.AddWithValue("b",b); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub,default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.Expired,horizon,null,1,1024,default);
         Assert.Equal(a,Assert.Single(first.Items).Id);
         await using (var cmd = new NpgsqlCommand("UPDATE wfc_scale.hub_task SET lease_until=now()-interval '2 hours' WHERE id=@id",db))
         { cmd.Parameters.AddWithValue("id",b); await cmd.ExecuteNonQueryAsync(); }
         var rest = await reader.ReadPageAsync(hub,0,HubCandidateStream.Expired,horizon,first.Next,2,1024,default);
         Assert.Empty(rest.Items);
-        var next = await reader.CaptureHorizonAsync(hub,default);
+        var next = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var wrapped = await reader.ReadPageAsync(hub,0,HubCandidateStream.Expired,next,null,2,1024,default);
         Assert.Equal(b,wrapped.Items[0].Id);
     }
@@ -617,7 +621,7 @@ public sealed class HubCandidateReaderTests
             """,db))
         { cmd.Parameters.AddWithValue("hub",hub); cmd.Parameters.AddWithValue("oversized",oversized); cmd.Parameters.AddWithValue("ordinary",ordinary); cmd.Parameters.AddWithValue("large",new string('z',4000)); await cmd.ExecuteNonQueryAsync(); }
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
-        var horizon = await reader.CaptureHorizonAsync(hub,default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var first = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,256,default);
         Assert.Equal(oversized,Assert.Single(first.Oversized!).Id);
         var second = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,first.Next,10,256,default);
@@ -636,11 +640,11 @@ public sealed class HubCandidateReaderTests
         { await using var cmd = new NpgsqlCommand("INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload) VALUES (@id,@hub,0,'activity',1,'{}')",db); cmd.Parameters.AddWithValue("id",id); cmd.Parameters.AddWithValue("hub",target); await cmd.ExecuteNonQueryAsync(); }
         await Insert(old,hub); await Insert(Guid.NewGuid(),other);
         await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks);
-        var horizon = await reader.CaptureHorizonAsync(hub,default);
+        var horizon = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         await Insert(Guid.NewGuid(),other); await Insert(later,hub);
         var page = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,10,2048,default);
         Assert.Equal(old,Assert.Single(page.Items).Id);
-        var fresh = await reader.CaptureHorizonAsync(hub,default);
+        var fresh = await reader.CaptureHorizonAsync(hub, 0, 1, default);
         var next = await reader.ReadPageAsync(hub,0,HubCandidateStream.Ready,fresh,page.Next,10,2048,default);
         Assert.Equal(later,Assert.Single(next.Items).Id);
     }

@@ -103,13 +103,13 @@ public sealed class HubNativeCommitOptimizationTests
 
         var candidates=new HubCandidateReader(tasks);
         var partition=lease.PartitionId;
-        var horizon=await candidates.CaptureHorizonAsync(hub,default);
+        var horizon=await candidates.CaptureHorizonAsync(hub, 0, 1, default);
         var before=await candidates.ReadPageAsync(hub,partition,HubCandidateStream.Ready,horizon,null,32,65536,default);
         Assert.DoesNotContain(before.Items,item=>item.Id==activityTaskId);
         Assert.Empty(await tasks.ClaimAsync("activity-worker",[hub],[new(hub,"delayed",1)],1,
             TimeSpan.FromSeconds(30),default));
         await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(0,(due-DateTime.UtcNow).TotalMilliseconds)+1500));
-        horizon=await candidates.CaptureHorizonAsync(hub,default);
+        horizon=await candidates.CaptureHorizonAsync(hub, 0, 1, default);
         var after=await candidates.ReadPageAsync(hub,partition,HubCandidateStream.Ready,horizon,null,32,65536,default);
         Assert.Contains(after.Items,item=>item.Id==activityTaskId);
         Assert.Single(await tasks.ClaimAsync("activity-worker",[hub],[new(hub,"delayed",1)],1,
