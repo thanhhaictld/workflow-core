@@ -1,5 +1,8 @@
 # Parallel candidate discovery and fenced admission (MVP)
 
+See [multi-Hub matching and async SSE delivery](hub-multi-hub-sse-admission-mvp.md) for an end-to-end architecture diagram, current REST/SSE endpoints, and failover sequence.
+
+
 Base: `thanhhaictld/hub-memory-candidates-luna`.
 This branch deliberately breaks compatibility with older task writers/policy registrations.
 It **does not claim** that 1,000 activity starts/s have been demonstrated.
