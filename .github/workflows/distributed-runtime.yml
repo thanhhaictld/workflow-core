@@ -221,7 +221,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   hub-load-1000:
-    name: Hub — 1000 concurrent 3-step workflows
+    name: Hub — 1000 concurrent 4-step workflows
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -243,7 +243,7 @@ jobs:
       WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
       WFC_HUB_DB_POOL: '12'
       WFC_LOAD_COUNT: '1000'
-      WFC_LOAD_VERSION: '3'
+      WFC_LOAD_VERSION: '5'
       WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
       WFC_LOAD_RUN_ID: ci-hub-1000-perf
       WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
