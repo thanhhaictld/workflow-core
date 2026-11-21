@@ -109,7 +109,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
                  t.epoch,t.due_at,t.lease_until,t.state
           FROM requested r JOIN wfc_scale.hub_task t ON t.id=r.id
           WHERE t.hub_id=@hub AND t.partition_id % @partitionCount=@matchingPartition
-            AND t.attempts<t.max_attempts
+            AND t.admission=1 AND t.attempts<t.max_attempts
             AND ((t.state=0 AND t.due_at<=clock_timestamp())
                  OR (t.state=1 AND t.lease_until<clock_timestamp()))
         )
@@ -147,7 +147,7 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
               SELECT id,sequence,hub_id,partition_id,task_type,task_version,workflow_id,epoch,
                      /*deadline*/ AS deadline
               FROM wfc_scale.hub_task
-              WHERE hub_id=@hub AND partition_id % 64=@bucket AND attempts < max_attempts
+              WHERE hub_id=@hub AND partition_id % 64=@bucket AND admission=1 AND attempts < max_attempts
                 AND sequence<=@upper AND /*predicate*/
               ORDER BY /*ordering*/ LIMIT @limit
             )

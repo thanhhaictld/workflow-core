@@ -127,10 +127,10 @@ public sealed class HubWorkflowStore(
             await using (var task = new NpgsqlCommand("""
                 INSERT INTO wfc_scale.hub_task
                     (id,hub_id,partition_id,task_type,task_version,workflow_id,
-                     workflow_step,payload,due_at)
+                     workflow_step,payload,due_at,admission)
                 VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,
                         @payload,CASE WHEN @first THEN now()
-                                      ELSE 'infinity'::timestamptz END)
+                                      ELSE 'infinity'::timestamptz END,1)
                 """, db, tx))
             {
                 task.Parameters.AddWithValue("id", taskId);

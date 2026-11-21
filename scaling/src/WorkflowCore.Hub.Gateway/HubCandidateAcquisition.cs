@@ -32,11 +32,16 @@ public sealed class HubCandidateAcquisition : BackgroundService
     private readonly LinkedList<(Demand Demand, HubMatchingPartitionLease Owner)> _waiting = new();
     private readonly bool _backpressure = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_BACKPRESSURE") is "true" or "1" or "True";
     private readonly bool _crossWorkerBatch = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_CROSS_WORKER_BATCH") is "true" or "1" or "True";
-    private readonly bool _concurrentAdmission = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION") is "true" or "1" or "True";
+    // The MVP defaults to bounded parallel admission. An explicit off switch
+    // keeps a stable single-admission control arm for benchmark comparisons.
+    private readonly bool _concurrentAdmission =
+        Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION") is not ("false" or "0" or "False");
     private readonly SemaphoreSlim _admissionSlots;
     private readonly int _batchSize;
+    private readonly int _discoveryParallelism;
+    private readonly int _maxAdmissionsPerPartition;
     private readonly object _inflightGate = new();
-    private readonly HashSet<(string Hub, int Partition)> _inflightPartitions = [];
+    private readonly Dictionary<(string Hub, int Partition), int> _inflightPartitions = [];
     private readonly HashSet<Task> _inflightTasks = [];
     private Task? _reconciliationTask;
     private int _nextAdmissionPartition;
@@ -66,6 +71,18 @@ public sealed class HubCandidateAcquisition : BackgroundService
         if (configuredBatch is not null && (!int.TryParse(configuredBatch, out var batch) || batch is < 1 or > 32))
             throw new ArgumentException("WFC_HUB_CANDIDATE_BATCH_SIZE must be 1..32");
         _batchSize = configuredBatch is null ? 32 : int.Parse(configuredBatch);
+        // Parallel discovery is safe because the registry reserves at most one
+        // active turn per matching shard, while enforcing global memory budgets.
+        var configuredDiscovery = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM");
+        if (configuredDiscovery is not null &&
+            (!int.TryParse(configuredDiscovery, out var discovery) || discovery is < 1 or > 16))
+            throw new ArgumentException("WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM must be 1..16");
+        _discoveryParallelism = configuredDiscovery is null ? 4 : int.Parse(configuredDiscovery);
+        var configuredPerPartition = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_ADMISSION_PER_PARTITION");
+        if (configuredPerPartition is not null &&
+            (!int.TryParse(configuredPerPartition, out var perPartition) || perPartition is < 1 or > 8))
+            throw new ArgumentException("WFC_HUB_CANDIDATE_ADMISSION_PER_PARTITION must be 1..8");
+        _maxAdmissionsPerPartition = configuredPerPartition is null ? 2 : int.Parse(configuredPerPartition);
         _tasks=tasks; _ownership=ownership; _logger=logger;
         _registry=new(new HubCandidateReader(tasks), (options ?? new()) with { RequireDemand = _backpressure });
         if (Enabled)
@@ -267,7 +284,11 @@ public sealed class HubCandidateAcquisition : BackgroundService
                     var turns=0;
                     for(;turns<16;turns++)
                     {
-                        var progressed=await _registry.RunOneTurnAsync(DateTimeOffset.UtcNow,stoppingToken);
+                        var now = DateTimeOffset.UtcNow;
+                        var discovery = new Task<bool>[_discoveryParallelism];
+                        for (var worker = 0; worker < discovery.Length; worker++)
+                            discovery[worker] = _registry.RunOneTurnAsync(now, stoppingToken);
+                        var progressed = (await Task.WhenAll(discovery)).Any(x => x);
                         if (_backpressure && progressed) AllocateWaiting();
                         await DrainAsync(stoppingToken);
                         var snapshot=_registry.Snapshot();
@@ -330,8 +351,9 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 lock (_inflightGate)
                 {
                     var key = (owner.HubId, owner.Partition);
-                    if (_inflightPartitions.Contains(key) || !_admissionSlots.Wait(0)) continue;
-                    _inflightPartitions.Add(key);
+                    if (_inflightPartitions.GetValueOrDefault(key) >= _maxAdmissionsPerPartition ||
+                        !_admissionSlots.Wait(0)) continue;
+                    _inflightPartitions[key] = _inflightPartitions.GetValueOrDefault(key) + 1;
                     Task? task = null;
                     task = Task.Run(async () =>
                     {
@@ -339,7 +361,13 @@ public sealed class HubCandidateAcquisition : BackgroundService
                         catch (Exception ex) { _logger.LogWarning(ex, "Candidate admission failed"); }
                         finally
                         {
-                            lock (_inflightGate) { _inflightPartitions.Remove(key); _inflightTasks.Remove(task!); }
+                            lock (_inflightGate)
+                            {
+                                var remaining = _inflightPartitions[key] - 1;
+                                if (remaining == 0) _inflightPartitions.Remove(key);
+                                else _inflightPartitions[key] = remaining;
+                                _inflightTasks.Remove(task!);
+                            }
                             _admissionSlots.Release(); _wake.Writer.TryWrite(true);
                         }
                     }, CancellationToken.None);

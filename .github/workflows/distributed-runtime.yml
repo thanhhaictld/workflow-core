@@ -75,6 +75,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
@@ -221,9 +223,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   hub-load-1000:
-    name: Hub — 1000 concurrent 3-step workflows
+    name: Hub — 1000 concurrent 4-step workflows (${{ matrix.mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [legacy, candidate]
     services:
       postgres:
         image: postgres:17
@@ -242,8 +248,30 @@ jobs:
       WFC_HUB_URL: http://127.0.0.1:5100
       WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
       WFC_HUB_DB_POOL: '12'
+      # Same PostgreSQL/worker topology in both arms. Only the matching
+      # transport and owner-fenced candidate scheduler are switched.
+      WFC_HUB_MATCHING_ENABLED: ${{ matrix.mode == 'candidate' }}
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: ${{ matrix.mode == 'candidate' }}
+      WFC_HUB_PUSH_ENABLED: ${{ matrix.mode == 'candidate' }}
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_MATCHING_NODE_ID: 'hub-load-1000'
+      WFC_HUB_MATCHING_ADVERTISE_URL: 'http://127.0.0.1:5100'
+      WFC_HUB_MATCHING_PEERS: 'http://127.0.0.1:5100'
+      WFC_HUB_PUSH_TRUSTED_OWNERS: 'http://127.0.0.1:5100'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_CANDIDATE_BACKPRESSURE: 'true'
+      WFC_HUB_CANDIDATE_CROSS_WORKER_BATCH: 'true'
+      WFC_HUB_CANDIDATE_CONCURRENT_ADMISSION: 'true'
+      WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY: '3'
+      WFC_HUB_CANDIDATE_ADMISSION_PER_PARTITION: '2'
+      WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM: '4'
+      WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED: 'false'
+      WFC_HUB_TASK_SSE_PUSH: 'false'
+      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
       WFC_LOAD_COUNT: '1000'
-      WFC_LOAD_VERSION: '3'
+      WFC_LOAD_VERSION: '5'
       WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
       WFC_LOAD_RUN_ID: ci-hub-1000-perf
       WFC_LOAD_REPORT: /tmp/workflow-hub-1000.json
@@ -279,6 +307,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
       - name: Build Hub, remote worker and performance harness
         run: |
@@ -336,7 +366,7 @@ jobs:
           assert report['verifiedWorkflowHistories'] >= 10
           # A 12-connection Hub pool plus diagnostic and PostgreSQL service overhead.
           assert report['peakDatabaseConnections'] <= 24, report
-          print('PASS: 1000 complete code-first remote workflows; 3000 steps; bounded DB pool')
+          print('PASS: 1000 complete code-first remote workflows; 4000 steps; bounded DB pool')
           print('Throughput:', report['processingThroughputWorkflowsPerSecond'])
           print('Workflow p95 (ms):', report['completionLatencyP95Ms'])
           print('Peak DB sessions:', report['peakDatabaseConnections'])
@@ -345,7 +375,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: workflow-hub-1000-performance
+          name: workflow-hub-1000-performance-${{ matrix.mode }}
           path: |
             /tmp/workflow-hub-1000.json
             /tmp/perf-hub.log

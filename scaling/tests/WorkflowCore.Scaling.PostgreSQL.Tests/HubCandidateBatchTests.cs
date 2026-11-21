@@ -63,12 +63,12 @@ public sealed class HubCandidateBatchTests
             [new(hub,"__native_workflow__",1)],i==6?null:[new(hub,"definition",1)])).ToArray(),"worker",hub,0,4,
             [new(hub,"__native_workflow__",1)],[new(hub,"definition",1)],owner,TimeSpan.FromSeconds(30));
         var result=await store.ClaimCandidateBatchAsync(request,default);
-        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status); Assert.Equal(new HashSet<Guid>{ids[0],ids[2],ids[6]},result.Leases.Select(x=>x.Id).ToHashSet());
+        Assert.Equal(HubCandidateClaimStatus.Leased,result.Status); Assert.Equal(new HashSet<Guid>{ids[0],ids[6]},result.Leases.Select(x=>x.Id).ToHashSet());
         await using var check=new NpgsqlCommand("""
             SELECT t.id,t.state,t.epoch,t.attempts,t.dispatch_key,(SELECT count(*) FROM wfc_scale.hub_workflow_event e WHERE e.task_id=t.id AND e.event_type='WorkflowTaskClaimed')
             FROM wfc_scale.hub_task t WHERE t.id=ANY(@ids)
             """,db); check.Parameters.AddWithValue("ids",ids); await using var rows=await check.ExecuteReaderAsync(); var count=0;
-        while(await rows.ReadAsync()) { var taskId=rows.GetGuid(0); var admitted=taskId==ids[0]||taskId==ids[2]||taskId==ids[6]; Assert.Equal(admitted?1:0,rows.GetInt16(1)); Assert.Equal(admitted?1L:0L,rows.GetInt64(2)); Assert.Equal(admitted?1:0,rows.GetInt32(3)); if(taskId!=ids[6]) Assert.Equal("stable",rows.GetString(4)); Assert.Equal((taskId==ids[0]||taskId==ids[2])?1L:0L,rows.GetInt64(5)); count++; }
+        while(await rows.ReadAsync()) { var taskId=rows.GetGuid(0); var admitted=taskId==ids[0]||taskId==ids[6]; Assert.Equal(admitted?1:0,rows.GetInt16(1)); Assert.Equal(admitted?1L:0L,rows.GetInt64(2)); Assert.Equal(admitted?1:0,rows.GetInt32(3)); if(taskId!=ids[6]) Assert.Equal("stable",rows.GetString(4)); Assert.Equal(taskId==ids[0]?1L:0L,rows.GetInt64(5)); count++; }
         Assert.Equal(7,count);
     }
 
@@ -173,7 +173,7 @@ public sealed class HubCandidateBatchTests
     }
 
     [Fact]
-    public async Task OppositeOrderCompetingStoreBatchesSerializeOnOwnerAndLeaseEachIdOnce()
+    public async Task OppositeOrderCompetingStoreBatchesAdmitDisjointTasksConcurrently()
     {
         var hub="candidate-batch-contended-"+Guid.NewGuid().ToString("N");
         var ids=Enumerable.Range(0,12).Select(_=>Guid.NewGuid()).ToArray();
@@ -190,21 +190,16 @@ public sealed class HubCandidateBatchTests
         var firstTask=firstStore.ClaimCandidateBatchAsync(Request(ids.Take(8)),default,new(BeforeOwnerRecheck:async ct=>{reached.TrySetResult(); await release.Task.WaitAsync(ct);}));
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var secondTask=secondStore.ClaimCandidateBatchAsync(Request(ids.Skip(4).Reverse()),default);
+        HubCandidateBatchResult second;
         try
         {
-            using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var blocked=false;
-            while(!blocked)
-            {
-                await using var waitCheck=new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query ILIKE '%locked_owner%')",db);
-                blocked=(bool)(await waitCheck.ExecuteScalarAsync(timeout.Token))!;
-                if(!blocked) await Task.Delay(25,timeout.Token);
-            }
+            // Independent tasks in one matching shard must commit while
+            // the first admission holds its shared owner-generation fence.
+            second=await secondTask.WaitAsync(TimeSpan.FromSeconds(10));
         }
         finally { release.TrySetResult(); }
 
         var first=await firstTask.WaitAsync(TimeSpan.FromSeconds(10));
-        var second=await secondTask.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(HubCandidateClaimStatus.Leased,first.Status); Assert.Equal(8,first.Leases.Count);
         Assert.Equal(HubCandidateClaimStatus.Leased,second.Status); Assert.Equal(4,second.Leases.Count);
         Assert.Equal(12,first.Leases.Concat(second.Leases).Select(x=>x.Id).Distinct().Count());

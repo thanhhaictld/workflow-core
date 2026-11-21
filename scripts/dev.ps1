@@ -149,6 +149,12 @@ function Apply-DatabaseSchema {
     Write-Host 'Applying 032_hub_candidate_task_id_hints.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/032_hub_candidate_task_id_hints.sql')
+    Write-Host 'Applying 033_hub_business_compatibility.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/033_hub_business_compatibility.sql')
+    Write-Host 'Applying 034_hub_task_admission.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/034_hub_task_admission.sql')
     Write-Host 'Applying 035_hub_ready_notifications.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/035_hub_ready_notifications.sql')

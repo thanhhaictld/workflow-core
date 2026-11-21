@@ -77,10 +77,11 @@ function Wait-Completed([string]$Id) {
     Wait-For { (Call-Hub GET "workflows/$Id").state -in @('Complete', 'Failed', 'Terminated') } "workflow $Id completion"
     if ((Call-Hub GET "workflows/$Id").state -ne 'Complete') { throw "Workflow $Id failed" }
 }
-function Assert-NativeResult([string]$Id, [int]$Steps) {
+function Assert-NativeResult([string]$Id, [int]$Steps, [int]$RoutedSteps, [switch]$ExpectAccessConfigured) {
     $runtime = Call-Hub GET "workflows/$Id/native-runtime"
     $data = $runtime.snapshot.Data.value
-    if (-not $data.Validated -or -not $data.WelcomeSent -or $data.WorkspaceId -ne "workspace-$($data.TenantId)") {
+    if (-not $data.Validated -or -not $data.WelcomeSent -or $data.WorkspaceId -ne "workspace-$($data.TenantId)" -or
+        ($ExpectAccessConfigured -and -not $data.AccessConfigured)) {
         throw 'Native input/output mappings were not preserved'
     }
     $history = @(Call-Hub GET "workflows/$Id/history")
@@ -90,12 +91,12 @@ function Assert-NativeResult([string]$Id, [int]$Steps) {
     }
     $trace = @(Call-Hub GET "workflows/$Id/trace")
     # A native timer/inline step is now a valid independent waterfall row.
-    # The remote onboarding path must still yield exactly three activity
-    # lanes with their durable task pointer/dispatch identifiers.
+    # Code-first v5 has four routed activities; timer v4 retains three
+    # routed activities plus a durable timer/inline waterfall entry.
     $routed = @($trace | Where-Object { $_.dispatchKey })
-    if ($routed.Count -ne 3 -or @($routed | Where-Object { -not $_.executionPointerId }).Count) {
+    if ($routed.Count -ne $RoutedSteps -or @($routed | Where-Object { -not $_.executionPointerId }).Count) {
         $lanes = @($trace | ForEach-Object { "step=$($_.stepIndex),type=$($_.activityType),pointer=$($_.executionPointerId),dispatch=$($_.dispatchKey),attempts=$(@($_.attempts).Count)" })
-        throw "Activity trace expected three routed lanes with pointer/dispatch identity; got $($routed.Count) routed / $($trace.Count) total: $($lanes -join '; ')"
+        throw "Activity trace expected $RoutedSteps routed lanes with pointer/dispatch identity; got $($routed.Count) routed / $($trace.Count) total: $($lanes -join '; ')"
     }
 }
 
@@ -109,10 +110,10 @@ try {
         if (-not $publisher.Process.WaitForExit(30000) -or $publisher.Process.ExitCode -ne 0) { throw 'Register-only publication failed' }
         $provisioner = Start-ManagedHost WorkflowCore.Provisioner.Host
     }
-    $native = Start-Workflow 3
+    $native = Start-Workflow 5
     Wait-Completed $native
-    Assert-NativeResult $native 3
-    $timer = Start-Workflow 3 tenant-onboarding-timer
+    Assert-NativeResult $native 4 4 -ExpectAccessConfigured
+    $timer = Start-Workflow 4 tenant-onboarding-timer
     Wait-For { @((Call-Hub GET "workflows/$timer/history") | Where-Object eventType -eq TimerScheduled).Count -gt 0 } 'durable timer wait'
     if ($ManageHosts) {
         Stop-ManagedHost $provisioner
@@ -122,10 +123,10 @@ try {
         $provisioner = Start-ManagedHost WorkflowCore.Provisioner.Host
     }
     Wait-Completed $timer
-    Assert-NativeResult $timer 4
+    Assert-NativeResult $timer 4 3
     $history = @(Call-Hub GET "workflows/$timer/history")
     if (@($history | Where-Object eventType -eq TimerFired).Count -lt 1) { throw 'Durable timer did not fire' }
-    Write-Output "PASS: native v3 mappings, idempotent starts, durable wait, pointer/attempt history; process restart=$ManageHosts"
+    Write-Output "PASS: native onboarding v5 and timer v4 mappings, idempotent starts, durable wait, pointer/attempt history; process restart=$ManageHosts"
     Write-Output "Native workflow: $native; timer workflow: $timer"
 } catch {
     foreach ($hostState in $managed) {

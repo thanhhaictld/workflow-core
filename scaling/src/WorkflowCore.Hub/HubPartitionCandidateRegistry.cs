@@ -38,7 +38,8 @@ internal sealed record HubCandidateCoordinatorSnapshot(int Partitions, int Entri
 
 /// <summary>
 /// One process-wide registry. All state transitions, including credit and ID
-/// reservations, run under one lock; SQL page reads run through one scheduler.
+/// reservations, run under one lock; SQL discovery turns may run concurrently
+/// across partitions but never concurrently within a partition.
 /// The host must run RunAsync exactly once and bind its lifecycle to ownership.
 /// </summary>
 internal sealed class HubPartitionCandidateRegistry : IDisposable
@@ -87,6 +88,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public int ExactHydrationsSinceRecovery;
         public int NextHeadBucket;
         public bool Active = true;
+        public bool TurnInFlight;
         public long Bytes;
         public bool BaseReleased;
         public int InFlightEntries;
@@ -116,7 +118,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private readonly Dictionary<string, (Partition Partition, Credit Credit)> _credits = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, Reservation> _reservations = new();
     private readonly HashSet<(string Hub, Guid Task)> _reservedTasks = new();
-    private readonly SemaphoreSlim _scheduler = new(1, 1);
     private int _nextPartition;
     private int _entries;
     private long _bytes;
@@ -420,7 +421,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct,
         Action<Exception>? reportError = null)
     {
-        if (!await _scheduler.WaitAsync(0, ct)) return false;
         Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null;
         bool capture = false; bool booked = false; bool head = false;
         try
@@ -432,12 +432,16 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 for (var i = 0; i < all.Length; i++)
                 {
                     var index = (_nextPartition + i) % all.Length; var candidate = all[index];
+                    // A capture/page/hydration turn mutates the partition's cursor
+                    // and reserved-page accounting. Never overlap two such turns.
+                    if (!candidate.Active || candidate.TurnInFlight) continue;
                     MatchLocked(candidate, now);
                     if (_options.RequireDemand && !candidate.Credits.Any(c => !c.Granted && c.Reservation is null) &&
                         (candidate.WaitingDemands == 0 || GroupCredits(candidate.Owner.HubId, candidate.Owner.Partition) >= _options.PartitionCredits ||
                          _credits.Count >= _options.ProcessCredits)) continue;
                     if (candidate.ExactIds.Count == 0 && candidate.Horizon is null && !candidate.Dirty && now < candidate.NextSweep) continue;
-                    p = candidate; _nextPartition = (index + 1) % all.Length; break;
+                    p = candidate; p.TurnInFlight = true;
+                    _nextPartition = (index + 1) % all.Length; break;
                 }
                 if (p is null) return false;
                 var recoveryTurnDue = p.Dirty || p.Horizon is not null || now >= p.NextSweep;
@@ -604,8 +608,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         }
         finally
         {
-            if (booked && p is not null) lock (_sync) ReleasePageLocked(p);
-            _scheduler.Release();
+            if (p is not null) lock (_sync)
+            {
+                if (booked) ReleasePageLocked(p);
+                p.TurnInFlight = false;
+                ReleaseStoppedPartitionLocked(p);
+            }
         }
     }
     private void ApplyHydratedLocked(Partition p, IReadOnlyList<Guid> requested, IReadOnlyList<HubTaskCandidate> items, DateTimeOffset now)

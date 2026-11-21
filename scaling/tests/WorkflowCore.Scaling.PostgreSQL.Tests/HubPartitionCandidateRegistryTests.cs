@@ -377,13 +377,18 @@ public sealed class HubPartitionCandidateRegistryTests
     }
 
     [Fact]
-    public async Task SchedulerSerializesSqlAndRotatesPartitionsUnderPressure()
+    public async Task DiscoveryRunsIndependentPartitionsConcurrentlyButNotTheSamePartition()
     {
         var clock = new Clock(); var source = new Discovery { Entered = new(TaskCreationOptions.RunContinuationsAsynchronously), Release = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         using var registry = new HubPartitionCandidateRegistry(source,Options(),clock); registry.StartGeneration(Owner("one"),64); registry.StartGeneration(Owner("two"),64);
         var first = registry.RunOneTurnAsync(clock.Now,default); await source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.False(await registry.RunOneTurnAsync(clock.Now,default)); Assert.Equal(1,source.MaxActive);
-        source.Release.SetResult(); Assert.True(await first); source.Entered=null;
+        var other=registry.RunOneTurnAsync(clock.Now,default);
+        Assert.Equal(2,source.MaxActive);
+        Assert.False(await registry.RunOneTurnAsync(clock.Now,default));
+        source.Release.SetResult();
+        Assert.True(await first);
+        Assert.True(await other);
+        source.Entered=null;
         await Pump(registry,clock,6);
         Assert.Contains(source.Calls,x => x.Hub=="one"); Assert.Contains(source.Calls,x => x.Hub=="two");
         var snapshot=registry.Snapshot(); Assert.InRange(snapshot.Bytes,0,262144); Assert.InRange(snapshot.Entries,0,16); Assert.Equal(0,snapshot.InFlightPages);

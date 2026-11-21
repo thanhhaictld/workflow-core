@@ -18,20 +18,28 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
     /// <summary>
     /// Locks and validates a captured matching-owner generation for a short
     /// admission transaction. Keep the transaction open through the task
-    /// update and history commit so acquisition and release serialize on the
-    /// same owner row. This does not replace a task execution lease.
+    /// update and history commit. Concurrent admissions use compatible SHARE
+    /// locks; owner takeover/release waits for them. A task still needs its
+    /// independent fenced lease. This does not replace a task execution lease.
     /// </summary>
     public static async Task<bool> LockOwnerForAdmissionAsync(NpgsqlConnection db,
         NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
         int partitionCount, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
         await using var cmd = new NpgsqlCommand("""
             WITH locked_owner AS MATERIALIZED (
                 SELECT o.lease_until FROM wfc_scale.hub_matching_partition_owner o
                 JOIN wfc_scale.hub_matching_partition_config c ON c.hub_id=o.hub_id
                 WHERE o.hub_id=@hub AND o.matching_partition=@partition
                   AND c.partition_count=@count AND o.owner_id=@owner AND o.epoch=@epoch
-                FOR UPDATE OF o
+                -- Multiple independent task admissions may share the same
+                -- owner generation. Takeover and renewal update this row and
+                -- therefore wait until these admitted leases have committed.
+                -- Never use an unlocked generation check here.
+                FOR SHARE OF o
             )
             SELECT 1 FROM locked_owner WHERE lease_until>clock_timestamp()
             """, db, transaction);
@@ -41,6 +49,12 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         cmd.Parameters.AddWithValue("owner", captured.OwnerId);
         cmd.Parameters.AddWithValue("epoch", captured.Epoch);
         return await cmd.ExecuteScalarAsync(ct) is not null;
+        }
+        finally
+        {
+            HubTelemetry.CandidateOwnerFenceWait.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        }
     }
 
     public async Task EnsureConfigAsync(string hub, int count, CancellationToken ct)
@@ -133,6 +147,9 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         string hub, int partition, string nodeId, long epoch,
         TimeSpan duration, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
         await using var cmd = Source.CreateCommand("""
             UPDATE wfc_scale.hub_matching_partition_owner
             SET lease_until=clock_timestamp()+@duration,updated_at=clock_timestamp()
@@ -145,6 +162,12 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         cmd.Parameters.AddWithValue("epoch", epoch);
         cmd.Parameters.Add("duration", NpgsqlDbType.Interval).Value = duration;
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        }
+        finally
+        {
+            HubTelemetry.CandidateOwnerRenewalDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        }
     }
 
     public async Task<bool> OwnsAsync(
