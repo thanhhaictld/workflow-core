@@ -75,6 +75,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
@@ -279,6 +281,8 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
       - name: Build Hub, remote worker and performance harness
         run: |
