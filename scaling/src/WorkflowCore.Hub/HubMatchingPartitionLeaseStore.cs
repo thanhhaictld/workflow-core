@@ -26,6 +26,9 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
         int partitionCount, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
         await using var cmd = new NpgsqlCommand("""
             WITH locked_owner AS MATERIALIZED (
                 SELECT o.lease_until FROM wfc_scale.hub_matching_partition_owner o
@@ -46,6 +49,12 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         cmd.Parameters.AddWithValue("owner", captured.OwnerId);
         cmd.Parameters.AddWithValue("epoch", captured.Epoch);
         return await cmd.ExecuteScalarAsync(ct) is not null;
+        }
+        finally
+        {
+            HubTelemetry.CandidateOwnerFenceWait.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        }
     }
 
     public async Task EnsureConfigAsync(string hub, int count, CancellationToken ct)
@@ -138,6 +147,9 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         string hub, int partition, string nodeId, long epoch,
         TimeSpan duration, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
         await using var cmd = Source.CreateCommand("""
             UPDATE wfc_scale.hub_matching_partition_owner
             SET lease_until=clock_timestamp()+@duration,updated_at=clock_timestamp()
@@ -150,6 +162,12 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
         cmd.Parameters.AddWithValue("epoch", epoch);
         cmd.Parameters.Add("duration", NpgsqlDbType.Interval).Value = duration;
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        }
+        finally
+        {
+            HubTelemetry.CandidateOwnerRenewalDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        }
     }
 
     public async Task<bool> OwnsAsync(
