@@ -393,7 +393,11 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     // Bucket signals are advisory, not full sweep requests.
                     if (!p.SignalBuckets.TryGetValue(bucket.Value, out var previous))
                         p.SignalBuckets[bucket.Value] = (null, 1);
-                    else p.SignalBuckets[bucket.Value] = (null, unchecked(previous.Version + 1));
+                    else
+                    {
+                        p.SignalBuckets[bucket.Value] = (null, unchecked(previous.Version + 1));
+                        HubTelemetry.CandidateSignalHintsCoalesced.Add(1);
+                    }
                     p.HintedBuckets.Add(bucket.Value);
                 }
                 else
@@ -564,6 +568,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 return true;
             }
             var horizon = p.Horizon ?? new HubCandidateHorizon(long.MaxValue, now.UtcDateTime);
+            if (targetedBucket.HasValue) HubTelemetry.CandidateSignalBucketQueries.Add(1);
             var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, horizon, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);

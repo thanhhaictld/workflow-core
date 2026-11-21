@@ -92,6 +92,10 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_candidate_waiting_sessions", "{session}");
     public static readonly Histogram<double> CandidateCapacityWait =
         Meter.CreateHistogram<double>("workflow_hub_candidate_capacity_wait_seconds", "s");
+    public static readonly Counter<long> CandidateSignalBucketQueries =
+        Meter.CreateCounter<long>("workflow_hub_candidate_signal_bucket_queries", "{query}");
+    public static readonly Counter<long> CandidateSignalHintsCoalesced =
+        Meter.CreateCounter<long>("workflow_hub_candidate_signal_hints_coalesced", "{hint}");
     public static readonly Counter<long> CandidateDiscoveryRows =
         Meter.CreateCounter<long>("workflow_hub_candidate_discovery_rows", "{row}");
     public static readonly Counter<long> CandidateHintsReceived =
