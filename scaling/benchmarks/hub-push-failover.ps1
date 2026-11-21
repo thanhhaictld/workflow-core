@@ -149,7 +149,7 @@ try {
     $result.sideEffects = $effects.Count
     $result.missingDispatchKeys = @($effects | Where-Object { -not $_.dispatchKey }).Count
     $result.duplicateSideEffects = [int]($effects | Group-Object { "$($_.workflowId):$($_.dispatchKey)" } | Where-Object Count -gt 1 | ForEach-Object { $_.Count - 1 } | Measure-Object -Sum).Sum
-    if ($result.duplicateSameEpochStarts -or $result.missingDispatchKeys -or $result.duplicateSideEffects -or $result.sideEffects -ne 8) { throw 'Unexpected execution or side-effect observation' }
+    if ($result.duplicateSameEpochStarts -or $result.missingDispatchKeys -or $result.duplicateSideEffects -or $result.sideEffects -ne 6) { throw 'Unexpected execution or side-effect observation' }
     if ($null -ne $oldLease) {
         try {
             $hb = @{ workerId=$oldLease.owner; epoch=$oldLease.epoch } | ConvertTo-Json
