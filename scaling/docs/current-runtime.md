@@ -140,8 +140,11 @@ existing two-second ready-hub reconciliation also requests recovery for each
 currently ready hub, preserving the previous missed-hint and disabled-LISTEN
 wakeup envelope; it does not run for every exact ID event. The registry keeps
 recovery pages bounded and shares service between exact batches and indexed
-pages. Its ten-second sweep remains the backstop for due-time passage, expired
-leases and work missed between ready-hub reconciliations. The separate typed
+pages. Each sweep captures a database cutoff and checks for expired leases in
+its matching partition. When none are visible at capture, the registry skips
+expiry pages for that sweep. Its ten-second recovery cadence captures a fresh
+cutoff for later expiries, due-time passage and work missed between ready-hub
+reconciliations. The separate typed
 recovery hints continue to serve the legacy matcher. Old-schema coarse
 notifications can still request a candidate rescan, so metadata-discovery
 reduction depends on workload and rollout.

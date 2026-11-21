@@ -12,8 +12,8 @@ public sealed class HubCandidateMatcherProfileTests(ITestOutputHelper output)
 {
     private sealed class Discovery(string hub, HubTaskCandidate[] candidates) : IHubCandidateDiscovery
     {
-        public Task<HubCandidateHorizon> CaptureHorizonAsync(string requestedHub, CancellationToken ct) =>
-            Task.FromResult(new HubCandidateHorizon(candidates.Length, DateTime.UtcNow));
+        public Task<HubCandidateHorizon> CaptureHorizonAsync(string requestedHub, int matchingPartition, int partitionCount, CancellationToken ct) =>
+            Task.FromResult(new HubCandidateHorizon(candidates.Length, DateTime.UtcNow, HasExpiredCandidates: false));
 
         public Task<HubCandidatePage> ReadPageAsync(string requestedHub, int bucket,
             HubCandidateStream stream, HubCandidateHorizon horizon, HubCandidateCursor? cursor,

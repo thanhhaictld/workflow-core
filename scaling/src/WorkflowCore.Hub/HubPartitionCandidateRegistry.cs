@@ -510,7 +510,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             }
             if (capture)
             {
-                var horizon = await _reader.CaptureHorizonAsync(p.Owner.HubId, linked.Token);
+                var horizon = await _reader.CaptureHorizonAsync(p.Owner.HubId, p.Owner.Partition, p.Count, linked.Token);
                 lock (_sync) if (p.Active)
                 {
                     p.Horizon = horizon; p.Streams.Clear(); p.NextStream = 0;
@@ -521,7 +521,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     foreach (var b in buckets)
                     {
                         p.Streams.Add(new(b, HubCandidateStream.ReadyDue));
-                        p.Streams.Add(new(b, HubCandidateStream.Expired));
+                        if (horizon.HasExpiredCandidates) p.Streams.Add(new(b, HubCandidateStream.Expired));
                         if (sequenceProbe) p.Streams.Add(new(b, HubCandidateStream.Ready));
                     }
                 }
