@@ -30,25 +30,27 @@ function Submit([string]$Hub, [string]$Type, [hashtable]$Payload, [string]$Key) 
     $answer = Request 'tasks' 'POST' @{
         hubId = $Hub
         taskType = $Type
-        # The current sample provisioner registers both activity types at v3.
-        version = 3
+        # The MVP provisioner publishes provision and restore activities at v4.
+        version = 4
         payload = $Payload
         idempotencyKey = "$Suffix-$Key"
     }
     return "$($answer.taskId)"
 }
 
-# Hub must reject unauthorized requests.
-$unauthorized = Invoke-WebRequest "$Root/api/hub/policies" -SkipHttpErrorCheck
+# Probe a current protected route, not the retired policy management API.
+$unauthorized = Invoke-WebRequest "$Root/api/hub/definitions" -SkipHttpErrorCheck
 if ([int]$unauthorized.StatusCode -ne 401) {
     throw 'Hub gateway unexpectedly allows unauthenticated requests'
 }
-$policies = Request 'policies'
-if (@($policies | Where-Object { $_.hubId -eq 'onboarding' }).Count -lt 1) {
-    throw 'Onboarding policy not registered'
+$definitions = @(Request 'definitions')
+if (@($definitions | Where-Object {
+    $_.hubId -eq 'onboarding' -and $_.definitionId -eq 'tenant-onboarding' -and $_.version -eq 5
+}).Count -lt 1) {
+    throw 'MVP onboarding v5 workflow not registered'
 }
 
-# Enqueue four serial tasks for one tenant and two independent tasks.
+# Enqueue four independent tasks for one tenant and two other tasks.
 $ids = @()
 $tenant = "tenant-$Suffix"
 $first = Submit 'onboarding' 'provision-tenant' @{tenantId=$tenant} 'serial-0'
@@ -67,10 +69,6 @@ $complete = 0
 while ([DateTime]::UtcNow -lt $deadline) {
     $all = @($ids | ForEach-Object { Request "tasks/$_" })
     $complete = @($all | Where-Object { $_.state -eq 'Complete' }).Count
-    $activeForTenant = @($all[0..3] | Where-Object { $_.state -eq 'Leased' }).Count
-    if ($activeForTenant -gt 1) {
-        throw "Sequential tenant policy violated: $activeForTenant simultaneous leases"
-    }
     if (@($all | Where-Object { $_.state -eq 'Dead' }).Count -gt 0) {
         throw 'Hub task reached dead-letter instead of succeeding'
     }
@@ -80,4 +78,4 @@ while ([DateTime]::UtcNow -lt $deadline) {
 if ($complete -ne $ids.Count) {
     throw "Only $complete/$($ids.Count) remote tasks completed. Check remote worker SSE and REST logs."
 }
-Write-Host 'REST/SSE remote activity execution, authorization, idempotency and per-tenant FIFO passed.'
+Write-Host 'REST/SSE remote activity execution, authorization, idempotency and unordered MVP dispatch passed.'
