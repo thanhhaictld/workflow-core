@@ -390,8 +390,8 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     internal static async Task WakeAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,int partition,CancellationToken ct)
     {
         await Execute(db,tx,"""
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload)
-            SELECT @task,@hub,@partition,'__native_workflow__',1,@id,'{}'::jsonb
+            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,workflow_id,payload,admission)
+            SELECT @task,@hub,@partition,'__native_workflow__',1,@id,'{}'::jsonb,1
             FROM wfc_scale.hub_workflow WHERE id=@id AND native_status='Runnable'
             ON CONFLICT DO NOTHING
             """,ct,("task",Guid.NewGuid()),("hub",hub),("partition",partition),("id",id));

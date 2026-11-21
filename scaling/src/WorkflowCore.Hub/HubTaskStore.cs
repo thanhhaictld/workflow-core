@@ -103,6 +103,10 @@ public sealed class HubTaskStore : IAsyncDisposable
                       WHEN 1 THEN t.attempts<t.max_attempts AND t.lease_until<now()
                       ELSE false
                   END
+                  -- The registry is advisory; durable admission is a requirement.
+                  -- Residual constraints invalidate even a stale "fast" descriptor.
+                  AND t.admission=1
+                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                   AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w WHERE w.id=t.workflow_id AND w.execution_mode='native' AND w.native_status<>'Runnable')
                   AND (t.task_type NOT IN ('__workflow__','__native_workflow__') OR o.pins IS NULL OR o.pins = 'null'::jsonb OR EXISTS (
                       SELECT 1 FROM wfc_scale.hub_workflow w,jsonb_to_recordset(o.pins) AS p(hub text,definition text,version integer)
@@ -209,8 +213,8 @@ public sealed class HubTaskStore : IAsyncDisposable
 
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
-                (id,hub_id,partition_id,task_type,task_version,workflow_id,payload,request_key)
-            VALUES (@id,@hub,@partition,@type,@version,@workflow,@payload,@request)
+                (id,hub_id,partition_id,task_type,task_version,workflow_id,payload,request_key,admission)
+            VALUES (@id,@hub,@partition,@type,@version,@workflow,@payload,@request,1)
             ON CONFLICT DO NOTHING RETURNING id
             """, db, tx))
         {
@@ -401,6 +405,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                 SELECT t.id FROM (
                   SELECT id,sequence,hub_id,task_type,workflow_id FROM wfc_scale.hub_task
                   WHERE state IN (0,1) AND attempts < max_attempts
+                    AND admission=1
+                    AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=hub_task.id)
                     AND /*hub_filter*/
                     AND /*partition_filter*/
                     AND hub_id || '|' || task_type || '|' || task_version::text = ANY(@types)
@@ -659,6 +665,8 @@ public sealed class HubTaskStore : IAsyncDisposable
               -- Keep the eligibility check, but do not let stale statistics
               -- turn this primary-key lookup into an active-queue scan.
               AND attempts::bigint < max_attempts
+              AND t.admission=1
+              AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
               AND ((state = 0 AND due_at <= now()) OR
                    (state = 1 AND lease_until < now()))
             FOR UPDATE SKIP LOCKED
@@ -787,6 +795,8 @@ public sealed class HubTaskStore : IAsyncDisposable
             /*hub_filter*/ AND /*indexed_partition_filter*/
             AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
             AND t.attempts < t.max_attempts
+            AND t.admission=1
+            AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
             AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_workflow w
                             WHERE w.id=t.workflow_id AND w.execution_mode='native'
                               AND w.native_status<>'Runnable')
@@ -822,6 +832,8 @@ public sealed class HubTaskStore : IAsyncDisposable
                   AND /*indexed_partition_filter*/
                   AND t.hub_id || '|' || t.task_type || '|' || t.task_version::text = ANY(@types)
                   AND t.attempts < t.max_attempts
+                  AND t.admission=1
+                  AND NOT EXISTS (SELECT 1 FROM wfc_scale.hub_task_constraint c WHERE c.task_id=t.id)
                   AND ((t.state=0 AND t.due_at<=now()) OR
                        (t.state=1 AND t.lease_until<now()))
                   AND NOT EXISTS (
