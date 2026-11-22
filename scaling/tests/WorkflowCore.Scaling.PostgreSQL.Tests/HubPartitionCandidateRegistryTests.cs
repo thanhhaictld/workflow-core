@@ -236,6 +236,65 @@ public sealed class HubPartitionCandidateRegistryTests
 
 
     [Fact]
+    public async Task CancelWhileAdmissionDispatchedReleasesCreditOnlyAfterAuthoritativeNoLease()
+    {
+        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-dispatched";
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
+        await Pump(registry, clock, 3);
+        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
+        Assert.False(registry.CancelCredit("crashed-worker"));
+        Assert.Equal(1, registry.Snapshot().Credits);
+        Assert.Equal(1, registry.Snapshot().Reservations);
+
+        registry.Complete(reservation.Id, HubCandidateResolution.Unavailable, clock.Now);
+        Assert.Equal(0, registry.Snapshot().Credits);
+        Assert.Equal(0, registry.Snapshot().Reservations);
+        Assert.False(registry.ReleaseGrantedCredit("crashed-worker"));
+    }
+
+    [Fact]
+    public async Task CancelledUncertainGrantHoldsCreditUntilCommitIsResolved()
+    {
+        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-uncertain";
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
+        await Pump(registry, clock, 3);
+        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
+        Assert.False(registry.CancelCredit("crashed-worker"));
+
+        registry.Complete(reservation.Id, HubCandidateResolution.CommitOutcomeUnknown, clock.Now);
+        Assert.Equal(1, registry.Snapshot().Credits);
+        Assert.Equal(1, registry.Snapshot().Uncertain);
+        registry.ResolveUncertain(reservation.Id, HubCandidateUncertainResolution.AuthoritativeNoCommit, clock.Now);
+        Assert.Equal(0, registry.Snapshot().Credits);
+        Assert.Equal(0, registry.Snapshot().Uncertain);
+    }
+
+    [Fact]
+    public async Task CancelledCommittedLeaseKeepsCreditUntilExplicitRetirement()
+    {
+        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-lease";
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
+        await Pump(registry, clock, 3);
+        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
+        Assert.False(registry.CancelCredit("crashed-worker"));
+
+        registry.Complete(reservation.Id, HubCandidateResolution.Leased, clock.Now);
+        Assert.Equal(1, registry.Snapshot().Credits);
+        Assert.False(registry.CancelCredit("crashed-worker"));
+        Assert.True(registry.ReleaseGrantedCredit("crashed-worker"));
+        Assert.Equal(0, registry.Snapshot().Credits);
+    }
+
+    [Fact]
     public async Task OwnerCancellationRetainsDispatchedCreditAndCandidateUntilResolution()
     {
         var clock = new Clock(); var source = new Discovery(); var hub = "ownership"; var task = Candidate(hub,1);
