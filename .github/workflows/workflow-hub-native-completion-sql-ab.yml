@@ -45,11 +45,13 @@ jobs:
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
       WFC_HUB_VERIFY_URL: 'http://127.0.0.1:5110'
       OFFBOARD_PROCESSOR_WORKERS: '8'
-      POLICY_BENCHMARK_ENABLED: 'false'
-      POLICY_BENCHMARK_ONLY: 'false'
-      K6_OFFBOARD_COUNT: '1000'
-      K6_OFFBOARD_VUS: '200'
-      K6_OFFBOARD_TIMEOUT_SECONDS: '900'
+      POLICY_BENCHMARK_ENABLED: 'true'
+      POLICY_BENCHMARK_ONLY: 'true'
+      POLICY_BENCH_ACTIVITY_WORKERS: '8'
+      K6_POLICY_MODE: 'unordered'
+      K6_POLICY_COUNT: '1000'
+      K6_POLICY_VUS: '200'
+      K6_POLICY_TIMEOUT_SECONDS: '900'
     steps:
       - uses: actions/checkout@v4
 
@@ -102,7 +104,7 @@ jobs:
             /tmp/stress-hub-a.json /tmp/stress-hub-b.json
           echo "PASS: $BENCH_PROCESSORS registered sessions; completion mode $BENCH_COMPLETION_MODE"
 
-      - name: Run 1,000-workflow k6 stress while sampling PostgreSQL and CPU
+      - name: Run 1,000 native workflows with 1 routed activity each
         run: |
           set -euo pipefail
           out=scaling/observability/results/sse-stress-1000-16
@@ -116,19 +118,20 @@ jobs:
           trap finish EXIT
           sleep 2
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
-            --env-file "$ENVFILE" --profile offboarding-k6 \
+            --env-file "$ENVFILE" --profile policy-k6 \
             run --rm --no-deps \
-            -e K6_OFFBOARD_COUNT=1000 \
-            -e K6_OFFBOARD_VUS=200 \
-            -e K6_OFFBOARD_TIMEOUT_SECONDS=900 \
-            -e K6_OFFBOARD_RUN_ID="$RUN_ID" \
-            k6-offboarding 2>&1 | tee "$out/k6.log"
+            -e K6_POLICY_MODE=unordered \
+            -e K6_POLICY_COUNT=1000 \
+            -e K6_POLICY_VUS=200 \
+            -e K6_POLICY_TIMEOUT_SECONDS=900 \
+            -e K6_POLICY_RUN_ID="$RUN_ID" \
+            k6-policy 2>&1 | tee "$out/k6.log"
           finish
           trap - EXIT
-          cp scaling/observability/results/k6-offboarding-summary.json "$out/k6-summary.json"
+          cp scaling/observability/results/k6-summary.json "$out/k6-summary.json"
           test -s "$out/pressure.json"
 
-      - name: Verify 1,000 durable completions and output performance metrics
+      - name: Verify 1,000 durable activity completions and output metrics
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -143,6 +146,17 @@ jobs:
               url,headers={"Authorization":"Bearer "+token}),timeout=45) as response:
               result=json.load(response)
           assert result["total"]==result["completed"]==1000 and result["failed"]==0, result
+          # Without this check the workload could complete entirely through
+          # workflow-local steps and never exercise CompleteActivityAsync.
+          import subprocess
+          cmd=["docker","compose","-f",os.environ["COMPOSE"],"-f",os.environ["HA"],
+               "-f",os.environ["SHARDS"],"--env-file",os.environ["ENVFILE"],
+               "exec","-T","postgres","psql","-U","workflow","-d","workflow","-Atc",
+               "SELECT count(*) FROM wfc_scale.hub_workflow_event e "
+               "JOIN wfc_scale.hub_workflow w ON e.workflow_id=w.id "
+               "WHERE w.run_id='"+run+"' AND e.event_type='ActivityResultReceived'"]
+          activity_count=int(subprocess.check_output(cmd,text=True).strip())
+          assert activity_count==1000, "Native activity completion coverage: "+str(activity_count)
           from datetime import datetime
           def ts(value): return datetime.fromisoformat(value.replace("Z","+00:00"))
           elapsed=(ts(result["lastCompletedAt"])-ts(result["firstCreatedAt"])).total_seconds()
@@ -154,7 +168,8 @@ jobs:
               "hubs":2,"matchingShards":4,"processorReplicas":int(os.environ["BENCH_PROCESSORS"]),
               "workflowSlotsPerProcessor":8,"k6VUs":200,"submitted":result["total"],
               "completed":result["completed"],"failed":result["failed"],
-              "workflowType":"tenant-offboarding-fast","elapsedSeconds":round(elapsed,3),
+              "nativeActivityResultsPersisted":activity_count,
+              "workflowType":"policy-unordered","elapsedSeconds":round(elapsed,3),
               "workflowThroughputPerSecond":round(1000/elapsed,3),
               "workflowP95Ms":result["p95CompletionMs"],"workflowP99Ms":result["p99CompletionMs"],
               "cpuBusyPercent":pressure.get("hostCpuBusyPercent"),
@@ -190,4 +205,4 @@ jobs:
         run: |
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" --profile offboarding-load \
-            --profile offboarding-k6 down --remove-orphans || true
+            --profile policy-k6 down --remove-orphans || true
