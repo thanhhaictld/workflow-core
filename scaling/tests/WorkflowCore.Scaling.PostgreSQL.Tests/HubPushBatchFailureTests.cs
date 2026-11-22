@@ -42,10 +42,18 @@ public sealed class HubPushBatchFailureTests
             },stop.Token);
             Assert.True(sessions.Update(session,new(1,4)));
             await run.WaitAsync(stop.Token);
-            Assert.Equal(4,sent.Count);
-            Assert.Equal(4,session.Deliveries.Count);
+            // Candidate acquisition may durably admit fewer than the four offered credits.
+            // A failed SSE send must still attempt every committed assignment in its batch,
+            // and every such assignment must remain tracked for lease expiry/recovery.
+            Assert.InRange(sent.Count, 2, 4);
+            Assert.Equal(sent.Count, session.Deliveries.Count);
+            Assert.Equal(sent.Count, sent.Select(x => x.Task.Id).Distinct().Count());
             await using var check = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_task WHERE hub_id=@hub AND state=1 AND owner='worker'",db);
-            check.Parameters.AddWithValue("hub",hub); Assert.Equal(4L,(long)(await check.ExecuteScalarAsync())!);
+            check.Parameters.AddWithValue("hub",hub);
+            Assert.Equal((long)sent.Count,(long)(await check.ExecuteScalarAsync())!);
+            await using var pending = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_task WHERE hub_id=@hub AND state=0",db);
+            pending.Parameters.AddWithValue("hub",hub);
+            Assert.Equal(4L-sent.Count,(long)(await pending.ExecuteScalarAsync())!);
             await candidate.StopAsync(default); await owner.StopAsync(default);
         }
         finally { foreach (var name in names) Environment.SetEnvironmentVariable(name,old[name]); }
