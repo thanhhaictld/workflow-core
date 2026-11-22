@@ -152,6 +152,11 @@ try {
     }
     Wait-Until { [int](Query "SELECT count(*) FROM wfc_scale.hub_workflow WHERE run_id='$run' AND completed_at IS NOT NULL") -eq 2 } 180 'both workflows complete'
     Mark 'workflows-completed'
+    # A hard-killed worker may leave ambiguous, durably granted leases.
+    # Keep their credits fenced through the 45s lease TTL and one recovery sweep
+    # rather than assuming every old slot can be retired within 20 seconds.
+    $creditSettleBudget = if ($workerFault) { 90 } else { 20 }
+    $creditSettleStarted = [DateTime]::UtcNow
     Wait-Until {
         $d = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
         # Preserve the last observation even when the cleanup assertion times out,
@@ -164,7 +169,8 @@ try {
             $d.candidateReservations -eq 0 -and
             $d.candidateUncertain -eq 0 -and
             $d.candidateAdmissionsActive -eq 0
-    } 20 'bounded waiting credits and no leaked reservations, uncertain leases or admissions after completion'
+    } $creditSettleBudget 'bounded waiting credits and no leaked reservations, uncertain leases or admissions after completion'
+    $result.creditSettleSeconds = [Math]::Round(([DateTime]::UtcNow - $creditSettleStarted).TotalSeconds, 2)
     $result.finalMatching = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
     $result.taskSummary = Query "SELECT json_build_object('tasks',count(*),'complete',count(*) FILTER (WHERE t.state=2),'retries',sum(greatest(t.attempts-1,0))) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run'" | ConvertFrom-Json
     $result.fifoOverlaps = [int](Query "SELECT count(*) FROM wfc_scale.hub_task_attempt a JOIN wfc_scale.hub_task ta ON ta.id=a.task_id JOIN wfc_scale.hub_workflow wa ON wa.id=ta.workflow_id JOIN wfc_scale.hub_task_attempt b ON b.task_id<>a.task_id AND a.claimed_at < coalesce(b.finished_at,now()) AND b.claimed_at < coalesce(a.finished_at,now()) JOIN wfc_scale.hub_task tb ON tb.id=b.task_id JOIN wfc_scale.hub_workflow wb ON wb.id=tb.workflow_id WHERE wa.run_id='$run' AND wb.run_id='$run' AND ta.task_type='provision-tenant' AND tb.task_type='provision-tenant'")
