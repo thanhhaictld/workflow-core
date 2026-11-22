@@ -429,7 +429,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
         if (active.Count == 0) return;
         var first = active[0].Reservations[0]; var firstRequest = active[0].Demand.Request;
         HubCandidateBatchResult result;
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             var items = active.SelectMany(x => x.Reservations.Select(r => new HubCandidateBatchItem(
@@ -452,7 +451,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
             }
             return;
         }
-        finally { HubTelemetry.CandidateAdmissionLatency.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds); }
         var leases = result.Leases.ToDictionary(x => x.Id);
         if (result.Status == HubCandidateClaimStatus.Leased) HubTelemetry.CandidateLeased.Add(result.Leases.Count);
         var completed = new List<(Demand Demand, List<HubLeasedTask> Leases)>();
