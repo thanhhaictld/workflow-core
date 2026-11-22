@@ -89,18 +89,6 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_candidate_signal_hints_coalesced", "{hint}");
     public static readonly Counter<long> CandidateDiscoveryRows =
         Meter.CreateCounter<long>("workflow_hub_candidate_discovery_rows", "{row}");
-    public static readonly Counter<long> CandidateHintsReceived =
-        Meter.CreateCounter<long>("workflow_hub_candidate_task_hints_received", "{hint}");
-    public static readonly Counter<long> CandidateHintsDeduped =
-        Meter.CreateCounter<long>("workflow_hub_candidate_task_hints_deduped", "{hint}");
-    public static readonly Counter<long> CandidateHintsDropped =
-        Meter.CreateCounter<long>("workflow_hub_candidate_task_hints_dropped", "{hint}");
-    public static readonly Counter<long> CandidateHydrationCalls =
-        Meter.CreateCounter<long>("workflow_hub_candidate_hydration_calls", "{call}");
-    public static readonly Counter<long> CandidateHydrationRows =
-        Meter.CreateCounter<long>("workflow_hub_candidate_hydration_rows", "{row}");
-    public static readonly Counter<long> CandidateHydrationOversized =
-        Meter.CreateCounter<long>("workflow_hub_candidate_hydration_oversized", "{row}");
     public static readonly Counter<long> CandidateWorkflowMetadataCalls =
         Meter.CreateCounter<long>("workflow_hub_candidate_workflow_metadata_calls", "{call}");
     public static readonly Counter<long> CandidateWorkflowMetadataRows =

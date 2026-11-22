@@ -27,11 +27,6 @@ public sealed class HubCandidateMatcherProfileTests(ITestOutputHelper output)
             return Task.FromResult(new HubCandidatePage(items, next,
                 items.Length < pageSize, items.Length * 256));
         }
-
-        public Task<HubCandidateHydrationPage> HydrateAsync(string requestedHub, int matchingPartition,
-            int partitionCount, IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct) =>
-            Task.FromResult(new HubCandidateHydrationPage(candidates.Where(x => x.HubId == requestedHub &&
-                x.PartitionId % partitionCount == matchingPartition && ids.Contains(x.Id)).ToArray(), 0, 0));
     }
 
     [Theory]

@@ -82,7 +82,7 @@ The matching shard (`partition_id % matching_count`) and discovery bucket
 | [Policies](../src/WorkflowCore.Hub/HubPolicies.cs) | Keyed enum values are 3, 4, and 5; builders offer FIFO, exclusive, and bounded business permits, including global scope. `PartitionSerial` creates `partition:<hub>:<partition>` with capacity 1 and FIFO enabled. | Retire every business-resource entry point, retain partition FIFO and non-keyed quotas. Do not delete every `StrictFifo` check. |
 | [Registration](../src/WorkflowCore.RemoteExecution/HubWorkflowRegistration.cs), [wire contract](../src/WorkflowCore.Hub/HubRemoteContracts.cs), [persisted resolution](../src/WorkflowCore.Hub/HubDefinitionStore.cs) | Explicit keyed modes and legacy resource selectors produce business constraints, even with FIFO disabled. Registration can upsert routing fields under the same activity version. | Validate every entry point; prevent an old publisher from restoring a retired policy. Freeze compatibility registrations while draining. |
 | [Enqueue and claim](../src/WorkflowCore.Hub/HubTaskStore.cs), [remote activity insertion](../src/WorkflowCore.Hub/HubRemoteWorkflowStore.cs), [inline workflow insertion](../src/WorkflowCore.Hub/HubWorkflowStore.cs) | Enqueues materialize resource rows and task constraints. Claims lock each resource and count active leases and earlier unfinished tasks across its scope. | Preserve admission for existing constrained work, including work scheduled later by an existing workflow. |
-| [Candidate reader](../src/WorkflowCore.Hub/HubCandidateReader.cs) | Pages aggregate constraint sizes and resource-key arrays; exact-ID hints also hydrate constraints. | Policy retirement does not automatically simplify these queries. |
+| [Candidate reader](../src/WorkflowCore.Hub/HubCandidateReader.cs) | Pages aggregate constraint sizes and resource-key arrays. Exact task-ID hydration was removed with the candidate notification fast path. | Policy retirement does not automatically simplify these queries. |
 | [Acquisition](../src/WorkflowCore.Hub.Gateway/HubCandidateAcquisition.cs) | Only candidates with a complete, empty resource set use unconstrained batch admission. | A task remains constrained if partition FIFO or runtime quotas apply, or if it is draining a legacy business policy. |
 | [Operations](../src/WorkflowCore.Hub/HubOperationsStore.cs) | Blocked-ready estimates include capacity and FIFO predecessors. | Keep truthful reporting for partition FIFO and draining compatibility work. |
 | [Capacity update](../src/WorkflowCore.Hub/HubDefinitionStore.cs), `UpdateActivityCapacityAsync` | `ResourceCapacity` and shared-resource coordination update business limits alongside Hub/activity capacities. | Keep business capacity updates only for compatibility drain; preserve revision checks and runtime quota ownership. Retire business fields from the supported contract after compatibility ends. |
@@ -201,8 +201,10 @@ the new contract correctly.
   Hydrate/cache arbitrary key sets only for compatibility work, in bounded ID
   batches. Measure descriptor/schema and query changes separately: metadata
   writes and extra hydration round trips can offset read savings.
-- Keep finite horizons, keyset/cursor progress, byte/entry budgets, exact-ID hint
-  revalidation, metadata failure visibility, workflow pins, and periodic recovery.
+- Keep finite horizons, keyset/cursor progress, byte/entry budgets, metadata
+  failure visibility, workflow pins, and periodic recovery. Exact-ID hint
+  revalidation was retired separately; see
+  [its decision record](decision-retire-exact-task-id-hints.md).
   Unknown admission metadata or constraints must never be treated as empty.
 - In authoritative claims, evaluate the predecessor predicate only for FIFO
   resources, which still include partition FIFO and compatibility business FIFO.
@@ -267,7 +269,7 @@ Failed fixtures are retained and their names reported for diagnosis.
 | Application ownership | Same business ID across different partitions creates no business permit for supported work. With runtime quota headroom, both partitions can claim concurrently. Exclusive/bounded/FIFO guarantees remain only in compatibility fixtures. |
 | Runtime limits | Hub/activity/workflow-task quotas retain current scopes, revision checks, and capacity-change behavior. No unknown or constrained task enters unconstrained batching; stale descriptors and hidden residual constraints fail closed. |
 | Failure recovery | Exercise owner loss before admission, ambiguous commit, commit-before-SSE loss, worker disconnect/reconnect, stale completion, and timer/event recovery. No lost task, double durable commit, or leaked permanent permit. |
-| Discovery | Supported page SQL avoids arbitrary business-key aggregation; compatibility hydration remains bounded. Preserve oversized/unknown handling, horizon/cursor progression, notification loss recovery, workflow pins, and stale-statistics plan regressions. |
+| Discovery | Supported page SQL avoids arbitrary business-key aggregation; compatibility metadata handling remains bounded. Preserve oversized/unknown handling, horizon/cursor progression, notification loss recovery, workflow pins, and stale-statistics plan regressions. |
 
 Extend the relevant existing suites: `HubExplicitOrderingTests`,
 `HubGatewayTests`, `HubRegistrationTests`, `HubNativeRoutedTests`,

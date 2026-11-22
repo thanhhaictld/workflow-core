@@ -104,6 +104,11 @@ The periodic SQL metrics sampler is disabled. OpenTelemetry export stays enabled
 Native workers use SSE push sessions. The preset sets
 `WFC_HUB_PUSH_ENABLED=true` on the Hub replicas and processors.
 
+`make ups-4` runs four activity/workflow lane pairs per processor, with eight
+slots per lane. Across the four processors this provides 128 activity slots
+and 128 workflow slots. `make ups-8` and `make ups-16` use one lane pair per
+processor.
+
 Make exports the golden flags for its short commands, overriding `.env` values;
 explicit Make assignments can override them for a run. `OBS_ENV_FILE` and
 `OBS_COMPOSE_FILE` select alternate files. Use `make obs-config` to review the

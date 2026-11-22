@@ -12,8 +12,8 @@ Native workers receive tasks through owner-fenced SSE push sessions. The develop
 | --- | --- |
 | [Native workflow contracts](hub-native-fluent-runtime.md) | C# workflow definitions, activity registration, supported constructs and version compatibility |
 | [Scheduler and remote hosts](hub-remote-scheduler-implementation.md) | Generic Gateway, internal scheduling module, and separate processor/provisioner hosts |
-| [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, discovery/hydration shape, and conservative unknown metadata behavior |
-| [Decision to retire exact task-ID hints](decision-retire-exact-task-id-hints.md) | Accepted removal decision and implementation plan; exact-ID mode only |
+| [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, indexed discovery shape, and conservative unknown metadata behavior |
+| [Decision to retire exact task-ID hints](decision-retire-exact-task-id-hints.md) | Implemented retirement and rationale; exact-ID mode only |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
 | [CI contract](ci-primary-architecture.md) | Current correctness gates, manual 16-processor stress, removed historical CI |
 | [Monitoring service](../monitor/README.md) | Next.js monitor and development API |

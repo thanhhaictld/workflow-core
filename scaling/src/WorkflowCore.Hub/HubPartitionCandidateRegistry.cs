@@ -84,15 +84,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public readonly Dictionary<int, (HubCandidateCursor? Cursor, int Version)> SignalBuckets = [];
         public DateTimeOffset NextSignalQuery;
         public int NextSignalBucket;
-        public readonly Queue<Guid> ExactIds = new();
-        public readonly HashSet<Guid> ExactSet = [];
         public int WaitingDemands;
         public HubCandidateHorizon? Horizon;
         public int NextStream;
         public bool Dirty = true;
         public bool HeadRequested;
         public int ForwardSinceHead;
-        public int ExactHydrationsSinceRecovery;
         public int NextHeadBucket;
         public bool Active = true;
         public bool TurnInFlight;
@@ -129,7 +126,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private int _entries;
     private long _bytes;
     private int _inFlightPages;
-    private int _pendingExactIds;
     private long _order;
     private long _oversized;
     private HubCandidateOversizedObservation? _lastOversized;
@@ -180,11 +176,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         _ = p.Stop.CancelAsync();
         foreach (var entry in p.Entries.Values.ToArray())
             if (entry.Reservation is null) RemoveEntryLocked(p, entry);
-        while (p.ExactIds.TryDequeue(out var exactId))
-        {
-            if (!p.ExactSet.Remove(exactId)) continue;
-            p.Bytes -= 64; _bytes -= 64; _pendingExactIds--;
-        }
         foreach (var credit in p.Credits.ToArray())
         {
             if (credit.Reservation is not Guid id) { if (!credit.Granted) RemoveCreditLocked(p, credit); }
@@ -410,40 +401,17 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 MatchLocked(p, _clock.GetUtcNow());
             }
     }
-    internal bool NotifyTask(string hub, int partition, long epoch, Guid taskId)
-    {
-        lock (_sync)
-        {
-            if (!GetLocked(hub, partition, epoch, out var p)) return false;
-            if (p.ExactSet.Contains(taskId))
-            { HubTelemetry.CandidateHintsDeduped.Add(1); return true; }
-            var perPartitionLimit = Math.Min(_options.PartitionEntries, Math.Max(_options.PageSize, _options.PageSize * 8));
-            if (p.ExactSet.Count >= perPartitionLimit || _pendingExactIds >= _options.ProcessEntries ||
-                GroupBytes(p.Owner.HubId, p.Owner.Partition) + 64 > _options.PartitionBytes || _bytes + 64 > _options.ProcessBytes)
-            {
-                p.Dirty = true;
-                p.HeadRequested = true;
-                HubTelemetry.CandidateHintsDropped.Add(1);
-                return false;
-            }
-            p.ExactSet.Add(taskId);
-            p.ExactIds.Enqueue(taskId);
-            p.Bytes += 64; _bytes += 64; _pendingExactIds++;
-            HubTelemetry.CandidateHintsReceived.Add(1);
-            return true;
-        }
-    }
     private bool GetLocked(string hub, int partition, long epoch, out Partition p) =>
         _partitions.TryGetValue((hub, partition), out p!) && p.Active && p.Owner.Epoch == epoch;
 
-    // One bounded discovery-page turn at most, with no more than one batched
-    // task hydration and one workflow metadata fetch. Notifications set Dirty
+    // One bounded discovery-page turn at most, with no more than one workflow
+    // metadata fetch. Notifications set Dirty
     // but never reset a live horizon or cursor. Empty buckets consume turns too,
     // making their fanout explicit and fair between partitions.
     internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct,
         Action<Exception>? reportError = null)
     {
-        Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null;
+        Partition? p = null; Stream? stream = null;
         bool capture = false; bool booked = false; bool head = false;
         int? targetedBucket = null; int targetedVersion = 0;
         try
@@ -455,7 +423,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 for (var i = 0; i < all.Length; i++)
                 {
                     var index = (_nextPartition + i) % all.Length; var candidate = all[index];
-                    // A capture/page/hydration turn mutates the partition's cursor
+                    // A capture/page turn mutates the partition's cursor
                     // and reserved-page accounting. Never overlap two such turns.
                     if (!candidate.Active || candidate.TurnInFlight) continue;
                     MatchLocked(candidate, now);
@@ -463,44 +431,13 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                         (candidate.WaitingDemands == 0 || GroupCredits(candidate.Owner.HubId, candidate.Owner.Partition) >= _options.PartitionCredits ||
                          _credits.Count >= _options.ProcessCredits)) continue;
                     var targetedDue = candidate.SignalBuckets.Count > 0 && now >= candidate.NextSignalQuery;
-                    if (candidate.ExactIds.Count == 0 && candidate.Horizon is null &&
+                    if (candidate.Horizon is null &&
                         !candidate.Dirty && now < candidate.NextSweep && !targetedDue) continue;
                     p = candidate; p.TurnInFlight = true;
                     _nextPartition = (index + 1) % all.Length; break;
                 }
                 if (p is null) return false;
-                var recoveryTurnDue = p.Dirty || p.Horizon is not null || now >= p.NextSweep;
-                if (p.ExactIds.Count > 0 && !(p.ExactHydrationsSinceRecovery >= 8 && recoveryTurnDue))
-                {
-                    if (!BookPageLocked(p))
-                    {
-                        // Exact IDs are advisory and recovery is authoritative.
-                        // Release their queue budget so a bounded indexed page
-                        // can make progress when the process is under pressure.
-                        var droppedIds = p.ExactSet.Count;
-                        p.ExactIds.Clear(); p.ExactSet.Clear();
-                        var released = (long)droppedIds * 64;
-                        p.Bytes -= released; _bytes -= released; _pendingExactIds -= droppedIds;
-                        p.Dirty = true; p.HeadRequested = true;
-                        HubTelemetry.CandidateHintsDropped.Add(1);
-                        HubTelemetry.CandidateRecoveryRequests.Add(1,
-                            new KeyValuePair<string, object?>("reason", "exact_queue_memory_pressure"));
-                        return false;
-                    }
-                    var maxIdsByWireBudget = Math.Max(1, _options.PageWireBytes / 256);
-                    var count = Math.Min(Math.Min(_options.PageSize, maxIdsByWireBudget), p.ExactIds.Count);
-                    hydrateIds = new Guid[count];
-                    for (var i = 0; i < count; i++)
-                    {
-                        var id = p.ExactIds.Dequeue();
-                        p.ExactSet.Remove(id);
-                        p.Bytes -= 64; _bytes -= 64; _pendingExactIds--;
-                        hydrateIds[i] = id;
-                    }
-                    p.ExactHydrationsSinceRecovery++;
-                    booked = true;
-                }
-                else if (p.Horizon is null && !p.Dirty && now < p.NextSweep &&
+                if (p.Horizon is null && !p.Dirty && now < p.NextSweep &&
                          p.SignalBuckets.Count > 0 && now >= p.NextSignalQuery)
                 {
                     // Single indexed ReadyDue page, without scanning every
@@ -542,17 +479,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 }
             }
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, p.Stop.Token);
-            if (hydrateIds is not null)
-            {
-                HubTelemetry.CandidateHydrationCalls.Add(1);
-                var hydrated = await _reader.HydrateAsync(p.Owner.HubId, p.Owner.Partition, p.Count,
-                    hydrateIds, _options.PageWireBytes, linked.Token);
-                if (hydrated.WorkflowMetadataError is { } workflowError) reportError?.Invoke(workflowError);
-                HubTelemetry.CandidateHydrationRows.Add(hydrated.Items.Count);
-                HubTelemetry.CandidateHydrationOversized.Add(hydrated.Oversized);
-                lock (_sync) if (p.Active) ApplyHydratedLocked(p, hydrateIds, hydrated.Items, now);
-                return true;
-            }
             if (capture)
             {
                 var horizon = await _reader.CaptureHorizonAsync(p.Owner.HubId, linked.Token);
@@ -632,7 +558,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     stream.Cursor = page.Next;
                     stream.Done = page.EndOfStream;
                     p.ForwardSinceHead++;
-                    p.ExactHydrationsSinceRecovery = 0;
                     if (p.Streams.All(x => x.Done)) EndSweepLocked(p, now);
                 }
             }
@@ -651,11 +576,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         {
             if (p is not null) lock (_sync) if (p.Active)
             {
-                if (capture || hydrateIds is not null) p.Dirty = true;
-                if (hydrateIds is not null) p.ExactHydrationsSinceRecovery = Math.Max(8, p.ExactHydrationsSinceRecovery);
-                if (hydrateIds is not null) RequeueExactLocked(p, hydrateIds);
-                if (hydrateIds is not null) HubTelemetry.CandidateRecoveryRequests.Add(1,
-                    new KeyValuePair<string, object?>("reason", "hydration_failure"));
+                if (capture) p.Dirty = true;
                 if (head) { p.HeadRequested = true; p.ForwardSinceHead = 8; }
             }
             throw;
@@ -668,64 +589,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 p.TurnInFlight = false;
                 ReleaseStoppedPartitionLocked(p);
             }
-        }
-    }
-    private void ApplyHydratedLocked(Partition p, IReadOnlyList<Guid> requested, IReadOnlyList<HubTaskCandidate> items, DateTimeOffset now)
-    {
-        var found = new Dictionary<Guid, HubTaskCandidate>(items.Count);
-        foreach (var item in items)
-        {
-            if (item.HubId != p.Owner.HubId || item.PartitionId % p.Count != p.Owner.Partition || !requested.Contains(item.Id))
-            {
-                p.Dirty = true;
-                HubTelemetry.CandidateHintsDropped.Add(1);
-                continue;
-            }
-            found[item.Id] = item;
-        }
-        foreach (var id in requested)
-        {
-            found.TryGetValue(id, out var item);
-            if (p.Entries.TryGetValue(id, out var old))
-            {
-                // Admission owns reservations through ambiguous outcomes; a hint
-                // cannot rewrite or retire metadata currently being claimed.
-                if (old.Reservation is not null || _reservedTasks.Contains((p.Owner.HubId, id))) continue;
-                if (item is null)
-                { RemoveEntryLocked(p, old); continue; }
-                if (old.Candidate.Epoch > item.Epoch) continue;
-                var deferred = old.Candidate.Epoch == item.Epoch ? old.DeferredUntil : default;
-                RemoveEntryLocked(p, old);
-                AddHydratedEntryLocked(p, item, deferred, now);
-            }
-            else if (item is not null && !_reservedTasks.Contains((p.Owner.HubId, id)))
-                AddHydratedEntryLocked(p, item, default, now);
-        }
-    }
-    private void AddHydratedEntryLocked(Partition p, HubTaskCandidate item, DateTimeOffset deferred, DateTimeOffset now)
-    {
-        var size = CandidateSize(item);
-        if (p.InFlightEntries < 1 || size > p.InFlightBytes)
-        { p.Dirty = true; HubTelemetry.CandidateHintsDropped.Add(1); return; }
-        p.InFlightEntries--; p.InFlightBytes -= size;
-        _entries--; _bytes -= size; p.Bytes -= size;
-        var entry = new Entry(item, size, ++_order) { DeferredUntil = deferred };
-        p.Entries[item.Id] = entry;
-        var key = (item.TaskType, item.Version);
-        if (!p.Capabilities.TryGetValue(key, out var queue)) p.Capabilities.Add(key, queue = new());
-        queue.Add((item.Sequence, item.Id));
-        p.Bytes += size; _bytes += size; _entries++;
-        MatchLocked(p, now);
-    }
-    private void RequeueExactLocked(Partition p, IReadOnlyList<Guid> ids)
-    {
-        foreach (var id in ids)
-        {
-            if (p.ExactSet.Contains(id)) continue;
-            if (p.ExactSet.Count >= Math.Min(_options.PartitionEntries, Math.Max(_options.PageSize, _options.PageSize * 8)) ||
-                _pendingExactIds >= _options.ProcessEntries || GroupBytes(p.Owner.HubId,p.Owner.Partition) + 64 > _options.PartitionBytes || _bytes + 64 > _options.ProcessBytes)
-            { p.Dirty = true; p.HeadRequested = true; HubTelemetry.CandidateHintsDropped.Add(1); continue; }
-            p.ExactIds.Enqueue(id); p.ExactSet.Add(id); p.Bytes += 64; _bytes += 64; _pendingExactIds++;
         }
     }
     internal async Task RunAsync(TimeSpan turnInterval, Action<Exception> reportError, CancellationToken ct)

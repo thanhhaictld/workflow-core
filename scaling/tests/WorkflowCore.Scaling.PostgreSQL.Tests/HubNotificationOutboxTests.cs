@@ -9,7 +9,7 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 public sealed class HubNotificationOutboxTests
 {
     [Fact]
-    public async Task DisabledTaskIdHintsKeepLegacyOutboxOnlyDeliveryUntilDispatcherRuns()
+    public async Task CoarseSignalUsesOutboxUntilDispatcherRuns()
     {
         var connection = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required");
@@ -35,7 +35,6 @@ public sealed class HubNotificationOutboxTests
         {
             await using var insert = new NpgsqlCommand("""
                 SET LOCAL wfc.hub_notification_outbox='on';
-                SET LOCAL wfc.hub_candidate_task_id_hints='off';
                 INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
                 VALUES (@id,@hub,64,'legacy-outbox',1,'{}');
                 """, db, tx);
@@ -89,7 +88,6 @@ public sealed class HubNotificationOutboxTests
         {
             await using var cmd = new NpgsqlCommand("""
                 SET LOCAL wfc.hub_notification_outbox = 'on';
-                SET LOCAL wfc.hub_candidate_task_id_hints = 'on';
                 INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
                 VALUES (@id,@hub,0,'work',1,'{}');
                 """, db, tx);
@@ -114,7 +112,11 @@ public sealed class HubNotificationOutboxTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!received.Task.IsCompleted) await listener.WaitAsync(timeout.Token);
         using (var json = System.Text.Json.JsonDocument.Parse(await received.Task))
-            Assert.Equal(taskId, json.RootElement.GetProperty("taskId").GetGuid());
+        {
+            Assert.Equal("signal", json.RootElement.GetProperty("kind").GetString());
+            Assert.Equal(0, json.RootElement.GetProperty("partition").GetInt32());
+            Assert.False(json.RootElement.TryGetProperty("taskId", out _));
+        }
         await using var remaining = new NpgsqlCommand("SELECT count(*) FROM wfc_scale.hub_notification_outbox WHERE hub_id=@hub", db);
         remaining.Parameters.AddWithValue("hub", hub); Assert.Equal(0L, (long)(await remaining.ExecuteScalarAsync())!);
     }
