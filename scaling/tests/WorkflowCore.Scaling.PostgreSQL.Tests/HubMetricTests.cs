@@ -73,11 +73,11 @@ public sealed class HubMetricTests
     {
         public readonly ConcurrentQueue<Measurement> Values = new();
         private readonly MeterListener listener = new();
-        public Capture()
+        public Capture(params string[] instruments)
         {
             listener.InstrumentPublished = (instrument, l) =>
             {
-                if (instrument.Meter.Name == HubTelemetry.MeterName && instrument.Name == "workflow_activities_completed")
+                if (instrument.Meter.Name == HubTelemetry.MeterName && instruments.Contains(instrument.Name))
                     l.EnableMeasurementEvents(instrument);
             };
             listener.SetMeasurementEventCallback<long>((i,v,t,_) => Add(i,v,t));
@@ -94,7 +94,7 @@ public sealed class HubMetricTests
     public async Task DurableCompletionCountsOnlyNewActivityCommitsAcrossStores()
     {
         if (Environment.GetEnvironmentVariable("WFC_TEST_PG") is null) return;
-        using var capture = new Capture();
+        using var capture = new Capture("workflow_activities_completed");
         double Count() => capture.Values.Where(x => x.Name == "workflow_activities_completed").Sum(x => x.Value);
         await new HubGatewayTests().CompletionIsIdempotent_AndRejectsStaleEpoch();
         Assert.Equal(1, Count());
@@ -104,5 +104,23 @@ public sealed class HubMetricTests
         Assert.Equal(5, Count());
         await new HubNativeRoutedTests().RoutedStepsRecoverFromSnapshotsAndApplyOutputsOnce("scalar");
         Assert.Equal(6, Count());
+    }
+
+    [Fact]
+    public async Task CandidateAdmissionPublishesClaimLatencyAndCountsConfirmedLeases()
+    {
+        using var capture = new Capture("workflow_hub_tasks_claimed", "workflow_hub_claim_duration_seconds",
+            "workflow_hub_candidate_admission_seconds", "workflow_hub_claim_admission_active");
+        var admission = new HubCandidateAdmissionTests();
+        await admission.CandidateAdmission_RevalidatesEpochCapabilityTopologyAndOwner();
+        await admission.CommitFaultsPreserveTentativeLeaseForDurableReconciliation();
+
+        Assert.Equal(1, capture.Values.Where(m => m.Name == "workflow_hub_tasks_claimed").Sum(m => m.Value));
+        var durations = capture.Values.Where(m => m.Name == "workflow_hub_claim_duration_seconds").ToArray();
+        Assert.All(durations, m => Assert.Equal("candidate", m.Tags["claim_strategy"]));
+        foreach (var outcome in new[] { "claimed", "empty", "owner_lost", "commit_unknown", "error" })
+            Assert.Contains(durations, m => Equals(outcome, m.Tags["outcome"]));
+        Assert.Equal(durations.Length, capture.Values.Count(m => m.Name == "workflow_hub_candidate_admission_seconds"));
+        Assert.Equal(0, capture.Values.Where(m => m.Name == "workflow_hub_claim_admission_active").Sum(m => m.Value));
     }
 }

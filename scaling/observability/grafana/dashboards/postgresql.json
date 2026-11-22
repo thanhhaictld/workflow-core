@@ -4,7 +4,7 @@
   "tags": ["workflow-core", "postgres"],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "15s",
   "time": { "from": "now-1h", "to": "now" },
@@ -18,16 +18,40 @@
       "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
     },
     {
-      "id": 2, "type": "timeseries", "title": "PostgreSQL backend connections",
+      "id": 2, "type": "timeseries", "title": "Hub connection pools by instance",
+      "description": "Npgsql reports idle, checked-out and maximum pooled connections in each Hub process.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "targets": [{ "refId": "A", "expr": "sum(postgresql_backends)", "legendFormat": "Connections" }, { "refId": "B", "expr": "max(postgresql_connection_max)", "legendFormat": "Maximum" }],
+      "targets": [
+        { "refId": "A", "expr": "sum by (service_instance_id, state) (db_client_connections_usage{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} {{state}}" },
+        { "refId": "B", "expr": "sum by (service_instance_id) (db_client_connections_max{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} limit" }
+      ],
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 16, "type": "timeseries", "title": "Hub database commands per second",
+      "description": "Database commands observed by Npgsql in each Hub process.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service_instance_id) (rate(db_client_commands_duration_seconds_count{service_name=\"workflow-hub\"}[1m]))", "legendFormat": "{{service_instance_id}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 17, "type": "timeseries", "title": "Hub database command p95",
+      "description": "Client-observed Npgsql command duration, including network time.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, service_instance_id) (rate(db_client_commands_duration_seconds_bucket{service_name=\"workflow-hub\"}[2m])))", "legendFormat": "{{service_instance_id}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
     },
     {
       "id": 3, "type": "timeseries", "title": "Transaction rate",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum(rate(postgresql_commits_total[1m]))", "legendFormat": "Commits" }, { "refId": "B", "expr": "sum(rate(postgresql_rollbacks_total[1m]))", "legendFormat": "Rollbacks" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
@@ -35,14 +59,14 @@
       "id": 4, "type": "timeseries", "title": "Hub task rows",
       "description": "PostgreSQL's estimated live and dead row counts; dead rows are not necessarily reclaimable immediately.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (state) (postgresql_rows{postgresql_table_name=\"wfc_scale.hub_task\"})", "legendFormat": "{{state}}" }],
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
     },
     {
       "id": 5, "type": "timeseries", "title": "Database size",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum(postgresql_db_size_bytes)", "legendFormat": "Database" }],
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
     },
@@ -50,7 +74,7 @@
       "id": 6, "type": "timeseries", "title": "Table block access rate",
       "description": "PostgreSQL table and index block hits and reads by source.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (source) (rate(postgresql_blocks_read_total[1m]))", "legendFormat": "{{source}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
@@ -58,14 +82,14 @@
       "id": 7, "type": "timeseries", "title": "Sequential rows read / sec by table",
       "description": "Rows read by sequential scans, including rows later rejected by filters. PostgreSQL table statistics, one-minute rate.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_seq_rows_read_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
     {
       "id": 8, "type": "timeseries", "title": "Sequential scans / sec by table",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_seq_scans_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
@@ -73,14 +97,14 @@
       "id": 9, "type": "timeseries", "title": "Index rows fetched / sec by table",
       "description": "Live table rows fetched by index scans; not index entries examined or rows from index-only scans.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_index_rows_fetched_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
     {
       "id": 10, "type": "timeseries", "title": "Index scans / sec by table",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
       "targets": [{ "refId": "A", "expr": "sum by (relname) (rate(workflow_postgres_table_index_scans_total{schemaname=\"wfc_scale\"}[1m]))", "legendFormat": "{{relname}}" }],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     },
@@ -90,7 +114,7 @@
       "title": "Statement statistics",
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 48,
         "w": 24,
         "h": 4
       },
@@ -110,7 +134,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 44,
+        "y": 52,
         "w": 24,
         "h": 4
       },
@@ -141,7 +165,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 56,
         "w": 24,
         "h": 12
       },
@@ -204,7 +228,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 60,
+        "y": 68,
         "w": 24,
         "h": 12
       },
@@ -311,7 +335,7 @@
       "title": "Top queries by shared-buffer hits in selected range",
       "description": "Cached block accesses can explain CPU work even when block reads are low. Hits count repeated accesses, not unique blocks or CPU time. Sampled every 15 seconds with the same reset and collection limits as statement execution time.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 72, "w": 24, "h": 12 },
+      "gridPos": { "x": 0, "y": 80, "w": 24, "h": 12 },
       "targets": [{
         "refId": "A",
         "expr": "topk(10, sum by (query_id, query) (increase(workflow_postgres_statement_shared_blocks_hit_total[$__range])) > 0)",

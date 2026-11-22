@@ -393,6 +393,16 @@ series remain absent until a real sample is published, and operations history
 has a gap. Collector SQL, on-demand monitor queries, and runtime scheduling
 remain active. See [sampler A/B usage](owner-recovery.md#start-test-and-stress).
 
+The Runtime dashboard reads task push streams, confirmed leases, candidate
+admission latency, and task delivery from Hub process metrics. Both dashboards
+use Npgsql's per-Hub pool metrics for connection use, and the PostgreSQL
+dashboard shows client command rate and latency. These panels work with the
+SQL sampler disabled. The candidate registry shows a bounded in-memory view
+of demand. Use the durable operations view when you need the full queue.
+Database-wide transactions, size, I/O, table scans and statement statistics
+come from PostgreSQL. The Runtime dashboard also shows the Prometheus
+collector scrape status.
+
 `workflow_activities_completed_total` counts newly accepted durable activity
 completions in the Hub process, including standalone, managed, sequential remote,
 and native paths. Replays, rejected or expired leases, failed transactions, and
