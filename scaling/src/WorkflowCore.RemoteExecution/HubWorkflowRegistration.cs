@@ -41,6 +41,17 @@ public sealed class HubRuntimeOptions
     // Feature flag for controlled baseline/optimized benchmark runs.
     public bool AdaptiveClaimsEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
+    // Optional activity-result microbatch transport. Original REST completion
+    // stays the default and rollback path; no deferred durable acknowledgements.
+    public bool CompletionMicrobatchEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_COMPLETION_MICROBATCH_ENABLED")
+            is "true" or "True" or "1";
+    public int CompletionBatchSize { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_COMPLETION_BATCH_SIZE"),
+            out var completionBatchSize) ? completionBatchSize : 32;
+    public int CompletionBatchDelayMs { get; set; } =
+        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_COMPLETION_BATCH_DELAY_MS"),
+            out var completionDelay) ? completionDelay : 3;
     public TimeSpan ErrorRetryInterval { get; set; } = TimeSpan.FromSeconds(60);
     public bool RegisterOnly { get; set; }
     public bool SequentialVersionOneCompatibility { get; set; }
@@ -153,7 +164,10 @@ public static class HubWorkflowRuntimeExtensions
            options.LaneInstances is <1 or >2000 ||
            options.WorkerConcurrencyCap is < 0 or > 256 ||
            options.PollInterval<TimeSpan.FromMilliseconds(10) ||
-           options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
+           options.MatchingPartitions is < 1 or > 64 ||
+           options.CompletionBatchSize is < 16 or > 64 ||
+           options.CompletionBatchDelayMs is < 2 or > 5)
+            throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
             o.EnableWorkflows=false;o.EnableEvents=false;o.EnableIndexes=false;o.EnablePolling=false;
@@ -175,6 +189,11 @@ public static class HubWorkflowRuntimeExtensions
         services.AddHostedService<HubRuntimePublisher>();
         if(!options.RegisterOnly)
         {
+            if(options.CompletionMicrobatchEnabled)
+            {
+                services.AddSingleton<HubCompletionBatcher>();
+                services.AddHostedService(sp=>sp.GetRequiredService<HubCompletionBatcher>());
+            }
             for (var i = 0; i < options.LaneInstances; i++)
             {
                 services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeWorkflowWorker>(sp));
