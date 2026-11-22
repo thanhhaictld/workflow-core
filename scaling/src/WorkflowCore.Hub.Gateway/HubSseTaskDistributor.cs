@@ -24,7 +24,8 @@ public sealed class HubSseTaskDistributor
     private readonly int _mixedClaimBatchSize;
     private readonly TimeSpan _creditCoalesceWindow;
     private long _claimCalls, _claimedTasks, _multiTaskClaims;
-    private int _maxTasksClaimed;
+    private long _mixedClaimCalls, _mixedClaimedTasks, _mixedMultiTaskClaims;
+    private int _maxTasksClaimed, _mixedMaxTasksClaimed;
 
     // Diagnostic counters report REAL leased tasks, not requested MaxTasks.
     // Keep them bounded and process-local; a multi-replica benchmark must sum
@@ -33,6 +34,10 @@ public sealed class HubSseTaskDistributor
     public long ClaimedTasks => Interlocked.Read(ref _claimedTasks);
     public long MultiTaskClaims => Interlocked.Read(ref _multiTaskClaims);
     public int MaxTasksClaimed => Volatile.Read(ref _maxTasksClaimed);
+    public long MixedClaimCalls => Interlocked.Read(ref _mixedClaimCalls);
+    public long MixedClaimedTasks => Interlocked.Read(ref _mixedClaimedTasks);
+    public long MixedMultiTaskClaims => Interlocked.Read(ref _mixedMultiTaskClaims);
+    public int MixedMaxTasksClaimed => Volatile.Read(ref _mixedMaxTasksClaimed);
     public int MixedClaimBatchSize => _mixedClaimBatchSize;
 
     public HubSseTaskDistributor(HubTaskMatcher matcher) : this(matcher.LongPollAsync) { }
@@ -155,15 +160,20 @@ public sealed class HubSseTaskDistributor
 
     public int ActiveSessions => _sessions.Count;
 
-    private void UpdateMaximum(int count)
+    private void UpdateMaximum(int count, bool nativeOnly)
     {
-        var old = Volatile.Read(ref _maxTasksClaimed);
-        while (count > old)
+        static void Raise(ref int location, int value)
         {
-            var observed = Interlocked.CompareExchange(ref _maxTasksClaimed, count, old);
-            if (observed == old) return;
-            old = observed;
+            var old = Volatile.Read(ref location);
+            while (value > old)
+            {
+                var observed = Interlocked.CompareExchange(ref location, value, old);
+                if (observed == old) return;
+                old = observed;
+            }
         }
+        Raise(ref _maxTasksClaimed, count);
+        if (!nativeOnly) Raise(ref _mixedMaxTasksClaimed, count);
     }
 
     public bool Offer(Credit credit)
@@ -270,9 +280,17 @@ public sealed class HubSseTaskDistributor
                     Interlocked.Increment(ref _claimCalls);
                     Interlocked.Add(ref _claimedTasks, leases.Count);
                     if (leases.Count > 1) Interlocked.Increment(ref _multiTaskClaims);
-                    UpdateMaximum(leases.Count);
-                    HubTelemetry.SseClaimRequestedCredits.Record(grants.Count);
-                    HubTelemetry.SseClaimLeasedTasks.Record(leases.Count);
+                    UpdateMaximum(leases.Count, nativeOnly);
+                    if (!nativeOnly)
+                    {
+                        Interlocked.Increment(ref _mixedClaimCalls);
+                        Interlocked.Add(ref _mixedClaimedTasks, leases.Count);
+                        if (leases.Count > 1) Interlocked.Increment(ref _mixedMultiTaskClaims);
+                    }
+                    var lane = new KeyValuePair<string, object?>(
+                        "lane", nativeOnly ? "native_workflow" : "mixed");
+                    HubTelemetry.SseClaimRequestedCredits.Record(grants.Count, lane);
+                    HubTelemetry.SseClaimLeasedTasks.Record(leases.Count, lane);
                     for (var i = 0; i < grants.Count; i++)
                     {
                         var grant = grants[i];
