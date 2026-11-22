@@ -19,6 +19,55 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
           AND CASE state WHEN 1 THEN lease_until>clock_timestamp() ELSE false END
         """;
 
+
+    // Experimental synchronous fast path. All writes still execute in the
+    // caller's transaction, but one PostgreSQL command handles the fenced ACK,
+    // attempt, inbox, durable history and native workflow wake.
+    // Every mutation depends on the successful task ACK to prevent partial
+    // effects when the lease/epoch is stale.
+    internal const string CombinedActivityCompletionSql = """
+        WITH completed AS (
+            UPDATE wfc_scale.hub_task
+               SET state=2,owner=NULL,lease_until=NULL,result_json=@result::jsonb,updated_at=now()
+             WHERE id=@task AND owner=@owner AND epoch=@epoch
+               AND CASE state WHEN 1 THEN lease_until>clock_timestamp() ELSE false END
+             RETURNING id
+        ), closed_attempt AS (
+            UPDATE wfc_scale.hub_task_attempt a
+               SET outcome='Completed',finished_at=clock_timestamp()
+              FROM completed c
+             WHERE a.task_id=c.id AND a.epoch=@epoch AND a.finished_at IS NULL
+             RETURNING a.task_id
+        ), inbox AS (
+            INSERT INTO wfc_scale.hub_native_inbox
+                (workflow_id,pointer_id,kind,source_key,payload)
+            SELECT @id,@pointer,'Activity',@dispatch,@result::jsonb FROM completed
+            ON CONFLICT DO NOTHING
+            RETURNING workflow_id
+        ), history AS (
+            INSERT INTO wfc_scale.hub_workflow_event
+                (workflow_id,step_index,task_id,activity_type,event_type,payload)
+            SELECT @id,@step,c.id,'__native_activity__','ActivityResultReceived',@journal::jsonb
+            FROM completed c
+            RETURNING workflow_id
+        ), wake AS (
+            INSERT INTO wfc_scale.hub_task
+                (id,hub_id,partition_id,task_type,task_version,workflow_id,payload,admission)
+            SELECT @wake,@hub,@partition,'__native_workflow__',1,@id,'{}'::jsonb,1
+            FROM completed c
+            JOIN wfc_scale.hub_workflow w ON w.id=@id AND w.native_status='Runnable'
+            ON CONFLICT DO NOTHING
+            RETURNING id
+        )
+        SELECT count(*) FROM completed
+        """;
+
+    // Default remains the original multi-command transactional completion.
+    // Flag is read once per store; internal override enables isolated tests.
+    internal bool CombinedActivityCompletionEnabled { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_COMBINED_ACTIVITY_COMPLETION") is
+            "true" or "True" or "1";
+
     // Keep the dispatch predicate outside the primary-key lookup. Statistics
     // from before an activity burst can make the dispatch index look empty.
     internal const string LockActivityWorkflowSql = """
@@ -590,20 +639,40 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 return !r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result);
         }
         if(status is "Complete" or "Terminated")return false;
-        await using(var cmd=Command(db,tx,CompleteTaskSql,
-            ("result",result.GetRawText()),("task",task),("owner",worker),("epoch",epoch)))
-            if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
-        await Execute(db,tx,"""
-            UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()
-            WHERE task_id=@task AND epoch=@epoch AND finished_at IS NULL
-            """,ct,("task",task),("epoch",epoch));
-        await Execute(db,tx,"""
-            INSERT INTO wfc_scale.hub_native_inbox(workflow_id,pointer_id,kind,source_key,payload)
-            VALUES(@id,@pointer,'Activity',@dispatch,@result::jsonb) ON CONFLICT DO NOTHING
-            """,ct,("id",id),("pointer",pointer),("dispatch",dispatch),("result",result.GetRawText()));
-        await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__","ActivityResultReceived",
-            JsonSerializer.Serialize(new{executionPointerId=pointer,dispatchKey=dispatch}),ct);
-        await WakeAsync(db,tx,id,hub,partition,ct);
+        var resultJson = result.GetRawText();
+        var journalJson = JsonSerializer.Serialize(new { executionPointerId=pointer, dispatchKey=dispatch });
+        var writesStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        span?.SetTag("completion.write_mode", CombinedActivityCompletionEnabled ? "combined" : "legacy");
+        if (CombinedActivityCompletionEnabled)
+        {
+            await using var command = Command(db, tx, CombinedActivityCompletionSql,
+                ("task",task),("owner",worker),("epoch",epoch),("result",resultJson),
+                ("id",id),("step",step),("pointer",pointer),("dispatch",dispatch),
+                ("journal",journalJson),("wake",Guid.NewGuid()),("hub",hub),("partition",partition));
+            if (await command.ExecuteScalarAsync(ct) is not long completed || completed != 1)
+                return false;
+        }
+        else
+        {
+            await using(var cmd=Command(db,tx,CompleteTaskSql,
+                ("result",resultJson),("task",task),("owner",worker),("epoch",epoch)))
+                if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
+            await Execute(db,tx,"""
+                UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()
+                WHERE task_id=@task AND epoch=@epoch AND finished_at IS NULL
+                """,ct,("task",task),("epoch",epoch));
+            await Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_native_inbox(workflow_id,pointer_id,kind,source_key,payload)
+                VALUES(@id,@pointer,'Activity',@dispatch,@result::jsonb) ON CONFLICT DO NOTHING
+                """,ct,("id",id),("pointer",pointer),("dispatch",dispatch),("result",resultJson));
+            await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__",
+                "ActivityResultReceived",journalJson,ct);
+            await WakeAsync(db,tx,id,hub,partition,ct);
+        }
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.writes.applied",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "write.mode", CombinedActivityCompletionEnabled ? "combined" : "legacy" },
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(writesStarted).TotalSeconds }}));
         var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await tx.CommitAsync(ct);
         span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
