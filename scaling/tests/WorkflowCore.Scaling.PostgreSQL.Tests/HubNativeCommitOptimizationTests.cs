@@ -58,8 +58,16 @@ public sealed class HubNativeCommitOptimizationTests
 
         bool IsForThisHub(NpgsqlNotificationEventArgs item)
         {
-            using var signal = JsonDocument.Parse(item.Payload);
-            return signal.RootElement.GetProperty("hub").GetString() == hub;
+            // Other tests and legacy listeners can publish non-JSON payloads to
+            // this shared notification channel. They must not fail this test.
+            try
+            {
+                using var signal = JsonDocument.Parse(item.Payload);
+                return signal.RootElement.ValueKind == JsonValueKind.Object &&
+                    signal.RootElement.TryGetProperty("hub", out var value) &&
+                    value.ValueKind == JsonValueKind.String && value.GetString() == hub;
+            }
+            catch (JsonException) { return false; }
         }
 
         Guid activityTaskId;
