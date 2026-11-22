@@ -236,6 +236,32 @@ public sealed class HubPartitionCandidateRegistryTests
 
 
     [Fact]
+    public async Task ClosingWorkerSessionRemovesUnleasedCreditsWithoutAffectingOtherSessions()
+    {
+        var clock = new Clock(); var source = new Discovery(); const string hub = "worker-session-close";
+        var oldSession = Guid.NewGuid(); var liveSession = Guid.NewGuid();
+        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1,
+            Credit("old-dispatched", hub) with { WorkerId = $"push:{oldSession:N}:1" }));
+        await Pump(registry, clock, 3);
+        var dispatched = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
+        Assert.True(registry.AddCredit(hub, 0, 1,
+            Credit("old-idle", hub) with { WorkerId = $"push:{oldSession:N}:2" }));
+        Assert.True(registry.AddCredit(hub, 0, 1,
+            Credit("other-processor", hub) with { WorkerId = $"push:{liveSession:N}:1" }));
+
+        registry.CancelUncommittedSessionCredits(oldSession);
+        Assert.Equal(2, registry.Snapshot().Credits);
+        Assert.False(registry.CancelCredit("old-idle"));
+        registry.Complete(dispatched.Id, HubCandidateResolution.Unavailable, clock.Now);
+        Assert.Equal(1, registry.Snapshot().Credits);
+        Assert.True(registry.CancelCredit("other-processor"));
+        Assert.Equal(0, registry.Snapshot().Credits);
+    }
+
+    [Fact]
     public async Task CancelWhileAdmissionDispatchedReleasesCreditOnlyAfterAuthoritativeNoLease()
     {
         var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-dispatched";
