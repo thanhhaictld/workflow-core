@@ -168,6 +168,11 @@ jobs:
             exit 1
           fi
           # Hub runs as a separate deployable process with its own bounded pool.
+          WFC_HUB_PUSH_ENABLED=true WFC_HUB_MATCHING_ENABLED=true \
+          WFC_HUB_MATCHING_CANDIDATES_ENABLED=true \
+          WFC_HUB_MATCHING_ADVERTISE_URL=http://127.0.0.1:5100 \
+          WFC_HUB_MATCHING_PEERS=http://127.0.0.1:5100 \
+          WFC_HUB_MATCHING_PARTITIONS=1 \
           WFC_PG="Host=127.0.0.1;Port=55432;Database=workflow;Username=workflow;Password=workflow_dev_only" \
             dotnet run --no-launch-profile --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
             --urls http://127.0.0.1:5100 > /tmp/hub-standalone.log 2>&1 &
@@ -184,7 +189,8 @@ jobs:
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             -- --register-only
           # Combined Provisioner receives no workflow PostgreSQL credentials.
-          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WORKFLOW_WORKERS=4 ACTIVITY_WORKERS=4 \
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WFC_HUB_PUSH_ENABLED=true \
+            WFC_HUB_MATCHING_PARTITIONS=1 WORKFLOW_WORKERS=4 ACTIVITY_WORKERS=4 \
             dotnet run --no-launch-profile \
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             > /tmp/hub-remote-worker.log 2>&1 &
