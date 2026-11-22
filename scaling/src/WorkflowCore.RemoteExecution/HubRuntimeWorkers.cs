@@ -440,18 +440,46 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     private async Task RunSseGrantSchedulerAsync(
         HubSseWorkerCreditCoordinator credits, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        // HTTP credits were previously POSTed serially. Under multi-task
+        // claims this often leaves one credit per shard when the distributor
+        // checks its queue. Bounded concurrent offers make a real group of
+        // reserved worker slots visible without changing any fencing rule.
+        // Default one preserves original behavior outside the experiment.
+        var configured = Environment.GetEnvironmentVariable("WFC_HUB_SSE_CREDIT_SEND_CONCURRENCY");
+        var concurrency = configured is null ? 1 :
+            int.TryParse(configured, out var parsed) && parsed is >= 1 and <= 32
+                ? parsed : throw new ArgumentException(
+                    "WFC_HUB_SSE_CREDIT_SEND_CONCURRENCY must be 1..32");
+        using var sends = new SemaphoreSlim(concurrency, concurrency);
+        var pending = new List<Task>();
+        try
         {
-            if (!credits.TryOffer(out var offer))
+            while (!ct.IsCancellationRequested)
             {
-                await credits.WaitForChangeAsync(ct);
-                continue;
+                await sends.WaitAsync(ct);
+                if (!credits.TryOffer(out var offer))
+                {
+                    sends.Release();
+                    await credits.WaitForChangeAsync(ct);
+                    continue;
+                }
+                // Exactly one coordinator credit per HTTP offer; calls may
+                // overlap, but total offers + executing never exceed capacity.
+                var send = SendGrantAsync(offer, ct);
+                pending.Add(send);
+                pending.RemoveAll(x => x.IsCompleted);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally
+        {
+            await Task.WhenAll(pending);
+        }
 
+        async Task SendGrantAsync(HubSseWorkerCreditCoordinator.Grant offer, CancellationToken token)
+        {
             try
             {
-                // A task is NOT claimed by this call. The server may lease
-                // exactly one task and push it on the matching SSE stream.
                 using var response = await client.Http.PostAsJsonAsync(
                     "api/hub/workers/tasks:credit",
                     new {
@@ -461,29 +489,29 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         hubId = capabilities[0].HubId,
                         matchingPartition = offer.Shard,
                         creditId = offer.CreditId
-                    }, ct);
+                    }, token);
                 if (!response.IsSuccessStatusCode)
                 {
                     credits.OfferFailed(offer);
-                    // 409 / 503 / 404 means the session/owner may have
-                    // transitioned. Reconnect rather than retrying a credit
-                    // blindly into the wrong owner's in-memory registry.
+                    // A stale session/epoch may not receive further offers.
                     credits.Invalidate(offer.Shard, offer.SessionId);
                     logger.LogWarning(
                         "SSE credit grant rejected for shard {Shard}: HTTP {Status}",
                         offer.Shard, (int)response.StatusCode);
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token);
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 credits.OfferFailed(offer);
                 credits.Invalidate(offer.Shard, offer.SessionId);
                 logger.LogWarning(ex,
                     "SSE credit grant transport failure on shard {Shard}", offer.Shard);
-                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                try { await Task.Delay(TimeSpan.FromMilliseconds(250), token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             }
+            finally { sends.Release(); }
         }
     }
 

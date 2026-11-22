@@ -8,6 +8,7 @@ on:
       - 'scaling/src/WorkflowCore.RemoteExecution/**'
       - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseTaskDistributorTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseMixedBatchClaimTests.cs'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseWorkerCreditCoordinatorTests.cs'
       - 'scaling/observability/nginx.matching-ha.conf'
       - 'scaling/observability/compose.yaml'
@@ -57,7 +58,7 @@ jobs:
       - name: Build and test SSE distributor credit protocol
         run: |
           dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
-            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
+            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseMixedBatchClaimTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
       - name: Start PostgreSQL and two fenced matching Hubs
         run: |
           set -euo pipefail

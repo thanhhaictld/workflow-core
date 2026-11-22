@@ -277,7 +277,7 @@ public sealed class HubTaskStore : IAsyncDisposable
         var claimStarted = Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(workerId) || workerId.Length > 128 ||
             hubs.Count is < 1 or > 32 || capabilities.Count is < 1 or > 128 ||
-            maxTasks is < 1 or > 32 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
+            maxTasks is < 1 or > 64 || workflows?.Count>128 || lease < TimeSpan.FromSeconds(10) ||
             lease > TimeSpan.FromMinutes(5) ||
             (ownerFence is not null && (hubs.Count != 1 || maxTasks != 1 ||
                 !matchingPartition.HasValue || string.IsNullOrWhiteSpace(ownerFence.OwnerId) ||
@@ -572,7 +572,7 @@ public sealed class HubTaskStore : IAsyncDisposable
     internal async Task<HubCandidateBatchResult> ClaimCandidateBatchAsync(HubCandidateBatchClaim request,
         CancellationToken ct, HubCandidateClaimTestHooks? testHooks = null)
     {
-        if (request.Items.Count is < 1 or > 32 || request.Items.Any(x => x.TaskId == Guid.Empty || x.ObservedEpoch < 0) ||
+        if (request.Items.Count is < 1 or > 64 || request.Items.Any(x => x.TaskId == Guid.Empty || x.ObservedEpoch < 0) ||
             request.Items.Any(x => x.WorkerId is not null && (string.IsNullOrWhiteSpace(x.WorkerId) || x.WorkerId.Length > 128) ||
                 x.Capabilities is { Count: < 1 or > 128 } || x.Workflows?.Count > 128) ||
             request.Items.Select(x => x.TaskId).Distinct().Count() != request.Items.Count ||

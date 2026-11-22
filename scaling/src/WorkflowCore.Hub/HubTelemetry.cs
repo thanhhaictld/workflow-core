@@ -202,6 +202,12 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_task_sessions", "{session}");
     public static readonly Counter<long> SseTasksDispatched =
         Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
+    // A large requested MaxTasks is not necessarily an actual PostgreSQL
+    // batch: record both counts to expose credit/eligibility underfill.
+    public static readonly Histogram<int> SseClaimRequestedCredits =
+        Meter.CreateHistogram<int>("workflow_hub_sse_claim_requested_credits");
+    public static readonly Histogram<int> SseClaimLeasedTasks =
+        Meter.CreateHistogram<int>("workflow_hub_sse_claim_leased_tasks");
     public static readonly Counter<long> MatchingOwnershipChanges =
         Meter.CreateCounter<long>("workflow_hub_matching_ownership_changes", "{change}");
     public static readonly Counter<long> MatchingResolutionFailures =
