@@ -42,6 +42,7 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubDefinitionStore>();
         services.AddSingleton<HubRemoteWorkflowStore>();
         services.AddSingleton<HubNativeWorkflowStore>();
+        services.AddSingleton<HubNativeCompletionBatchStore>();
         services.AddSingleton<HubWorkflowStore>();
         services.AddSingleton<HubOperationsStore>();
         services.AddSingleton<HubReadinessBroadcaster>();
@@ -662,6 +663,35 @@ public static class HubGatewayEndpoints
             }
             return done ? Results.NoContent() :
                 Results.Conflict(new { error = "Task is stale or lease expired" });
+        });
+
+        // Opt-in worker microbatch transport. Each ACK follows the same
+        // transaction that fences the task and persists attempt/inbox/history.
+        // Busy workflow/task rows return per-item Retry (never an ACK).
+        routes.MapPost("/workers/tasks:complete-batch", async (
+            HubCompletionBatchRequest request, HubNativeCompletionBatchStore batchStore,
+            HubReadinessBroadcaster readiness, HubCandidateAcquisition candidate,
+            CancellationToken ct) =>
+        {
+            if (request.Items is null || request.Items.Length is < 1 or > 64)
+                return Results.BadRequest(new { error = "Invalid completion batch size" });
+            try
+            {
+                using var span = HubTelemetry.Traces.StartActivity("hub.gateway.activity.complete.batch");
+                span?.SetTag("completion.batch.size", request.Items.Length);
+                var responses = await batchStore.CompleteAsync(request.Items,ct);
+                foreach (var item in responses.Where(x=>x.Status=="completed"))
+                {
+                    var epoch = request.Items.First(x=>x.TaskId==item.TaskId).Epoch;
+                    candidate.ReleaseCompletedLease(item.TaskId,epoch);
+                    if (item.HubId is not null) readiness.PublishFallback(item.HubId);
+                }
+                return Results.Ok(responses);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         routes.MapPost("/tasks/{id:guid}/fail", async (
