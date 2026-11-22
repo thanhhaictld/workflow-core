@@ -113,6 +113,13 @@ explicit Make assignments can override them for a run. `OBS_ENV_FILE` and
 `OBS_COMPOSE_FILE` select alternate files. Use `make obs-config` to review the
 resolved configuration. No Make target removes volumes.
 
+For benchmarking, start the stack with `make ups-16 WORKFLOW_HUB_QUERIES_ENABLED=false`
+or set the flag to `false` in the observability `.env`. The Next.js Operations
+page then reads only Prometheus, and the monitor skips its Hub workflow,
+definition, and trace requests. Grafana and collectors continue to receive
+telemetry. The Hub's periodic database sampler has its own
+`WFC_HUB_METRICS_SAMPLER_ENABLED` setting, which is already off in the golden preset.
+
 The sections below that describe old `obs-up`, `obs-offboarding-*`,
 `obs-stress-test`, `obs-owner-recovery-*`, or `obs-clean` commands are historical
 benchmark notes. Those Make aliases have been removed; use the current commands

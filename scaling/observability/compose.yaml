@@ -66,6 +66,7 @@ services:
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/036_hub_lightweight_shard_signals.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/037_hub_bound_expired_candidate_pages.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/038_hub_bound_ready_due_candidate_pages.sql
+        PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -f /sql/039_hub_retire_task_operations_index.sql
         PGPASSWORD="$$PG_PASSWORD" psql -h postgres -U "$$PG_USER" -d "$$PG_DATABASE" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
     restart: "no"
 
@@ -84,6 +85,7 @@ services:
       PORT: "3000"
       # Used only on Next.js server-side route handlers. Never NEXT_PUBLIC_*.
       WORKFLOW_PROMETHEUS_URL: http://prometheus:9090
+      WORKFLOW_HUB_QUERIES_ENABLED: "${WORKFLOW_HUB_QUERIES_ENABLED:-true}"
       WORKFLOW_HUB_URL: http://hub:5100
       WORKFLOW_HUB_TOKEN: ${WFC_HUB_AUTH_TOKEN:?Set WFC_HUB_AUTH_TOKEN in scaling/observability/.env}
     ports:

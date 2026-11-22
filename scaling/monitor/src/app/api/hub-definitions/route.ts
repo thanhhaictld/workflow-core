@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rejectDisabledHubMonitorQueries } from "@/lib/hub-monitor-queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -6,6 +7,8 @@ export const dynamic = "force-dynamic";
 // Read-only server-side proxy: the Hub bearer token must never reach browsers.
 // Unlike /backend/definitions, this is the live PostgreSQL Hub definition catalog.
 export async function GET() {
+  const disabled = rejectDisabledHubMonitorQueries();
+  if (disabled) return disabled;
   const base = process.env.WORKFLOW_HUB_URL?.replace(/\/$/, "");
   const token = process.env.WORKFLOW_HUB_TOKEN;
   const headers = { "Cache-Control": "no-store" };
