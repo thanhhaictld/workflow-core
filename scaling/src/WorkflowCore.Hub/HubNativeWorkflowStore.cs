@@ -669,10 +669,14 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 "ActivityResultReceived",journalJson,ct);
             await WakeAsync(db,tx,id,hub,partition,ct);
         }
+        var writeSeconds = System.Diagnostics.Stopwatch.GetElapsedTime(writesStarted).TotalSeconds;
+        HubTelemetry.NativeActivityCompletionWrites.Record(writeSeconds,
+            new KeyValuePair<string, object?>("mode",
+                CombinedActivityCompletionEnabled ? "combined" : "legacy"));
         span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.writes.applied",
             tags:new System.Diagnostics.ActivityTagsCollection {
                 { "write.mode", CombinedActivityCompletionEnabled ? "combined" : "legacy" },
-                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(writesStarted).TotalSeconds }}));
+                { "elapsed.seconds", writeSeconds }}));
         var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         await tx.CommitAsync(ct);
         span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
