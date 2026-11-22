@@ -336,7 +336,8 @@ public static class HubGatewayEndpoints
         });
 
         routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions,
-            HubCandidateAcquisition candidates, HubReadinessBroadcaster readiness) =>
+            HubCandidateAcquisition candidates, HubReadinessBroadcaster readiness,
+            HubSseTaskDistributor sse) =>
             Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
                 candidateEnabled = candidates.Enabled, candidateCredits = candidates.CandidateCredits,
                 candidateReservations = candidates.CandidateReservations,
@@ -346,7 +347,10 @@ public static class HubGatewayEndpoints
                 pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
                 pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
                 pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
-                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions }));
+                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions,
+                sseActiveSessions = sse.ActiveSessions, sseClaimBatchLimit = sse.MixedClaimBatchSize,
+                sseClaimCalls = sse.ClaimCalls, sseClaimedTasks = sse.ClaimedTasks,
+                sseMultiTaskClaims = sse.MultiTaskClaims, sseMaxTasksClaimed = sse.MaxTasksClaimed }));
 
         routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
             HubPushSessions sessions, CancellationToken ct) =>
