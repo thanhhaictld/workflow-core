@@ -139,6 +139,7 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
                 s.BodyType.FullName?.StartsWith("WorkflowCore.Primitives.Activity",StringComparison.Ordinal)==true)
             .Select(s=>s.Id).ToHashSet();
         var before=workflow.ExecutionPointers.ToDictionary(p=>p.Id,p=>p.Status);
+        var previousDispatches = ActiveDispatchKeys(workflow);
         sessions.Current.Value=session;
         try
         {
@@ -235,18 +236,26 @@ public sealed class HubNativeExecutor(IServiceProvider services,HubNativeCatalog
                     ?new DateTime(long.Parse(ticks.ToString()!),DateTimeKind.Utc):DateTime.SpecifyKind(DateTime.MinValue,DateTimeKind.Utc);
                 subscriptions.Add(new(pointer.Id,pointer.EventName,pointer.EventKey,asOf));
             }
-            var activeDispatches=workflow.ExecutionPointers.Where(p=>p.Status==PointerStatus.WaitingForEvent && p.EndTime is null)
-                .Where(p=>p.ExtensionAttributes.ContainsKey("hubDispatchKey"))
-                .Select(p=>p.ExtensionAttributes["hubDispatchKey"].ToString()!).ToArray();
+            var activeDispatches = ActiveDispatchKeys(workflow);
+            var obsoleteDispatches = previousDispatches.Length == 0
+                ? [] : previousDispatches.Except(activeDispatches, StringComparer.Ordinal).ToArray();
             var timerPointer=workflow.ExecutionPointers.FirstOrDefault(p=>p.Active && p.SleepUntil?.Ticks==workflow.NextExecution);
-            return new(1,owner,lease.Epoch,runtime.Revision,lease.Id,codec.Encode(workflow),workflow.Status.ToString(),
+            return new HubNativeCommit(1,owner,lease.Epoch,runtime.Revision,lease.Id,codec.Encode(workflow),workflow.Status.ToString(),
                 workflow.Status==WorkflowStatus.Runnable && workflow.NextExecution is long next && next<=clock.UtcNow.Ticks,
                 workflow.NextExecution is >0 ? new DateTime(workflow.NextExecution.Value,DateTimeKind.Utc):null,
                 consumed.ToArray(),subscriptions.ToArray(),session.Dispatches.Where(d=>activeDispatches.Contains(d.DispatchKey)).ToArray(),
-                session.History.ToArray(),activeDispatches,timerPointer is null?null:new(timerPointer.Id,timerPointer.StepId));
+                session.History.ToArray(),activeDispatches,timerPointer is null?null:new(timerPointer.Id,timerPointer.StepId))
+            {
+                ObsoleteDispatches = obsoleteDispatches
+            };
         }
         finally { sessions.Current.Value=null; }
     }
+
+    private static string[] ActiveDispatchKeys(WorkflowInstance workflow) =>
+        workflow.ExecutionPointers.Where(p => p.Status == PointerStatus.WaitingForEvent && p.EndTime is null)
+            .Where(p => p.ExtensionAttributes.ContainsKey("hubDispatchKey"))
+            .Select(p => p.ExtensionAttributes["hubDispatchKey"].ToString()!).ToArray();
 
     public async Task<JsonElement> ExecuteActivityAsync(HubLeasedTask task,CancellationToken ct=default)
     {

@@ -106,6 +106,11 @@ transport attempts. Sleep and retry deadlines use durable Hub timers.
 
 Suspension retains dispatch intent and inbox results. Claims pause until resume.
 Pointer cancellation fences outstanding activity leases and releases permits.
+Native processors send the dispatch keys removed in an iteration as `obsoleteDispatches`.
+The Hub uses consumed activity inbox entries to exclude finished dispatches and revokes
+all remaining queued or leased keys and closes their attempts in the snapshot commit.
+An empty batch skips cancellation SQL. Commits without the batch use `activeDispatches`
+for full reconciliation, and the processor continues sending that list to support older Hubs.
 Complete or terminated workflows retire outstanding tasks and timers.
 
 Workers renew leases and cancel execution on renewal failure or local lease
