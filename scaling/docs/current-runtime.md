@@ -160,16 +160,20 @@ admission, and the processor processes a result only once for the matching
 session and grant. Candidate credit pressure may use the same owner-fenced
 SQL fallback.
 
-Set `WFC_HUB_PUSH_ENABLED=true` on native processors and Hub replicas. The
-processor writes an atomic credit journal before submitting offers so a
-restart can reconcile them before spending those slots again. By default the
-journal lives in the OS temporary directory and is scoped to the host,
-application, Hub URL and worker namespace filter. Set
-`WFC_HUB_PUSH_CREDIT_JOURNAL` (or `HubRuntimeOptions.PushCreditJournalPath`) to a
-unique writable path for each processor sharing a host scope. Keep that path
-on a persistent mount when replacing a container or pod for the same logical
-processor. The processor uses an exclusive file lock so two instances cannot
-spend the same journal's budget.
+Set `WFC_HUB_PUSH_ENABLED=true` on native processors and Hub replicas.
+Every worker incarnation starts with a fresh ephemeral processor identity and
+registers its execution slots on new Hub SSE sessions. **Workers are stateless
+across process restart and pod rescheduling**: no credit journal, persistent
+volume, or prior identity is required. In-flight grants and running assignments
+are accounted for in memory only during that live worker incarnation.
+
+When a worker disappears, the Hub closes its old SSE session and cancels
+uncommitted matching credits. PostgreSQL task leases already committed against
+that session remain fenced until completion or expiry. A replacement can offer
+fresh capacity immediately, but cannot reclaim tasks with an unexpired lease.
+A worker that remains alive after a transient SSE disconnect retains its
+in-memory grants and reconciles uncertain outcomes via the Hub's `/retired`
+endpoint. This does not grant exactly-once external side-effect semantics.
 
 ## Failover and delivery uncertainty
 
@@ -180,7 +184,7 @@ spend the same journal's budget.
 | SSE stream disconnect | Running tasks keep their slots and can finish over REST. For unaccounted grants, the processor closes the old session and waits for proof of retirement |
 | Old Gateway unreachable | A reachable Gateway waits for a changed or expired PostgreSQL owner epoch and checks the grant's durable task leases |
 | Commit result ambiguous | The grant holds its credits. Retirement waits behind any admission transaction that holds the owner lock and checks for live task leases |
-| Processor restarts or misses heartbeat | Restart restores unaccounted offers from the journal. Expired leases are eligible for fenced reclaim under a later task epoch |
+| Processor restarts or misses heartbeat | New incarnation registers with no prior worker state. Old uncommitted credits are cancelled by the Hub; expired committed leases remain eligible for fenced reclaim under a later task epoch |
 | Notification dropped | Cursor-based bounded reconciliation restores discovery |
 | Database unavailable | No in-memory-only task admission or result commit is permitted |
 
