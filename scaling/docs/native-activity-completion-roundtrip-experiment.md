@@ -37,7 +37,7 @@ Both Hub replicas receive this environment variable in the HA Compose overlays.
 
 ## Measurement
 
-The bounded-label histogram `workflow_hub_native_activity_completion_writes_seconds` measures the write phase (excluding initial validation/row locking and commit), labeled `mode=legacy|combined`. The A/B benchmark is `.github/workflows/workflow-hub-native-completion-sql-ab.yml`, which keeps ownership mode **strict** in both arms, uses two Hubs/four shards and varies only the completion SQL mode at 4/8/16 processors. Each job must durably complete 1,000 native offboarding workflows with zero failures. The benchmark reports throughput, workflow p95/p99, CPU, PostgreSQL commit count and sampled waits.
+The bounded-label histogram `workflow_hub_native_activity_completion_writes_seconds` measures the write phase (excluding initial validation/row locking and commit), labeled `mode=legacy|combined`. The A/B benchmark is `.github/workflows/workflow-hub-native-completion-sql-ab.yml`, which keeps ownership mode **strict** in both arms, uses two Hubs/four shards and varies only the completion SQL mode at 4/8/16 processors. Each job must durably complete 1,000 `policy-unordered` native workflows with one **routed activity per workflow** and zero failures. The CI verifies exactly 1,000 persisted `ActivityResultReceived` history events; the offboarding-fast workflow is intentionally not used because its steps execute inside the processor and do not exercise this SQL path. The benchmark reports throughput, workflow p95/p99, CPU, PostgreSQL commit count and sampled waits.
 
 This experiment reduces commands per native activity completion, **not** transaction commits per workflow. If PostgreSQL WAL flushes or other operations dominate, throughput may not improve.
 
