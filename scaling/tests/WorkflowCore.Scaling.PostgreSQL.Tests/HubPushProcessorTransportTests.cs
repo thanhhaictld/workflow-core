@@ -59,8 +59,7 @@ public sealed class HubPushProcessorTransportTests
 
         foreach (var capacity in new[] { 2, 4 })
         {
-            using var state = new JournalPath();
-            using var host = Processor(a.Url, [a.Url, b.Url], state.Path, capacity, includeWorkflows: true);
+            using var host = Processor(a.Url, [a.Url, b.Url], capacity, includeWorkflows: true);
             var codec = host.Services.GetRequiredService<HubSnapshotCodec>();
             input = JsonSerializer.SerializeToElement(new
             {
@@ -109,47 +108,67 @@ public sealed class HubPushProcessorTransportTests
     }
 
     [Fact]
-    public async Task RestartRestoresUnacknowledgedOffersBeforeSendingMoreCredits()
+    public async Task WorkerRestartUsesFreshIncarnationWithoutRecoveringDiskState()
     {
         await using var owner = new Owner("a");
-        using var state = new JournalPath();
         owner.App.MapGet(Push + "/topology", (string hub) => Results.Ok(Enumerable.Range(0, 4)
             .Select(shard => new HubPushShardLocation(shard, owner.Url,
                 new(hub, shard, owner.Name, owner.Url, 1, DateTime.UtcNow.AddSeconds(8))))));
-        var allowRetirement = false;
-        var probed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        owner.App.MapPost(Push + "/retired", (HubPushGrantRecovery _) =>
-        {
-            probed.TrySetResult();
-            return Results.Ok(Volatile.Read(ref allowRetirement));
-        });
+        // Emulate the lost-SSE-response window: grants were accepted, but
+        // the former worker cannot confirm receipt or execution.
         owner.WithholdResults = true;
         await owner.App.StartAsync();
-        Guid processor;
-        using (var first = Processor(owner.Url, [], state.Path, 1, includeWorkflows: false))
+
+        Guid firstProcessor;
+        using (var first = Processor(owner.Url, [], 1, includeWorkflows: false))
         {
             await first.StartAsync();
-            await Until(() => owner.Offers.Count == 1);
-            processor = owner.LastRegistration!.ProcessorId;
-            var journal = JsonSerializer.Deserialize<HubPushCreditJournal.Snapshot>(await File.ReadAllBytesAsync(state.Path));
-            Assert.Equal(Assert.Single(owner.Offers), Assert.Single(journal!.Offers).Recovery.Grant);
+            await Until(() => owner.Offers.Count >= 1);
+            firstProcessor = owner.LastRegistration!.ProcessorId;
             await first.StopAsync();
         }
         await Until(() => owner.Connected == 0);
-        using var restarted = Processor(owner.Url, [], state.Path, 1, includeWorkflows: false);
+        using var restarted = Processor(owner.Url, [], 1, includeWorkflows: false);
         await restarted.StartAsync();
         try
         {
-            await Until(() => owner.StreamCount == 2);
-            await probed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await Task.Delay(300);
-            Assert.Equal(processor, owner.LastRegistration!.ProcessorId);
-            Assert.Single(owner.Offers);
-            Volatile.Write(ref allowRetirement, true);
-            await Until(() => owner.Offers.Count == 2);
+            await Until(() => owner.StreamCount == 2 && owner.Offers.Count >= 2);
+            // Fresh ephemeral registration and independently offered capacity,
+            // even though the previous grant's response was never observed.
+            Assert.NotEqual(firstProcessor, owner.LastRegistration!.ProcessorId);
+            Assert.Equal(1, Assert.Single(owner.Offers.Take(1)).Sequence);
+            Assert.Equal(1, owner.Offers.Last().Sequence);
         }
         finally { await restarted.StopAsync(); }
         Assert.Equal(1, owner.PeakConnected);
+    }
+
+    [Fact]
+    public async Task TwoWorkersOnSameHostDoNotShareAProcessJournalOrIdentity()
+    {
+        await using var owner = new Owner("a");
+        owner.App.MapGet(Push + "/topology", (string hub) => Results.Ok(Enumerable.Range(0, 4)
+            .Select(shard => new HubPushShardLocation(shard, owner.Url,
+                new(hub, shard, owner.Name, owner.Url, 1, DateTime.UtcNow.AddSeconds(8))))));
+        owner.WithholdResults = true;
+        await owner.App.StartAsync();
+        using var first = Processor(owner.Url, [], 1, includeWorkflows: false);
+        using var second = Processor(owner.Url, [], 1, includeWorkflows: false);
+        await first.StartAsync();
+        await second.StartAsync();
+        try
+        {
+            await Until(() => owner.Connected == 2 && owner.Registrations.Count >= 2);
+            var ids = owner.Registrations.Select(r => r.ProcessorId).ToArray();
+            Assert.Equal(2, ids.Distinct().Count());
+            Assert.Equal(2, owner.PeakConnected);
+        }
+        finally
+        {
+            await second.StopAsync();
+            await first.StopAsync();
+        }
+        await Until(() => owner.Connected == 0);
     }
 
     public sealed class TestFlow : IWorkflow<object>
@@ -159,7 +178,7 @@ public sealed class HubPushProcessorTransportTests
         public void Build(IWorkflowBuilder<object> builder) => builder.StartWith(_ => ExecutionResult.Next());
     }
 
-    private static IHost Processor(string url, string[] trusted, string journal, int slots, bool includeWorkflows) =>
+    private static IHost Processor(string url, string[] trusted, int slots, bool includeWorkflows) =>
         new HostBuilder().ConfigureServices(services =>
         {
             services.AddLogging();
@@ -173,7 +192,6 @@ public sealed class HubPushProcessorTransportTests
                 options.MatchingPartitions = 4;
                 options.ActivityConcurrency = slots;
                 options.WorkflowConcurrency = 1;
-                options.PushCreditJournalPath = journal;
             }).AddActivity<HubNativeTransportTests.CountEffect>("work", "count", 2, o => o.ActivityResult(s => s.Result));
             if (includeWorkflows)
             {
@@ -188,17 +206,6 @@ public sealed class HubPushProcessorTransportTests
         while (!condition()) await Task.Delay(25, timeout.Token);
     }
 
-    private sealed class JournalPath : IDisposable
-    {
-        private readonly DirectoryInfo _directory = Directory.CreateTempSubdirectory("hub-push-test");
-        public string Path => System.IO.Path.Combine(_directory.FullName, "credits.json");
-        public void Dispose()
-        {
-            foreach (var file in _directory.GetFiles()) file.Delete();
-            _directory.Delete();
-        }
-    }
-
     private sealed class Owner : IAsyncDisposable
     {
         private readonly ConcurrentDictionary<Guid, Channel<HubPushGrant>> _sessions = new();
@@ -211,6 +218,7 @@ public sealed class HubPushProcessorTransportTests
         public int StreamCount => Volatile.Read(ref _streams);
         public int PeakConnected => Volatile.Read(ref _peak);
         public HubPushProcessorRegistration? LastRegistration { get; private set; }
+        public ConcurrentQueue<HubPushProcessorRegistration> Registrations { get; } = new();
         public ConcurrentQueue<HubPushGrant> Offers { get; } = new();
         public Func<HubPushGrant, HubLeasedTask[]> Assign { get; set; } = _ => [];
         public bool WithholdResults { get; set; }
@@ -227,6 +235,7 @@ public sealed class HubPushProcessorTransportTests
             App.MapPost(Push + "/sessions", (HubPushProcessorRegistration registration) =>
             {
                 LastRegistration = registration;
+                Registrations.Enqueue(registration);
                 var session = new HubPushOwnerSession(Guid.NewGuid(), _instance, Name);
                 _sessions[session.SessionId] = Channel.CreateUnbounded<HubPushGrant>();
                 return Results.Ok(session);
