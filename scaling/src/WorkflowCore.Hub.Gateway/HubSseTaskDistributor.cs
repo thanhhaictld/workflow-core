@@ -55,8 +55,8 @@ public sealed class HubSseTaskDistributor
             (sizeSetting is null ? 1 : int.TryParse(sizeSetting, out var parsed) ? parsed : -1);
         var requestedDelay = creditCoalesceMilliseconds ??
             (delaySetting is null ? 0 : int.TryParse(delaySetting, out var parsedDelay) ? parsedDelay : -1);
-        if (requestedSize is < 1 or > 32 || requestedDelay is < 0 or > 5)
-            throw new ArgumentException("SSE mixed task claim batch must be 1..32 with credit coalescing 0..5ms");
+        if (requestedSize is < 1 or > 64 || requestedDelay is < 0 or > 5)
+            throw new ArgumentException("SSE mixed task claim batch must be 1..64 with credit coalescing 0..5ms");
         _mixedClaimBatchSize = requestedSize;
         _creditCoalesceWindow = TimeSpan.FromMilliseconds(requestedDelay);
     }
