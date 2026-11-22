@@ -79,8 +79,8 @@ public sealed class HubCandidateAcquisition : BackgroundService
             throw new ArgumentException($"{concurrencySetting} must be 1..32");
         _admissionSlots = new(configuredConcurrency is null ? 2 : int.Parse(configuredConcurrency));
         var configuredBatch = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_BATCH_SIZE");
-        if (configuredBatch is not null && (!int.TryParse(configuredBatch, out var batch) || batch is < 1 or > 32))
-            throw new ArgumentException("WFC_HUB_CANDIDATE_BATCH_SIZE must be 1..32");
+        if (configuredBatch is not null && (!int.TryParse(configuredBatch, out var batch) || batch is < 1 or > 64))
+            throw new ArgumentException("WFC_HUB_CANDIDATE_BATCH_SIZE must be 1..64");
         _batchSize = configuredBatch is null ? 32 : int.Parse(configuredBatch);
         // Parallel discovery is safe because the registry reserves at most one
         // active turn per matching shard, while enforcing global memory budgets.
