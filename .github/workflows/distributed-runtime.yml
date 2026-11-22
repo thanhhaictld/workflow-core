@@ -358,10 +358,8 @@ jobs:
             exit 1
           fi
           for i in 1 2 3 4; do
-            # Isolate the restart-stable push journal for each logical processor.
-            # The default host-scoped journal would lock out sibling processes.
-            # No PostgreSQL credential is available to application hosts.
-            env -u WFC_PG WFC_HUB_PUSH_CREDIT_JOURNAL="$RUNNER_TEMP/wfc-hub-push-worker-$i.json" \
+            # Stateless worker processes share no files or PostgreSQL credentials.
+            env -u WFC_PG \
               WORKFLOW_WORKERS=16 ACTIVITY_WORKERS=32 dotnet run --no-build -c Release \
               --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
               > "/tmp/perf-worker-$i.log" 2>&1 &
