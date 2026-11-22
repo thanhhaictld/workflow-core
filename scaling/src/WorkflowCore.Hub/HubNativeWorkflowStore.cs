@@ -152,7 +152,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                a.PointerId.Length>100 || a.StepId<0 || a.Input.ValueKind!=JsonValueKind.Object || a.Input.GetRawText().Length>65536) ||
            request.Timer is { StepId: <0 } || request.Timer?.PointerId.Length>100)
             throw new ArgumentException("Invalid native commit");
-        var canonical = JsonSerializer.Serialize(request);
+        if (request.ObsoleteDispatches is { } obsolete &&
+            (request.ActiveDispatches is null || (obsolete.Length > 0 &&
+                (obsolete.Any(key => string.IsNullOrWhiteSpace(key) || key.Length > 200) ||
+                 obsolete.Intersect(request.ActiveDispatches, StringComparer.Ordinal).Any()))))
+            throw new ArgumentException("Invalid obsolete dispatch keys");
+        // The full active set defines commit identity. Keep the same receipt format
+        // on both Hub versions so another replica can acknowledge a lost response.
+        var receiptRequest = request.ObsoleteDispatches is null ? request : request with { ObsoleteDispatches = null };
+        var canonical = JsonSerializer.Serialize(receiptRequest);
         // CPU-only preparation is safe before the transaction: the request is already
         // validated and no database state is read. All writes are still fenced.
         string[]? preparedHistory = null;
@@ -247,13 +255,19 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             await using var rows=await existing.ExecuteReaderAsync(ct);
             while(await rows.ReadAsync(ct))existingDispatchKeys.Add(rows.GetString(0));
         }
+        var obsoleteDispatches = request.ObsoleteDispatches is { Length: > 0 } removed
+            ? new HashSet<string>(removed, StringComparer.Ordinal) : null;
         foreach(var consumed in request.ConsumedInbox.Distinct())
         {
             await using var cmd=Command(db,tx,"""
                 UPDATE wfc_scale.hub_native_inbox SET consumed=true
                 WHERE id=@message AND workflow_id=@id AND NOT consumed
+                RETURNING CASE WHEN kind='Activity' THEN source_key END
                 """,("message",consumed),("id",id));
-            if(await cmd.ExecuteNonQueryAsync(ct)!=1)throw new ArgumentException("Unknown or already consumed inbox message");
+            var sourceKey = await cmd.ExecuteScalarAsync(ct);
+            if (sourceKey is null) throw new ArgumentException("Unknown or already consumed inbox message");
+            // Activity inbox entries are written after completion or terminal failure.
+            if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
         }
         await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
         foreach(var subscription in request.Subscriptions)
@@ -262,7 +276,22 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 VALUES(@id,@pointer,@name,@key,@asof)
                 """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
                 ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
-        if(request.ActiveDispatches is string[] active)
+        if (obsoleteDispatches is { Count: > 0 })
+        {
+            // Keep separate statements in one round trip. Closing attempts needs a
+            // fresh snapshot if the task update waited for admission to commit.
+            await Execute(db,tx,"""
+                UPDATE wfc_scale.hub_task SET state=3,owner=NULL,lease_until=NULL,
+                  last_error='Native pointer cancelled',updated_at=now()
+                WHERE workflow_id=@id AND dispatch_key IS NOT NULL AND state IN (0,1)
+                  AND dispatch_key=ANY(@obsolete);
+                UPDATE wfc_scale.hub_task_attempt a SET outcome='Cancelled',finished_at=clock_timestamp()
+                FROM wfc_scale.hub_task t WHERE a.task_id=t.id AND t.workflow_id=@id
+                  AND t.dispatch_key IS NOT NULL AND t.dispatch_key=ANY(@obsolete)
+                  AND a.workflow_id=@id AND t.last_error='Native pointer cancelled' AND a.finished_at IS NULL
+                """, ct, ("id", id), ("obsolete", obsoleteDispatches.ToArray()));
+        }
+        else if(request.ObsoleteDispatches is null && request.ActiveDispatches is string[] active)
         {
             await Execute(db,tx,"""
                 UPDATE wfc_scale.hub_task SET state=3,owner=NULL,lease_until=NULL,
@@ -368,7 +397,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             ("state",(short)(nextStatus=="Complete"?2:nextStatus=="Terminated"?3:1)),("id",id),
             ("waiting",nextStatus is "Runnable" or "Suspended" && !request.Runnable));
         await using(var ack=Command(db,tx,CompleteTaskSql,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
-            ("result",JsonSerializer.Serialize(new{commit=request,revision=revision+1,status=nextStatus}))))
+            ("result",JsonSerializer.Serialize(new{commit=receiptRequest,revision=revision+1,status=nextStatus}))))
             if(await ack.ExecuteNonQueryAsync(ct)!=1)return null;
         if(nextStatus=="Runnable")
         {
