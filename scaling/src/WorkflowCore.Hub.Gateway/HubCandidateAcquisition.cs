@@ -340,6 +340,14 @@ public sealed class HubCandidateAcquisition : BackgroundService
         }
     }
 
+    // A dead SSE session cannot consume speculative, unleased matching credits.
+    // Keep all credits associated with committed/uncertain leases fenced.
+    internal void CancelUncommittedSessionCredits(Guid sessionId)
+    {
+        _registry.CancelUncommittedSessionCredits(sessionId);
+        _wake.Writer.TryWrite(true);
+    }
+
     // Completion/failure acknowledgement is authoritative lease retirement.
     // It can safely release candidate memory before the original lease deadline.
     internal void ReleaseCompletedLease(Guid id,long epoch)
