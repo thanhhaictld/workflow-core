@@ -40,9 +40,13 @@ internal sealed class HubPushProcessor(
         public void Dispose() => Stop.Dispose();
     }
 
-    private sealed class GrantState(HubPushCreditJournal.Offer offer, Route? route, Connection? connection)
+    // In-flight grants exist only for the current worker incarnation.
+    // PostgreSQL task leases and Hub ownership fences survive process loss.
+    private sealed record Offer(string OwnerUrl, HubPushGrantRecovery Recovery);
+
+    private sealed class GrantState(Offer offer, Route? route, Connection? connection)
     {
-        public HubPushCreditJournal.Offer Offer { get; } = offer;
+        public Offer Offer { get; } = offer;
         public Route? Route { get; } = route;
         public Connection? Connection { get; } = connection;
         public int Reserved { get; set; } = offer.Recovery.Grant.Credits;
@@ -65,15 +69,14 @@ internal sealed class HubPushProcessor(
             throw new InvalidOperationException("Native Hub workers require WFC_HUB_PUSH_ENABLED=true on the worker and Hub");
         await startup.Published.WaitAsync(stoppingToken);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        using var journal = new HubPushCreditJournal(options);
-        var registration = new HubPushProcessorRegistration(journal.Initial.ProcessorId, options.MatchingPartitions,
+        // A rescheduled worker has no prior files, identity, or grant ledger.
+        // Only this live process needs to track its outstanding execution budget.
+        var registration = new HubPushProcessorRegistration(Guid.NewGuid(), options.MatchingPartitions,
             options.ActivityConcurrency, options.WorkflowConcurrency, capabilities);
         var routes = capabilities.SelectMany(c => Enumerable.Range(0, options.MatchingPartitions)
             .Select(partition => new Route(c, partition))).ToArray();
-        foreach (var offer in journal.Initial.Offers)
-            _grants.Add(Key(offer.Recovery), new GrantState(offer, null, null));
         var discover = RefreshTopologyAsync(routes.GroupBy(r => r.Capabilities.HubId).ToArray(), stop.Token);
-        var recover = ReconcileAsync(journal.Initial.Offers, stop.Token);
+        var recover = ReconcileAsync(stop.Token);
         try
         {
             using var tick = new PeriodicTimer(TimeSpan.FromMilliseconds(20));
@@ -82,7 +85,7 @@ internal sealed class HubPushProcessor(
                 lock (_gate)
                 {
                     RefreshConnections(routes, registration, stop.Token);
-                    OfferCredits(routes, journal);
+                    OfferCredits(routes);
                 }
             }
         }
@@ -95,7 +98,6 @@ internal sealed class HubPushProcessor(
             Task[] executions;
             lock (_gate) executions = _executions.Values.ToArray();
             await Task.WhenAll(executions);
-            journal.Save(OutstandingOffers());
             foreach (var connection in _connections.Values) connection.Dispose();
         }
     }
@@ -260,14 +262,13 @@ internal sealed class HubPushProcessor(
         }
     }
 
-    private void OfferCredits(Route[] routes, HubPushCreditJournal journal)
+    private void OfferCredits(Route[] routes)
     {
         var now = DateTime.UtcNow;
         var batches = new Dictionary<Connection, List<HubPushGrant>>();
         Fill(HubPushTaskKind.Activity, options.ActivityConcurrency);
         Fill(HubPushTaskKind.Workflow, options.WorkflowConcurrency);
-        if (batches.Count != 0) journal.Save(OutstandingOffers());
-        foreach (var connection in _connections.Values)
+         foreach (var connection in _connections.Values)
         {
             if (connection.Session is not { } session || connection.Stop.IsCancellationRequested ||
                 connection.Submission is { IsCompleted: false }) continue;
@@ -295,7 +296,7 @@ internal sealed class HubPushProcessor(
                 var grant = new HubPushGrant(++connection.Sequence, route.Capabilities.HubId,
                     route.Partition, route.Owner!.Epoch, kind, credits);
                 var recovery = new HubPushGrantRecovery(connection.Session!, grant);
-                var state = new GrantState(new HubPushCreditJournal.Offer(connection.Target.AbsoluteUri, recovery),
+                var state = new GrantState(new Offer(connection.Target.AbsoluteUri, recovery),
                     route, connection);
                 _grants.Add(Key(recovery), state);
                 if (!batches.TryGetValue(connection, out var batch)) batches.Add(connection, batch = []);
@@ -389,12 +390,13 @@ internal sealed class HubPushProcessor(
         }
     }
 
-    private async Task ReconcileAsync(HubPushCreditJournal.Offer[] restored, CancellationToken ct)
+    // For a live worker, reconcile ambiguous SSE deliveries in memory.
+    // After a process crash no worker-side reconciliation runs: the closed
+    // Hub session retires uncommitted credits; PostgreSQL expires leased work.
+    private async Task ReconcileAsync(CancellationToken ct)
     {
         try
         {
-            await Task.WhenAll(restored.DistinctBy(o => o.Recovery.Session.SessionId)
-                .Select(o => CloseRestoredAsync(o)));
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             do
             {
@@ -418,15 +420,9 @@ internal sealed class HubPushProcessor(
             } while (await timer.WaitForNextTickAsync(ct));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+     }
 
-        async Task CloseRestoredAsync(HubPushCreditJournal.Offer offer)
-        {
-            try { await CloseAsync(OwnerUrl(offer.OwnerUrl), offer.Recovery.Session); }
-            catch (InvalidOperationException ex) { logger.LogDebug(ex, "Restored push owner URL is unavailable"); }
-        }
-    }
-
-    private async Task<bool> RetiredAsync(Uri endpoint, HubPushCreditJournal.Offer offer, CancellationToken ct)
+    private async Task<bool> RetiredAsync(Uri endpoint, Offer offer, CancellationToken ct)
     {
         using var timeout = Deadline(ct);
         using var response = await client.Http.PostAsJsonAsync(endpoint, offer.Recovery, timeout.Token);
@@ -456,5 +452,4 @@ internal sealed class HubPushProcessor(
     private static Uri SessionUrl(Uri target, HubPushOwnerSession session, string suffix = "") =>
         new(target, $"{Prefix}sessions/{session.SessionId}{suffix}");
     private static (Guid, long) Key(HubPushGrantRecovery recovery) => (recovery.Session.SessionId, recovery.Grant.Sequence);
-    private HubPushCreditJournal.Offer[] OutstandingOffers() => _grants.Values.Select(g => g.Offer).ToArray();
 }
