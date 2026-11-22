@@ -101,7 +101,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
             ownership.PartitionAcquired += Acquired;
             ownership.PartitionLost += Lost;
             readiness.CandidateRescanRequested += Hint;
-            readiness.CandidateTaskChanged += TaskChanged;
             readiness.CandidateRecoveryRequired += RecoveryRequired;
         }
     }
@@ -120,13 +119,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
         foreach(var owner in _registry.ActiveOwners())
             if(owner.HubId==hub && (taskPartition is null || taskPartition.Value % _ownership.PartitionCount == owner.Partition))
                 _registry.Notify(hub,owner.Partition,owner.Epoch,bucket: taskPartition is null ? null : taskPartition.Value % 64);
-        _wake.Writer.TryWrite(true);
-    }
-    private void TaskChanged(string hub, Guid taskId, int taskPartition, string? type, int version)
-    {
-        foreach (var owner in _registry.ActiveOwners())
-            if (owner.HubId == hub && taskPartition % _ownership.PartitionCount == owner.Partition)
-                _registry.NotifyTask(hub, owner.Partition, owner.Epoch, taskId);
         _wake.Writer.TryWrite(true);
     }
     private void RecoveryRequired()

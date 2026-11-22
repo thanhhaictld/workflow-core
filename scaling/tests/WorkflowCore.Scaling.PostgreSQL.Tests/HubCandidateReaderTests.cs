@@ -19,14 +19,10 @@ public sealed class HubCandidateReaderTests
     private sealed class CountingDiscovery(IHubCandidateDiscovery inner) : IHubCandidateDiscovery
     {
         public int PageCalls;
-        public int HydrationCalls;
         public Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct) => inner.CaptureHorizonAsync(hub, ct);
         public async Task<HubCandidatePage> ReadPageAsync(string hub, int bucket, HubCandidateStream stream,
             HubCandidateHorizon horizon, HubCandidateCursor? cursor, int pageSize, int byteLimit, CancellationToken ct)
         { Interlocked.Increment(ref PageCalls); return await inner.ReadPageAsync(hub, bucket, stream, horizon, cursor, pageSize, byteLimit, ct); }
-        public async Task<HubCandidateHydrationPage> HydrateAsync(string hub, int matchingPartition, int partitionCount,
-            IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct)
-        { Interlocked.Increment(ref HydrationCalls); return await inner.HydrateAsync(hub, matchingPartition, partitionCount, ids, byteLimit, ct); }
     }
 
 
@@ -57,133 +53,7 @@ public sealed class HubCandidateReaderTests
     }
 
     [Fact]
-    public async Task HydrationLoadsOnlyRequestedCurrentEligibleIds()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
-        var hub = "candidate-hydrate-" + Guid.NewGuid().ToString("N");
-        var eligible = Guid.NewGuid(); var terminal = Guid.NewGuid(); var otherPartition = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
-            VALUES (@eligible,@hub,0,'activity',1,'{}'),(@terminal,@hub,0,'activity',1,'{}'),
-                   (@other,@hub,1,'activity',1,'{}');
-            UPDATE wfc_scale.hub_task SET state=2 WHERE id=@terminal;
-            """, db))
-        {
-            command.Parameters.AddWithValue("eligible", eligible); command.Parameters.AddWithValue("terminal", terminal);
-            command.Parameters.AddWithValue("other", otherPartition); command.Parameters.AddWithValue("hub", hub);
- await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database);
-        var reader = new HubCandidateReader(tasks);
-        var page = await reader.HydrateAsync(hub, 0, 64, [eligible, terminal, otherPartition], 256, default);
-        var item = Assert.Single(page.Items);
-        Assert.Equal(eligible, item.Id);
-        Assert.Equal(0, page.Oversized);
-    }
-
-    [Fact]
-    public async Task HydrationEnforcesCombinedUtf8BudgetAndSuppressesOversizedBaseText()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate hydration tests");
-        var hub = "candidate-hydrate-budget-" + Guid.NewGuid().ToString("N");
-        var combined = Guid.NewGuid(); var oversized = Guid.NewGuid(); var unicode = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload)
-            VALUES (@combined,@hub,0,@base,1,'{}'),(@oversized,@hub,0,@large,1,'{}'),(@unicode,@hub,0,'activity',1,'{}');
-            """, db))
-        {
-            command.Parameters.AddWithValue("combined", combined); command.Parameters.AddWithValue("oversized", oversized);
-            command.Parameters.AddWithValue("unicode", unicode); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("base", new string('b', 180));
-            command.Parameters.AddWithValue("large", new string('z', 4096));
-
-            await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database); var reader = new HubCandidateReader(tasks, metadataEnrichmentEnabled: true);
-        var page = await reader.HydrateAsync(hub, 0, 64, [combined, combined], 512, default);
-        var combinedItem = Assert.Single(page.Items);
-        Assert.Equal(combined, combinedItem.Id);
-        Assert.InRange(page.MetadataBytes, 0, 512);
-        var unicodePage = await reader.HydrateAsync(hub, 0, 64, [unicode], 512, default);
-        Assert.InRange(unicodePage.MetadataBytes, 0, 512);
-        var oversizedPage = await reader.HydrateAsync(hub, 0, 64, [oversized], 512, default);
-        Assert.Empty(oversizedPage.Items);
-        Assert.Equal(1, oversizedPage.Oversized);
-
-        // A minimum legal byte budget with duplicate requested IDs is still
-        // bounded and does not duplicate result rows.
-        var minimum = await reader.HydrateAsync(hub, 0, 64, [unicode, unicode], 256, default);
-        Assert.Equal(unicode, Assert.Single(minimum.Items).Id);
-        Assert.InRange(minimum.MetadataBytes, 0, 256);
-    }
-
-    [Fact]
-    public async Task HydrationBatchesSharedWorkflowMetadataAndKeepsMissingOrOversizedPinsUnknown()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate workflow metadata tests");
-        var hub = "candidate-workflow-meta-" + Guid.NewGuid().ToString("N");
-        var workflow = Guid.NewGuid(); var normalA = Guid.NewGuid(); var normalB = Guid.NewGuid();
-        var largeWorkflow = Guid.NewGuid(); var largeTask = Guid.NewGuid(); var missingTask = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
-            VALUES (@workflow,@hub,'shared-flow',3,0,'{}',1),
-                   (@largeWorkflow,@hub,@largeDefinition,7,0,'{}',1);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@a,@hub,0,'__workflow__',1,'{}',@workflow),
-                   (@b,@hub,0,'__workflow__',1,'{}',@workflow),
-                   (@largeTask,@hub,0,'__workflow__',1,'{}',@largeWorkflow),
-                   (@missingTask,@hub,0,'__workflow__',1,'{}',@missingWorkflow);
-            """, db))
-        {
-            command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("largeWorkflow", largeWorkflow); command.Parameters.AddWithValue("largeDefinition", new string('d', 5000));
-            command.Parameters.AddWithValue("a", normalA); command.Parameters.AddWithValue("b", normalB);
-            command.Parameters.AddWithValue("largeTask", largeTask); command.Parameters.AddWithValue("missingTask", missingTask);
-            command.Parameters.AddWithValue("missingWorkflow", Guid.NewGuid());
-            await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database);
-        var reader = new HubCandidateReader(tasks, workflowCacheEntriesPerPartition: 1,
-            workflowCacheEntriesPerProcess: 2, workflowCacheBytesPerPartition: 1024,
-            workflowCacheBytesPerProcess: 2048);
-        var shared = await reader.HydrateAsync(hub, 0, 64, [normalA, normalB], 8192, default);
-        Assert.Equal(2, shared.Items.Count);
-        Assert.All(shared.Items, item =>
-        {
-            Assert.True(item.WorkflowMetadataComplete);
-            Assert.Equal("shared-flow", item.DefinitionId);
-            Assert.Equal(3, item.DefinitionVersion);
-        });
-        var afterBatch = reader.WorkflowCacheSnapshot;
-        Assert.Equal(1, afterBatch.Entries);
-        Assert.Equal(1, afterBatch.Misses); // one workflow row for two tasks
-        Assert.Equal(0, afterBatch.Hits);
-
-        var warm = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [normalA], 4096, default)).Items);
-        Assert.True(warm.WorkflowMetadataComplete);
-        Assert.Equal("shared-flow", warm.DefinitionId);
-        Assert.Equal(1, reader.WorkflowCacheSnapshot.Hits);
-
-        var oversized = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [largeTask], 4096, default)).Items);
-        Assert.False(oversized.WorkflowMetadataComplete);
-        Assert.Null(oversized.DefinitionId);
-        var missing = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [missingTask], 4096, default)).Items);
-        Assert.False(missing.WorkflowMetadataComplete);
-        Assert.Null(missing.DefinitionId);
-        var bounded = reader.WorkflowCacheSnapshot;
-        Assert.InRange(bounded.Entries, 0, 1);
-        Assert.InRange(bounded.Bytes, 0, 1024);
-        Assert.True(bounded.Evictions >= 2);
-    }
-
-    [Fact]
-    public async Task RepeatedIndexedDiscoveryReusesEnrichedPageWithoutExtraHydration()
+    public async Task RepeatedIndexedDiscoveryReusesEnrichedCandidatePage()
     {
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for candidate enrichment reuse tests");
@@ -208,12 +78,10 @@ public sealed class HubCandidateReaderTests
             DateTime.UtcNow.AddMinutes(5));
         registry.StartGeneration(owner, 64);
         for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
-        Assert.Equal(0, discovery.HydrationCalls);
         Assert.Equal(1, registry.Snapshot().Entries);
         registry.Notify(hub, 0, owner.Epoch);
         for (var turn = 0; turn < 3; turn++) await registry.RunOneTurnAsync(DateTimeOffset.UtcNow, default);
         Assert.True(discovery.PageCalls >= 4);
-        Assert.Equal(0, discovery.HydrationCalls);
         Assert.Equal(1, registry.Snapshot().Entries);
     }
 
@@ -265,15 +133,10 @@ public sealed class HubCandidateReaderTests
         Assert.Equal(readyIds.Order().ToArray(), due.Items.Select(x => x.Id).Order().ToArray());
         Assert.Empty(due.Oversized!);
         Assert.InRange(due.MetadataBytes, 0, 65536);
-        var hydrated = await reader.HydrateAsync(hub, 0, 64, due.Items.Select(x => x.Id).ToArray(), 65536, default);
-        Assert.Equal(3, hydrated.Items.Count);
-        Assert.InRange(hydrated.MetadataBytes, 0, 65536);
         var expiredPage = await Drain(HubCandidateStream.Expired);
         Assert.Equal(expired, Assert.Single(expiredPage.Items).Id);
         Assert.Empty(expiredPage.Oversized!);
         Assert.InRange(expiredPage.MetadataBytes, 0, 65536);
-        var expiredHydration = Assert.Single((await reader.HydrateAsync(hub, 0, 64, [expired], 65536, default)).Items);
-        Assert.Equal(expired, expiredHydration.Id);
 
         // A 256-row page divides 512 bytes into tiny nominal shares in older
         // per-row budgeting schemes, although each 288-byte UTF-8 base row is
@@ -288,145 +151,6 @@ public sealed class HubCandidateReaderTests
             if (page.EndOfStream) break;
         }
         Assert.Equal(readyIds.Order().ToArray(), smallBudgetRows.Select(x => x.Id).Order().ToArray());
-        foreach (var candidate in smallBudgetRows)
-        {
-            Assert.Equal(candidate.Id, Assert.Single((await reader.HydrateAsync(hub, 0, 64, [candidate.Id], 512, default)).Items).Id);
-        }
-    }
-
-    [Fact]
-    public async Task ColdWorkflowHydrationReleasesSinglePoolConnectionBeforeMetadataLookup()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for pool lifetime tests");
-        var hub = "candidate-pool-one-" + Guid.NewGuid().ToString("N");
-        var workflow = Guid.NewGuid(); var task = Guid.NewGuid(); var canceledTask = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
-            VALUES (@workflow,@hub,'pool-flow',1,0,'{}',1);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@task,@hub,0,'__workflow__',1,'{}',@workflow),(@canceled,@hub,0,'activity',1,'{}',NULL);
-            """, db))
-        {
-            command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("task", task); command.Parameters.AddWithValue("canceled", canceledTask);
-            await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database, maxPoolSize: 1);
-        var reader = new HubCandidateReader(tasks);
-        var hydrated = Assert.Single((await reader.HydrateAsync(hub,0,64,[task],4096,default)
-            .WaitAsync(TimeSpan.FromSeconds(3))).Items);
-        Assert.True(hydrated.WorkflowMetadataComplete);
-        Assert.Equal("pool-flow", hydrated.DefinitionId);
-
-        var coldPageReader = new HubCandidateReader(tasks);
-        var horizon = await coldPageReader.CaptureHorizonAsync(hub,default);
-        var page = await coldPageReader.ReadPageAsync(hub,0,HubCandidateStream.Ready,horizon,null,8,4096,default)
-            .WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal("pool-flow", Assert.Single(page.Items, x => x.Id == task).DefinitionId);
-
-        await using (var held = await tasks.DataSource.OpenConnectionAsync())
-        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.HydrateAsync(hub,0,64,[canceledTask],4096,cancellation.Token));
-        await using var returned = await tasks.DataSource.OpenConnectionAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
-    }
-
-    [Fact]
-    public async Task WorkflowCacheEvictsWithinScopeAndRefreshesExpiredPositiveAndNegativeEntries()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for workflow cache scope tests");
-        var hub = "candidate-cache-scope-" + Guid.NewGuid().ToString("N");
-        var workflowA = Guid.NewGuid(); var workflowB = Guid.NewGuid(); var workflowC = Guid.NewGuid();
-        var taskA = Guid.NewGuid(); var taskB = Guid.NewGuid(); var taskC = Guid.NewGuid();
-        var expireWorkflow = Guid.NewGuid(); var missingWorkflow = Guid.NewGuid();
-        var expireTask = Guid.NewGuid(); var missingTask = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
-            VALUES (@a,@hub,'a',1,0,'{}',1),(@b,@hub,'b',2,1,'{}',1),(@c,@hub,'c',3,0,'{}',1),
-                   (@expire,@hub,'before-expiry',4,0,'{}',1);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@ta,@hub,0,'__workflow__',1,'{}',@a),(@tb,@hub,1,'__workflow__',1,'{}',@b),
-                   (@tc,@hub,0,'__workflow__',1,'{}',@c),(@te,@hub,0,'__workflow__',1,'{}',@expire),
-                   (@tm,@hub,0,'__workflow__',1,'{}',@missing);
-            """, db))
-        {
-            command.Parameters.AddWithValue("hub",hub); command.Parameters.AddWithValue("a",workflowA);
-            command.Parameters.AddWithValue("b",workflowB); command.Parameters.AddWithValue("c",workflowC);
-            command.Parameters.AddWithValue("expire",expireWorkflow); command.Parameters.AddWithValue("missing",missingWorkflow);
-            command.Parameters.AddWithValue("ta",taskA); command.Parameters.AddWithValue("tb",taskB);
-            command.Parameters.AddWithValue("tc",taskC); command.Parameters.AddWithValue("te",expireTask);
-            command.Parameters.AddWithValue("tm",missingTask); await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database);
-        var scoped = new HubCandidateReader(tasks, workflowCacheEntriesPerPartition:1,
-            workflowCacheEntriesPerProcess:4, workflowCacheBytesPerPartition:2048,
-            workflowCacheBytesPerProcess:8192);
-        Assert.True(Assert.Single((await scoped.HydrateAsync(hub,0,64,[taskA],4096,default)).Items).WorkflowMetadataComplete);
-        Assert.True(Assert.Single((await scoped.HydrateAsync(hub,1,64,[taskB],4096,default)).Items).WorkflowMetadataComplete);
-        Assert.True(Assert.Single((await scoped.HydrateAsync(hub,0,64,[taskC],4096,default)).Items).WorkflowMetadataComplete);
-        var scopes = scoped.WorkflowCacheSnapshot;
-        Assert.Equal(2,scopes.Entries);
-        Assert.InRange(scopes.Bytes,0,4096);
-        Assert.True(scopes.Evictions >= 1);
-        Assert.True(Assert.Single((await scoped.HydrateAsync(hub,1,64,[taskB],4096,default)).Items).WorkflowMetadataComplete);
-        Assert.Equal(1,scoped.WorkflowCacheSnapshot.Hits);
-
-        var expiring = new HubCandidateReader(tasks, workflowCacheTtl:TimeSpan.FromMilliseconds(10));
-        var firstPositive = Assert.Single((await expiring.HydrateAsync(hub,0,64,[expireTask],4096,default)).Items);
-        var firstNegative = Assert.Single((await expiring.HydrateAsync(hub,0,64,[missingTask],4096,default)).Items);
-        Assert.Equal("before-expiry",firstPositive.DefinitionId);
-        Assert.False(firstNegative.WorkflowMetadataComplete);
-        await Task.Delay(30);
-        await using (var update = new NpgsqlCommand("""
-            UPDATE wfc_scale.hub_workflow SET definition_id='after-expiry',definition_version=5 WHERE id=@expire;
-            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
-            VALUES (@missing,@hub,'appeared-after-miss',6,0,'{}',1);
-            """,db))
-        { update.Parameters.AddWithValue("expire",expireWorkflow); update.Parameters.AddWithValue("missing",missingWorkflow);
-          update.Parameters.AddWithValue("hub",hub); await update.ExecuteNonQueryAsync(); }
-        var refreshedPositive = Assert.Single((await expiring.HydrateAsync(hub,0,64,[expireTask],4096,default)).Items);
-        var refreshedNegative = Assert.Single((await expiring.HydrateAsync(hub,0,64,[missingTask],4096,default)).Items);
-        Assert.Equal("after-expiry",refreshedPositive.DefinitionId);
-        Assert.Equal(5,refreshedPositive.DefinitionVersion);
-        Assert.True(refreshedNegative.WorkflowMetadataComplete);
-        Assert.Equal("appeared-after-miss",refreshedNegative.DefinitionId);
-    }
-
-    [Fact]
-    public async Task ConcurrentColdHydrationDeduplicatesSharedWorkflowLookup()
-    {
-        var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
-            ?? throw new InvalidOperationException("WFC_TEST_PG is required for workflow lookup deduplication tests");
-        var hub = "candidate-shared-workflow-" + Guid.NewGuid().ToString("N");
-        var workflow = Guid.NewGuid(); var taskA = Guid.NewGuid(); var taskB = Guid.NewGuid();
-        await using var db = new NpgsqlConnection(database); await db.OpenAsync();
-        await using (var command = new NpgsqlCommand("""
-            INSERT INTO wfc_scale.hub_workflow(id,hub_id,definition_id,definition_version,partition_id,input_json,step_count)
-            VALUES (@workflow,@hub,'shared-cold-flow',7,0,'{}',1);
-            INSERT INTO wfc_scale.hub_task(id,hub_id,partition_id,task_type,task_version,payload,workflow_id)
-            VALUES (@a,@hub,0,'__workflow__',1,'{}',@workflow),(@b,@hub,0,'__workflow__',1,'{}',@workflow);
-            """, db))
-        {
-            command.Parameters.AddWithValue("workflow", workflow); command.Parameters.AddWithValue("hub", hub);
-            command.Parameters.AddWithValue("a", taskA); command.Parameters.AddWithValue("b", taskB);
-            await command.ExecuteNonQueryAsync();
-        }
-        await using var tasks = new HubTaskStore(database);
-        var reader = new HubCandidateReader(tasks);
-        var both = await Task.WhenAll(
-            reader.HydrateAsync(hub, 0, 64, [taskA], 4096, default),
-            reader.HydrateAsync(hub, 0, 64, [taskB], 4096, default));
-        Assert.All(both.SelectMany(x => x.Items), item =>
-        {
-            Assert.True(item.WorkflowMetadataComplete);
-            Assert.Equal("shared-cold-flow", item.DefinitionId);
-        });
-        Assert.Equal(1, reader.WorkflowCacheSnapshot.LookupCalls);
-        Assert.Equal(1, reader.WorkflowCacheSnapshot.Entries);
-        Assert.Equal(1, reader.WorkflowCacheSnapshot.Hits);
     }
 
     [Fact]

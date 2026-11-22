@@ -16,7 +16,7 @@ public sealed class PostgresHubNotificationListener : BackgroundService
     public const string ChannelName = "wfc_hub_task_ready";
     public const string MatchingChannelName = "wfc_hub_matching_ready";
     private sealed record Hint(string Hub, string? Type, int Version, bool Legacy,
-        int? Partition = null, Guid? TaskId = null, bool Recovery = false);
+        int? Partition = null, bool Recovery = false);
     private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(25);
     private const int MaxHintsPerBatch = 128;
     private int _listening;
@@ -33,12 +33,9 @@ public sealed class PostgresHubNotificationListener : BackgroundService
     private readonly string _connectionString;
     private readonly HubReadinessBroadcaster _readiness;
     private readonly ILogger<PostgresHubNotificationListener> _logger;
-    private readonly bool _taskIdHintsEnabled;
-
     public PostgresHubNotificationListener(string connectionString,
         HubReadinessBroadcaster readiness,
-        ILogger<PostgresHubNotificationListener> logger,
-        bool? taskIdHintsEnabled = null)
+        ILogger<PostgresHubNotificationListener> logger)
     {
         // LISTEN is session-scoped; a dedicated, non-pooled connection must
         // never pass through a transaction-pooling PgBouncer endpoint.
@@ -51,8 +48,6 @@ public sealed class PostgresHubNotificationListener : BackgroundService
         _connectionString = options.ConnectionString;
         _readiness = readiness;
         _logger = logger;
-        _taskIdHintsEnabled = taskIdHintsEnabled ??
-            Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED") is "true" or "1" or "True";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -72,12 +67,10 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 void Enqueue(Hint hint)
                 {
                     if (hints.Writer.TryWrite(hint)) return;
-                    HubTelemetry.CandidateHintsDropped.Add(1);
                     Interlocked.Exchange(ref _recoveryRequired, 1);
                 }
                 void InvalidHint()
                 {
-                    HubTelemetry.CandidateHintsDropped.Add(1);
                     Interlocked.Exchange(ref _recoveryRequired, 1);
                     Enqueue(new Hint(string.Empty, null, 0, false, Recovery: true));
                 }
@@ -121,16 +114,16 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                                 { InvalidHint(); return; }
                                 partition = parsedPartition;
                             }
-                            Guid? taskId = null;
                             if (root.TryGetProperty("taskId", out var idElement))
                             {
-                                if (idElement.ValueKind != JsonValueKind.String || !Guid.TryParse(idElement.GetString(), out var parsedId) || partition is null)
+                                // Accept a stale exact-ID payload from an older
+                                // producer as a coarse partition rescan.
+                                if (idElement.ValueKind != JsonValueKind.String || !Guid.TryParse(idElement.GetString() ?? string.Empty, out Guid _) || partition is null)
                                 { InvalidHint(); return; }
-                                if (_taskIdHintsEnabled) taskId = parsedId;
                             }
                             if (type is not null && version < 1) { InvalidHint(); return; }
                             HubTelemetry.PostgresHintsReceived.Add(1);
-                            Enqueue(new Hint(hub, type, version, false, partition, taskId));
+                            Enqueue(new Hint(hub, type, version, false, partition));
                         }
                         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
                         {
@@ -191,7 +184,6 @@ public sealed class PostgresHubNotificationListener : BackgroundService
             await Task.Delay(CoalesceWindow, ct);
             var legacy = new HashSet<string>(StringComparer.Ordinal);
             var typed = new HashSet<(string Hub, string? Type, int Version, int? Partition)>();
-            var taskIds = new Dictionary<(string Hub, Guid Id, int Partition), Hint>();
             var recovery = false;
             var drained = 0;
             while (drained < MaxHintsPerBatch && reader.TryRead(out var hint))
@@ -199,12 +191,6 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 drained++;
                 if (hint.Recovery) { recovery = true; continue; }
                 if (hint.Legacy) legacy.Add(hint.Hub);
-                else if (hint.TaskId is Guid id && hint.Partition is int partition)
-                {
-                    var key = (hint.Hub, id, partition);
-                    if (taskIds.ContainsKey(key)) HubTelemetry.CandidateHintsDeduped.Add(1);
-                    taskIds[key] = hint;
-                }
                 else typed.Add((hint.Hub, hint.Type, hint.Version, hint.Partition));
             }
             foreach (var hub in legacy)
@@ -218,11 +204,6 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 _readiness.PublishMatchingHint(hint.Hub, hint.Type, hint.Version, hint.Partition);
                 HubTelemetry.PostgresHintsForwarded.Add(1);
             }
-            foreach (var ((hub, id, partition), hint) in taskIds)
-            {
-                _readiness.PublishCandidateTaskChanged(hub, id, partition, hint.Type, hint.Version);
-                HubTelemetry.PostgresHintsForwarded.Add(1);
-            }
             // Consume once at the publication boundary; a concurrent overflow
             // after this exchange remains set for the next bounded batch.
             recovery |= Interlocked.Exchange(ref _recoveryRequired, 0) != 0;
@@ -231,7 +212,6 @@ public sealed class PostgresHubNotificationListener : BackgroundService
                 HubTelemetry.CandidateRecoveryRequests.Add(1,
                     new KeyValuePair<string, object?>("reason", "listener_overflow_or_invalid_payload"));
                 _readiness.PublishCandidateRecoveryRequired();
-                HubTelemetry.CandidateHintsDropped.Add(1);
             }
         }
     }

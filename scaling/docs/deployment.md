@@ -3,9 +3,9 @@
 **Status:** reference procedure; not a production-approved runbook.
 
 For the Hub runtime, apply the migrations listed in the Compose setup through
-`035_hub_ready_notifications.sql`. This setup skips retired migrations 033 and
-034 and leaves existing historical data intact. Migration 031 requires
-autocommit outside a transaction block. See the [current Hub runtime guide](current-runtime.md).
+`040_hub_remove_exact_task_id_hints.sql`. This setup applies migrations in
+order and leaves existing task data intact. Migration 031 requires autocommit
+outside a transaction block. See the [current Hub runtime guide](current-runtime.md).
 
 The procedure below covers the direct PostgreSQL runtime. Use a separate
 workflow ledger from Hub-managed execution and the upstream dispatch path.

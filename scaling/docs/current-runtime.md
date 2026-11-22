@@ -57,12 +57,10 @@ gate bounds concurrent admission SQL. Hub quotas and strict ordering are retired
 ## End-to-end assignment
 
 1. **Task becomes ready:** the workflow engine or timer scheduler commits the
-   durable task. When experimental task-ID hints are enabled, migration 032
-   emits a transaction-committed exact-ID hint for
-   immediately ready inserts and task state/epoch/readiness changes. The owner
-   hydrates current task metadata in bounded ID batches; hints are advisory and
-   may be duplicated, reordered, or lost. The indexed candidate reader still
-   reconciles startup, ownership takeover, overflow, eviction, missed hints,
+   durable task. Migration 040 removes the per-row task-ID notification path;
+   the statement-level trigger emits a coalesced hub/bucket readiness signal.
+   Signals are advisory and may be duplicated, reordered, or lost. The indexed
+   candidate reader reconciles startup, ownership takeover, missed signals,
    due tasks and expired leases.
 2. **Discover once, share across workers:** the current owner reads paginated,
    index-backed task identity, routing and deadlines, with cached workflow pins. It holds bounded candidate buffers and cursors per
@@ -99,93 +97,30 @@ The established candidate matcher remains enabled in the normal presets via
 `WFC_HUB_MATCHING_CANDIDATES_ENABLED=true`. Its indexed discovery query pages
 bounded task identity and routing fields; the registry accounts for page
 memory. The reader batches uncached workflow-pin lookups.
-The independent experimental `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` remains
-false by default.
+### Coarse readiness signals and recovery
 
-**Accepted removal decision:** retire this exact-ID hint/hydration mode because
-it adds per-task notification and database read work. The decision does not
-apply to candidate matching or coarse bucket signals. See the
-[removal decision and plan](decision-retire-exact-task-id-hints.md); removal has
-not shipped yet, so the following sections describe the current implementation.
+Migration 036 installs statement-level transition-table triggers that emit
+distinct hub/bucket signals only when tasks become ready. Migration 040 removes
+the row-level exact task-ID trigger and its producer function while retaining
+the bucket signal functions and the explicit outbox compatibility setting.
+Existing databases apply 040 after 039; earlier migration files remain
+unchanged. The removed `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` setting has no
+runtime equivalent. Old exact-ID payloads from a mixed-version producer are
+accepted as coarse partition rescans until that producer is upgraded.
 
-### Task-ID hint coverage and recovery
+The listener coalesces up to 128 notifications per 25 ms in a 512-message
+channel. Overflow and malformed payloads request bounded recovery. Local
+Gateway durable mutations publish conservative rescans after commit. The
+two-second ready-hub reconciliation and ten-second indexed sweep recover lost
+signals, future tasks becoming due and leases expiring without a task-row
+update. Candidate entries remain advisory; PostgreSQL checks current task
+state, owner fencing and workflow pins during admission. A bounded
+workflow-definition LRU serves indexed discovery; missing pins remain
+advisory. See [candidate metadata enrichment](hub-candidate-metadata-enrichment.md).
 
-Migrations 032 and 035 install the task notification function. It tracks
-task state, due time and lease epoch. The existing partition-owned in-memory matcher remains the normal
-architecture and is controlled by `WFC_HUB_MATCHING_CANDIDATES_ENABLED`.
-Exact task-ID payloads and hydration are a separate experimental opt-in through
-`WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED=true`; Hub task-writer connections set
-the corresponding PostgreSQL session flag. When this new flag is disabled,
-the trigger emits coarse readiness payloads for ready inserts and transitions
-to readiness. A mixed-version
-exact-ID payload is conservatively converted to the existing coarse candidate
-rescan. Exact hints route by hub, task ID and task partition; each owner reads
-the row's current state and bounded workflow-pin metadata before adding,
-updating or safely removing the advisory entry. Lease-heartbeat updates do not
-emit hints. Future tasks becoming due and leases expiring without a task-row
-update remain indexed PostgreSQL discovery streams; no future-task timer heap
-or sequence-watermark feed is used. Deletes rely on authoritative admission and periodic recovery.
-
-In exact-ID opt-in mode, an exact hint is emitted per immediately ready insert and
-relevant state/epoch transition, so workflow fan-out, claims, retries and
-completions produce per-task notifications.
-Outbox
-mode stores each notification separately and the dispatcher deletes those rows
-in the notification transaction. Heartbeats do not add event rows. The bounded
-`workflow_hub_candidate_task_hints_received`, `..._deduped`, `..._dropped`,
-`workflow_hub_candidate_hydration_calls`, and `..._rows` counters report the
-fast path without task or hub labels. Recovery requests carry only a bounded
-reason tag (`listener_overflow_or_invalid_payload`, `exact_queue_memory_pressure`
-or `hydration_failure`).
-
-Exact ID hints are deduplicated in bounded listener and owner queues. Queue
-overflow, malformed payloads and hydration failures request recovery; bounded
-periodic scans remain the fallback if even that recovery hint is lost. Local Gateway
-durable mutations publish a conservative candidate rescan after commit. The
-existing two-second ready-hub reconciliation also requests recovery for each
-currently ready hub, preserving the previous missed-hint and disabled-LISTEN
-wakeup envelope; it does not run for every exact ID event. The registry keeps
-recovery pages bounded and shares service between exact batches and indexed
-pages. Its ten-second sweep remains the backstop for due-time passage, expired
-leases and work missed between ready-hub reconciliations. The separate typed
-recovery hints continue to serve the legacy matcher. Old-schema coarse
-notifications can still request a candidate rescan, so metadata-discovery
-reduction depends on workload and rollout.
-
-The listener channel holds at most 512 hints and each coalescing pass reads at
-most 128 hints; matching JSON is capped at 512 UTF-8 bytes, so one pass holds
-at most 64 KiB of payload plus bounded set/object overhead. Overflow sets an
-atomic recovery flag; the publisher consumes it once at the pass
-boundary so concurrent overflow remains visible for the next pass. Invalid JSON
-and failed hydration also request recovery. Exact batch failures count toward
-the recovery turn budget, and if exact queue memory blocks a page reservation,
-advisory IDs are released to make room for indexed recovery. Existing reservations
-and uncertain claims remain pinned.
-
-Hydration probes the primary key for requested IDs. SQL suppresses oversized
-identity text before returning it. The reader deduplicates IDs and charges the
-ID array against the wire budget. Indexed discovery uses the same identity
-fields. A bounded workflow-definition LRU serves both discovery and hydration.
-Missing pins remain advisory and PostgreSQL checks the worker pins at admission.
-See [candidate metadata enrichment](hub-candidate-metadata-enrichment.md).
-
-With default coordinator limits, pending exact IDs are capped at 1,024 per
-owner and 32,768 process-wide, charged at 64 bytes each; one hydration batch is
-at most 128 IDs and 64 KiB of metadata. Persistent candidate entries remain
-under the existing 4 MiB per-partition and 64 MiB process budgets.
-
-The 030 notification outbox is transactionally populated and dispatches
-notifications while deleting rows in the same transaction. It is not a
-replayable task feed: a disconnected listener can miss an already-dispatched
-ID, so bootstrap/takeover and periodic indexed recovery remain required.
-Install additive migrations 032 and 035 in every schema setup path before deploying the
-new listener. CI fixtures, the development script and Compose initialization
-apply it after 031. Old listeners
-ignore the added JSON field and fall back to typed readiness scans; the new
-listener accepts old coarse payloads. Rolling back the application does not
-require reversing 032 or touching task data; retaining 032 preserves the old
-notification contract. If reverting the migration is required, restore the
-030 function/trigger only after old application instances are running.
+The 030 notification outbox remains transactionally populated and dispatches
+signals while deleting rows in the same transaction. It is not a replayable
+task feed, so bootstrap/takeover and indexed recovery remain required.
 
 ## SSE sessions and capacity
 
@@ -250,15 +185,13 @@ make ups-16
 
 The standard preset configures two Hub replicas, four matching partitions,
 the existing in-memory candidate matcher, PostgreSQL claim admission and
-worker SSE push; experimental exact-ID hydration is off unless explicitly
-enabled. The
+worker SSE push. The
 important environment settings are:
 
 | Setting | Main preset |
 | --- | --- |
 | `WFC_HUB_MATCHING_ENABLED` | `true` on Hub replicas |
 | `WFC_HUB_MATCHING_CANDIDATES_ENABLED` | `true` (existing in-memory candidate matcher) |
-| `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` | `false` (experimental exact-ID hydration opt-in) |
 | `WFC_HUB_PUSH_ENABLED` | `true` on Hub replicas and workers |
 | `WFC_HUB_MATCHING_PARTITIONS` | `4`, consistent on Hub and worker |
 | `WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY` | `2` (per Hub) |

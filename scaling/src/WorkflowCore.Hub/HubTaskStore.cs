@@ -148,22 +148,12 @@ public sealed class HubTaskStore : IAsyncDisposable
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
         bool? enableUnconstrainedBatchClaims = null,
         bool? enableIndexedMatchingBucketClaims = null,
-        bool? enableSplitBatchClaimCandidates = null,
-        bool? enableTaskIdHints = null)
+        bool? enableSplitBatchClaimCandidates = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
             MaxPoolSize = Math.Clamp(maxPoolSize, 1, 100)
         };
-        // Existing partition-owned candidate matching is controlled separately
-        // by WFC_HUB_MATCHING_CANDIDATES_ENABLED. This session setting gates
-        // only migration 032's experimental exact task-ID producer payload.
-        var taskIdHintsEnabled = enableTaskIdHints ??
-            Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED") is "true" or "1" or "True";
-        var taskIdHintsSetting = "-c wfc.hub_candidate_task_id_hints=" + (taskIdHintsEnabled ? "on" : "off");
-        builder.Options = string.IsNullOrWhiteSpace(builder.Options)
-            ? taskIdHintsSetting
-            : builder.Options + " " + taskIdHintsSetting;
         _dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
         var admissionMode = Environment.GetEnvironmentVariable("WFC_HUB_CLAIM_ADMISSION_MODE");
         _demandAwareAdmissionEnabled = string.Equals(admissionMode, "demand",
