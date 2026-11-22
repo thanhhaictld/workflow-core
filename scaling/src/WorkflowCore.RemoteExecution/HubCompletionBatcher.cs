@@ -11,7 +11,7 @@ namespace WorkflowCore.RemoteExecution;
 
 /// <summary>
 /// Optional bounded, processor-local native activity completion buffer.
-/// Flushes after 2-5ms or 16-64 items, whichever occurs first. Never ACKs
+/// Flushes within a configured 2-100ms window or after 16-64 items, whichever occurs first. Never ACKs
 /// until the Hub confirms the corresponding fenced durable PostgreSQL commit.
 /// Each batch executes independently; four in-flight batches prevent one busy
 /// workflow from blocking all other completion traffic.
@@ -50,22 +50,12 @@ internal sealed class HubCompletionBatcher(HubRestClient client, HubRuntimeOptio
             while(await _queue.Reader.WaitToReadAsync(stop))
             {
                 if(!_queue.Reader.TryRead(out var first))continue;
-                var batch=new List<Pending>(options.CompletionBatchSize){first};
-                var started=Stopwatch.GetTimestamp();
-                var window=TimeSpan.FromMilliseconds(options.CompletionBatchDelayMs);
-                while(batch.Count<options.CompletionBatchSize)
-                {
-                    while(batch.Count<options.CompletionBatchSize &&
-                          _queue.Reader.TryRead(out var next))
-                        batch.Add(next);
-                    if(batch.Count>=options.CompletionBatchSize)break;
-                    var remaining=window-Stopwatch.GetElapsedTime(started);
-                    if(remaining<=TimeSpan.Zero)break;
-                    using var waiting=CancellationTokenSource.CreateLinkedTokenSource(stop);
-                    waiting.CancelAfter(remaining);
-                    try { await _queue.Reader.WaitToReadAsync(waiting.Token); }
-                    catch(OperationCanceledException) when(!stop.IsCancellationRequested) { break; }
-                }
+                // The 100ms experimental setting is a MAXIMUM collection
+                // window, not a mandatory delay: reaching batch size flushes
+                // immediately, including for bursts larger than 64 results.
+                var batch=await HubCompletionBatchWindow.FillAsync(
+                    _queue.Reader,first,options.CompletionBatchSize,
+                    TimeSpan.FromMilliseconds(options.CompletionBatchDelayMs),stop);
                 await slots.WaitAsync(stop);
                 var sending=SendBatchAsync(batch,slots,stop);
                 running.Add(sending);
