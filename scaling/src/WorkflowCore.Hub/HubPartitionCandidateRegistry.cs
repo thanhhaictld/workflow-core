@@ -572,7 +572,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 }
                 return true;
             }
-            var pageHorizon = p.Horizon ?? new HubCandidateHorizon(long.MaxValue, now.UtcDateTime);
+            var pageHorizon = p.Horizon ?? new HubCandidateHorizon(long.MaxValue, now.UtcDateTime, HasExpiredCandidates: false);
             if (targetedBucket.HasValue) HubTelemetry.CandidateSignalBucketQueries.Add(1);
             var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, pageHorizon, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
