@@ -16,6 +16,7 @@ $headers = @{ Authorization = "Bearer $token" }
 $hubDll = Join-Path $root 'scaling/src/WorkflowCore.Hub.Server/bin/Release/net10.0/WorkflowCore.Hub.Server.dll'
 $workerDll = Join-Path $root 'scaling/sample/onboarding/WorkflowCore.Provisioner.Host/bin/Release/net10.0/WorkflowCore.Provisioner.Host.dll'
 $dotnet = (Get-Command dotnet).Source
+$backgroundWindow = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
 $pgContainer = if ($env:WFC_PUSH_FAILOVER_POSTGRES_CONTAINER) { $env:WFC_PUSH_FAILOVER_POSTGRES_CONTAINER } else { 'workflow-core-monitor-postgres-1' }
 $pgPort = if ($env:WFC_PUSH_FAILOVER_PGPORT) { [int]$env:WFC_PUSH_FAILOVER_PGPORT } else { 55432 }
 $config = Join-Path $root 'scaling/benchmarks/hub-push-failover-nginx.conf'
@@ -50,7 +51,7 @@ function Start-Hub([int]$Port, [string]$Node, [int]$Delay) {
         WFC_HUB_CLAIM_ADMISSION_ENABLED='true'; WFC_HUB_CLAIM_ADMISSION_LIMIT='3'
         WFC_HUB_PUSH_TEST_BEFORE_SEND_MS="$Delay"; Logging__LogLevel__Default='Warning'
     }
-    Start-Process -FilePath $dotnet -ArgumentList @($hubDll) -Environment $vars -PassThru `
+    Start-Process @backgroundWindow -FilePath $dotnet -ArgumentList @($hubDll) -Environment $vars -PassThru `
         -RedirectStandardOutput (Join-Path $outDir "$run-$Node.stdout.log") `
         -RedirectStandardError (Join-Path $outDir "$run-$Node.stderr.log")
 }
@@ -70,15 +71,16 @@ try {
     $workerVars = @{
         WFC_HUB_URL='http://127.0.0.1:54112'; WFC_HUB_AUTH_TOKEN=$token; WFC_HUB_PUSH_ENABLED='true'
         WFC_HUB_PUSH_TRUSTED_OWNERS='http://127.0.0.1:54110,http://127.0.0.1:54111'
-        WFC_HUB_MATCHING_PARTITIONS='1'; WFC_HUB_WORKER_HUB='onboarding'; WFC_HUB_WORKER_LANE_INSTANCES='1'
+        WFC_HUB_MATCHING_PARTITIONS='1'; WFC_HUB_WORKER_HUB='onboarding'
+        WFC_HUB_PUSH_CREDIT_JOURNAL=(Join-Path $outDir "$run-worker-credits.json")
         WORKFLOW_WORKERS='4'; ACTIVITY_WORKERS='4'; WFC_SAMPLE_PROVISION_DELAY_MS='15000'
         WFC_HUB_EXECUTION_OBSERVATION_LOG=$execLog; WFC_HUB_SIDE_EFFECT_OBSERVATION_LOG=$sideLog
         Logging__LogLevel__Default='Warning'
     }
-    $worker = Start-Process -FilePath $dotnet -ArgumentList @($workerDll) -Environment $workerVars -PassThru `
+    $worker = Start-Process @backgroundWindow -FilePath $dotnet -ArgumentList @($workerDll) -Environment $workerVars -PassThru `
         -RedirectStandardOutput (Join-Path $outDir "$run-worker.stdout.log") `
         -RedirectStandardError (Join-Path $outDir "$run-worker.stderr.log")
-    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 2 } 45 'two active push sessions on A'
+    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 1 } 45 'one active push session on A'
     $diagA = Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
     if (-not $diagA.candidateEnabled) { throw 'Candidate-mode matching was not active on Hub A' }
     $result.initialMatching = $diagA
@@ -100,7 +102,7 @@ try {
         $oldLease = Query "SELECT json_build_object('id',t.id,'owner',t.owner,'epoch',t.epoch) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run' AND t.state=1 ORDER BY t.sequence LIMIT 1" | ConvertFrom-Json
         $result.oldTaskLease = $oldLease
     }
-    $owner = Query "SELECT owner_id FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0"
+    $owner = Query "SELECT split_part(owner_id, ':', 1) FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0"
     if ($owner -ne 'hub-a') { throw "Unexpected initial matching owner: $owner" }
     Mark 'owner-killed'
     $killTime = [DateTime]::UtcNow
@@ -112,10 +114,10 @@ try {
             Invoke-RestMethod 'http://127.0.0.1:54112/api/hub/workflows' -Headers $headers -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 15 | Out-Null
         }
     }
-    Wait-Until { (Query "SELECT owner_id FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0") -eq 'hub-b' } 120 'Hub B ownership takeover'
+    Wait-Until { (Query "SELECT split_part(owner_id, ':', 1) FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0") -eq 'hub-b' } 120 'Hub B ownership takeover'
     Mark 'owner-takeover'
     $result.ownerTakeoverSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
-    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 2 } 60 'worker sessions reconnected'
+    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 1 } 60 'worker session reconnected'
     Mark 'sessions-reconnected'
     $result.ownerToReconnectSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
     if ($result.ownerToReconnectSeconds -ge 65) { throw 'SSE reconnection exceeded the failover latency budget' }
@@ -126,12 +128,10 @@ try {
     Mark 'workflows-completed'
     Wait-Until {
         $d = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
-        # A push session can advertise up to four outstanding matcher credits
-        # per acquisition turn. These are waiting demand credits, not leased
-        # activity slots; the previous 1:1 assertion became invalid on PR #35.
-        $d.pushConnected -eq 2 -and
+        # One stream carries the two independently configured four-slot budgets.
+        $d.pushConnected -eq 1 -and
             $d.candidateCredits -ge 0 -and
-            $d.candidateCredits -le (4 * $d.pushConnected) -and
+            $d.candidateCredits -le 8 -and
             $d.candidateReservations -eq 0 -and
             $d.candidateUncertain -eq 0 -and
             $d.candidateAdmissionsActive -eq 0

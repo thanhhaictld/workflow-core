@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -55,8 +56,9 @@ public sealed class HubNativeTransportTests
         var ready=1;var epoch=0;var completions=0;var failures=0;var published=0;var earlyClaims=0;var registrations=0;var pullClaims=0;
         HubLeasedTask? activity=null;
         var sessionId = Guid.NewGuid();
-        var workerId = "";
-        var capacity = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownerSession = new HubPushOwnerSession(sessionId, Guid.NewGuid(), "test-owner");
+        var grants = Channel.CreateUnbounded<HubPushGrant>();
+        const string push = "/api/hub/workers/multiplexed-push";
         var accepted=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.MapPost("/api/hub/activity-registrations",async ()=>
         { await Task.Delay(100);Volatile.Write(ref published,1);return Results.Ok(new{registered=true}); });
@@ -65,33 +67,42 @@ public sealed class HubNativeTransportTests
             Interlocked.Increment(ref pullClaims);
             return Results.Ok(Array.Empty<HubLeasedTask>());
         });
-        hub.MapPost("/api/hub/workers/push-sessions", (HubPushRegistration registration) =>
+        hub.MapGet(push + "/topology", () => Results.Ok(new[] { new HubPushShardLocation(0,
+            hub.Urls.Single(), new("tests", 0, ownerSession.OwnerId, hub.Urls.Single(), 1, DateTime.UtcNow.AddSeconds(8))) }));
+        hub.MapPost(push + "/sessions", (HubPushProcessorRegistration registration) =>
         {
             if (Volatile.Read(ref published) == 0) Interlocked.Increment(ref earlyClaims);
             if (Interlocked.Increment(ref registrations) == 1) return Results.NotFound();
-            workerId = registration.WorkerId;
-            return Results.Ok(new HubPushSession(sessionId, hub.Urls.Single(), 1, 30));
+            return Results.Ok(ownerSession);
         });
-        hub.MapPut("/api/hub/workers/push-sessions/{id}/capacity", (HubPushCapacity update) =>
+        hub.MapPut(push + "/sessions/{id}/grants", (HubPushGrant[] offers) =>
         {
-            if (update.FreeCredits > 0) capacity.TrySetResult();
+            foreach (var offer in offers) grants.Writer.TryWrite(offer);
             return Results.NoContent();
         });
-        hub.MapGet("/api/hub/workers/push-sessions/{id}/events", async (HttpContext context) =>
+        hub.MapDelete(push + "/sessions/{id}", () => Results.Accepted());
+        hub.MapGet(push + "/sessions/{id}/events", async (HttpContext context) =>
         {
             context.Response.ContentType = "text/event-stream";
             await context.Response.WriteAsync(": connected\n\n", context.RequestAborted);
             await context.Response.Body.FlushAsync(context.RequestAborted);
-            await capacity.Task.WaitAsync(context.RequestAborted);
-            if (Interlocked.Exchange(ref ready, 0) == 1)
+            await foreach (var grant in grants.Reader.ReadAllAsync(context.RequestAborted))
             {
-                var assignment = new HubPushAssignment(sessionId, Guid.NewGuid(), workerId,
-                    activity! with { Epoch = Interlocked.Increment(ref epoch) });
+                HubLeasedTask[] tasks = Interlocked.Exchange(ref ready, 0) == 1
+                    ? [activity! with { Epoch = Interlocked.Increment(ref epoch) }] : [];
+                var frame = new HubPushGrantResult(sessionId, grant, tasks);
+                if (tasks.Length > 0)
+                    await Write(frame with { Grant = grant with { OwnerEpoch = grant.OwnerEpoch + 1 } });
+                await Write(frame);
+                if (tasks.Length > 0) await Write(frame);
+            }
+
+            async Task Write(HubPushGrantResult frame)
+            {
                 await context.Response.WriteAsync(
-                    $"event: task.assigned\ndata: {JsonSerializer.Serialize(assignment)}\n\n", context.RequestAborted);
+                    $"event: grant.result\ndata: {JsonSerializer.Serialize(frame)}\n\n", context.RequestAborted);
                 await context.Response.Body.FlushAsync(context.RequestAborted);
             }
-            await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
         });
         hub.MapPost("/api/hub/tasks/{id}/heartbeat",()=>Results.NoContent());
         hub.MapPost("/api/hub/tasks/{id}/fail",()=>

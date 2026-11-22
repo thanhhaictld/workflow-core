@@ -38,10 +38,9 @@ $(GOLDEN_TARGETS): export HUB_SCHEDULER_ENABLED := true
 $(GOLDEN_TARGETS): export WFC_HUB_MATCHING_PARTITIONS := 4
 $(GOLDEN_TARGETS): export WORKFLOW_WORKERS := 8
 $(GOLDEN_TARGETS): export ACTIVITY_WORKERS := 8
-$(GOLDEN_TARGETS): export WFC_HUB_WORKER_LANE_INSTANCES := 1
-# Four processors with four lane pairs each provide 128 slots per task kind.
-ups-4: export WFC_HUB_WORKER_LANE_INSTANCES := 4
-$(GOLDEN_TARGETS): export WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE := 0
+# Four processors provide 128 slots per task kind.
+ups-4: export WORKFLOW_WORKERS := 32
+ups-4: export ACTIVITY_WORKERS := 128
 $(GOLDEN_TARGETS): export WFC_HUB_PUSH_ENABLED := true
 $(GOLDEN_TARGETS): export WFC_HUB_PUSH_TRUSTED_OWNERS := http://hub:5100,http://hub-2:5100
 # Existing partition-owned candidate matching is enabled in the standard stack.

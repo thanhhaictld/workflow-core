@@ -980,9 +980,12 @@ public sealed class HubTaskStore : IAsyncDisposable
     {
         if (lease <= TimeSpan.Zero || lease > TimeSpan.FromMinutes(5)) return false;
         await using var command = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.hub_task SET lease_until = now() + @lease, updated_at=now()
-            WHERE id=@id AND owner=@owner AND epoch=@epoch
-              AND state=1 AND lease_until>now()
+            WITH locked_lease AS MATERIALIZED (
+                SELECT id, lease_until FROM wfc_scale.hub_task
+                WHERE id=@id AND owner=@owner AND epoch=@epoch AND state=1 FOR UPDATE
+            )
+            UPDATE wfc_scale.hub_task t SET lease_until=clock_timestamp()+@lease, updated_at=clock_timestamp()
+            FROM locked_lease l WHERE t.id=l.id AND l.lease_until>clock_timestamp()
             """);
         command.Parameters.AddWithValue("id", id);
         command.Parameters.AddWithValue("owner", worker);

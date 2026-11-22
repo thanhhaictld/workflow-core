@@ -18,15 +18,9 @@ public sealed class HubRuntimeOptions
     public bool AllowInsecureHttp { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true";
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
-    // Logical lane replicas within one host, intended for controlled load tests.
-    public int LaneInstances { get; set; } =
-        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_LANE_INSTANCES"), out var lanes) ? lanes : 1;
     public string? WorkerHub { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_WORKER_HUB");
-    // Opt-in processor-side cap. Applies independently to workflow and
-    // activity lanes; 0 uses each lane's configured concurrency.
-    public int WorkerConcurrencyCap { get; set; } =
-        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE"),
-            out var laneCap) ? laneCap : 0;
+    public string? PushCreditJournalPath { get; set; } =
+        Environment.GetEnvironmentVariable("WFC_HUB_PUSH_CREDIT_JOURNAL");
     public bool PushEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     public string[] PushTrustedOwners { get; set; } =
@@ -146,8 +140,6 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
-           options.LaneInstances is <1 or >2000 ||
-           options.WorkerConcurrencyCap is < 0 or > 256 ||
            options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
@@ -166,15 +158,14 @@ public static class HubWorkflowRuntimeExtensions
         services.AddTransient<HubNativeExecutor>();
         services.AddTransient<HubWorkflowClient>();
         services.AddWorkflowStepMiddleware<HubActivityMiddleware>();
-        services.TryAddSingleton(_=>new HubRestClient(options.HubUrl,options.Token,options.AllowInsecureHttp));
+        services.TryAddSingleton(_=>new HubRestClient(options.HubUrl,options.Token,options.AllowInsecureHttp,
+            allowRedirects: false));
         services.AddHostedService<HubRuntimePublisher>();
         if(!options.RegisterOnly)
         {
-            for (var i = 0; i < options.LaneInstances; i++)
-            {
-                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeWorkflowWorker>(sp));
-                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeActivityWorker>(sp));
-            }
+            services.AddSingleton<HubNativeWorkflowWorker>();
+            services.AddSingleton<HubNativeActivityWorker>();
+            services.AddHostedService<HubPushProcessor>();
         }
         return new(services);
     }

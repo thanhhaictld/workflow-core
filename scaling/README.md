@@ -36,7 +36,7 @@ are unchanged. Build/deployment paths in CI, scripts, and Compose are updated.
 ```mermaid
 flowchart LR
     API[Client and monitor] --> HUB[Hub Gateway replicas]
-    WORKER[Provisioner / processor lanes] <-->|SSE leases and capacity; REST results| HUB
+    WORKER[Provisioner / processor] <-->|Multiplexed SSE leases; REST grants and results| HUB
     HUB --> OWNER[Per-partition matching owner]
     OWNER --> BUF[Bounded in-memory candidates]
     BUF --> ADMIT[Concurrent fenced admission]
