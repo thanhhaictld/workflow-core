@@ -1,5 +1,7 @@
 # Workflow p95 A/B experiment
 
+> Historical reference. Reproduction commands apply to the revision measured below. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 PR #18 compares baseline and optimized modes for 100 workflows per ordering policy, at 8 and 16 processors.
 
 Baseline disables `WFC_HUB_ADAPTIVE_CLAIMS`, `WFC_HUB_CLAIM_ADMISSION_ENABLED`, and `WFC_HUB_COMPLETION_FAST_PATH_ENABLED`. Optimized mode enables all three.

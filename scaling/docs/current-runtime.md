@@ -102,6 +102,12 @@ memory. The reader batches uncached workflow-pin lookups.
 The independent experimental `WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED` remains
 false by default.
 
+**Accepted removal decision:** retire this exact-ID hint/hydration mode because
+it adds per-task notification and database read work. The decision does not
+apply to candidate matching or coarse bucket signals. See the
+[removal decision and plan](decision-retire-exact-task-id-hints.md); removal has
+not shipped yet, so the following sections describe the current implementation.
+
 ### Task-ID hint coverage and recovery
 
 Migrations 032 and 035 install the task notification function. It tracks
@@ -201,9 +207,13 @@ notification contract. If reverting the migration is required, restore the
 - Capacity updates have monotonically increasing sequence numbers and carry
   active/released delivery IDs. A capacity refresh never recreates credit for
   an outstanding assignment; the worker's local semaphore is the last guard.
-- A lane rotates its partition membership with a zero-credit revocation
-  barrier, rather than duplicating capacity across owners. Tasks already
-  running continue with REST heartbeats.
+- Push sessions are the native worker delivery path. A lane keeps one active
+  session and rotates across matching partitions and registered Hub namespaces.
+  It revokes the current session and drains running tasks before reusing its
+  capacity. Running tasks continue with REST heartbeats.
+- Set `WFC_HUB_PUSH_ENABLED=true` on Hub replicas and native workers. A worker
+  with capabilities requires it, and an unavailable registration is retried.
+  Set matching and trusted owner URLs on the Hub as shown below.
 - SSE carries **committed lease assignments**, not an authoritative queue.
   Notifications, candidate buffers, capacity credits and SSE frames are
   disposable on owner takeover; committed leases are not.
@@ -255,7 +265,6 @@ important environment settings are:
 | `WFC_HUB_CLAIM_ADMISSION_LIMIT` | `3`, DB-pool protection |
 | `WFC_HUB_MATCHING_ADVERTISE_URL`, `WFC_HUB_MATCHING_PEERS` | Direct reachable and trusted owner URLs |
 | `WFC_HUB_PUSH_TRUSTED_OWNERS` | Exact permitted worker-to-owner origins |
-| `WFC_HUB_TASK_SSE_PUSH`, `WFC_HUB_WORKER_CAPACITY_FANOUT` | `false` in the primary preset; retained worker modes are independent, with SSE taking precedence |
 | `WFC_HUB_OUTBOX_ENABLED` | `true` (dispatcher; database outbox writes remain separately configured) |
 
 For a two-Hub stack, verify both instances have the same partition count,
@@ -432,11 +441,8 @@ The feature should be benchmarked against the existing baseline at 8, 16,
 
 ## Other code paths and historical work
 
-Adaptive HTTP claims remain for fenced pull fallback and mixed-capability
-lanes; the former single rotating long-poll worker mode has been removed.
-Multi-Hub-capability lanes use the supported adaptive fallback until per-Hub
-session fan-out is implemented. The original
-upstream engine and direct-PostgreSQL `DistributedWorkPump` are separate
+The direct REST claim and readiness APIs serve the sequential compatibility
+processors. The upstream engine and direct-PostgreSQL `DistributedWorkPump` are separate
 projects and are not part of this Hub-native architecture. Do not run legacy
 background consumers against the same workflow state.
 

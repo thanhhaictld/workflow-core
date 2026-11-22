@@ -52,17 +52,47 @@ public sealed class HubNativeTransportTests
         var builder=WebApplication.CreateBuilder();builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         await using var hub=builder.Build();
-        var ready=1;var epoch=0;var completions=0;var failures=0;var published=0;var earlyClaims=0;
+        var ready=1;var epoch=0;var completions=0;var failures=0;var published=0;var earlyClaims=0;var registrations=0;var pullClaims=0;
         HubLeasedTask? activity=null;
+        var sessionId = Guid.NewGuid();
+        var workerId = "";
+        var capacity = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var accepted=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.MapPost("/api/hub/activity-registrations",async ()=>
         { await Task.Delay(100);Volatile.Write(ref published,1);return Results.Ok(new{registered=true}); });
-        hub.MapPost("/api/hub/workers/tasks:claim",(HubClaimRequest claim)=>
+        hub.MapPost("/api/hub/workers/tasks:claim", () =>
         {
-            if(Volatile.Read(ref published)==0)Interlocked.Increment(ref earlyClaims);
-            return Results.Json(Interlocked.Exchange(ref ready,0)==1 ? new[]{activity! with{Epoch=Interlocked.Increment(ref epoch)}}:[]);
+            Interlocked.Increment(ref pullClaims);
+            return Results.Ok(Array.Empty<HubLeasedTask>());
         });
-        hub.MapGet("/api/hub/workers/events",()=>Results.Text(": keepalive\n\n","text/event-stream"));
+        hub.MapPost("/api/hub/workers/push-sessions", (HubPushRegistration registration) =>
+        {
+            if (Volatile.Read(ref published) == 0) Interlocked.Increment(ref earlyClaims);
+            if (Interlocked.Increment(ref registrations) == 1) return Results.NotFound();
+            workerId = registration.WorkerId;
+            return Results.Ok(new HubPushSession(sessionId, hub.Urls.Single(), 1, 30));
+        });
+        hub.MapPut("/api/hub/workers/push-sessions/{id}/capacity", (HubPushCapacity update) =>
+        {
+            if (update.FreeCredits > 0) capacity.TrySetResult();
+            return Results.NoContent();
+        });
+        hub.MapGet("/api/hub/workers/push-sessions/{id}/events", async (HttpContext context) =>
+        {
+            context.Response.ContentType = "text/event-stream";
+            await context.Response.WriteAsync(": connected\n\n", context.RequestAborted);
+            await context.Response.Body.FlushAsync(context.RequestAborted);
+            await capacity.Task.WaitAsync(context.RequestAborted);
+            if (Interlocked.Exchange(ref ready, 0) == 1)
+            {
+                var assignment = new HubPushAssignment(sessionId, Guid.NewGuid(), workerId,
+                    activity! with { Epoch = Interlocked.Increment(ref epoch) });
+                await context.Response.WriteAsync(
+                    $"event: task.assigned\ndata: {JsonSerializer.Serialize(assignment)}\n\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
+        });
         hub.MapPost("/api/hub/tasks/{id}/heartbeat",()=>Results.NoContent());
         hub.MapPost("/api/hub/tasks/{id}/fail",()=>
         { Interlocked.Increment(ref failures);Interlocked.Exchange(ref ready,1);return Results.NoContent(); });
@@ -78,7 +108,7 @@ public sealed class HubNativeTransportTests
             services.AddLogging();services.AddSingleton(effects);
             services.Configure<HostOptions>(o=>o.ServicesStartConcurrently=true);
             services.AddHubWorkflowRuntime(o=>
-            {o.HubUrl=hub.Urls.Single();o.Token="local-transport-test-with-24-characters";o.PollInterval=TimeSpan.FromMilliseconds(20);})
+            {o.HubUrl=hub.Urls.Single();o.Token="local-transport-test-with-24-characters";o.PushEnabled=true;})
                 .AddActivity<CountEffect>("tests","count",2,o=>o.ActivityResult(s=>s.Result));
         }).Build();
         var codec=host.Services.GetRequiredService<HubSnapshotCodec>();
@@ -98,6 +128,8 @@ public sealed class HubNativeTransportTests
             Assert.Equal(0,Volatile.Read(ref failures));
             Assert.Equal(5,Volatile.Read(ref completions));
             Assert.Equal(0,Volatile.Read(ref earlyClaims));
+            Assert.Equal(2,Volatile.Read(ref registrations));
+            Assert.Equal(0,Volatile.Read(ref pullClaims));
         }
         finally { await host.StopAsync();await hub.StopAsync(); }
     }
