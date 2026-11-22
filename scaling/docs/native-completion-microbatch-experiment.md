@@ -10,7 +10,7 @@ This experiment targets **routed native activity completions only**. Workflow/na
 ## Data flow
 
 1. The native activity worker still executes the activity **once** and freezes its result along with task ID, worker ID and lease epoch. Heartbeats continue while the worker awaits the completion ACK.
-2. With `WFC_HUB_COMPLETION_MICROBATCH_ENABLED=true`, one bounded processor-local `Channel` collects finished activity results. Flush when 16–64 are available or the oldest waits 2–5 ms, whichever is first. The channel has bounded backpressure and up to four independent HTTP batch requests in flight.
+2. With `WFC_HUB_COMPLETION_MICROBATCH_ENABLED=true`, one bounded processor-local `Channel` collects finished activity results. Flush when 16–64 are available or the oldest waits for the configured 2–100 ms collection window, whichever occurs first. The 100 ms setting is an **experimental maximum collection delay**, not a mandatory wait for every full batch. The channel has bounded backpressure and up to four independent HTTP batch requests in flight.
 3. `POST /api/hub/workers/tasks:complete-batch` accepts at most 64 independent native activity completions.
 4. PostgreSQL resolves task/workflow metadata and locks workflow rows in stable ID order using `FOR UPDATE SKIP LOCKED`, followed by task rows in stable ID order with the same `SKIP LOCKED`. At most one item per workflow is admitted to each transaction; same-workflow duplicates and busy rows return **retry** without blocking other rows.
 5. The database transaction updates eligible leased tasks with **worker + epoch + live lease CAS**, completes attempts, inserts native result inbox messages and durable `ActivityResultReceived` events and wakes runnable workflows. All writes are one atomic transaction. Results are returned only after COMMIT.
@@ -22,7 +22,7 @@ This experiment targets **routed native activity completions only**. Workflow/na
 | --- | --- | --- |
 | `WFC_HUB_COMPLETION_MICROBATCH_ENABLED` | `false` | `true` / `false` |
 | `WFC_HUB_COMPLETION_BATCH_SIZE` | `32` | 16–64 |
-| `WFC_HUB_COMPLETION_BATCH_DELAY_MS` | `3` | 2–5 |
+| `WFC_HUB_COMPLETION_BATCH_DELAY_MS` | `3` | 2–100; test 100 ms explicitly |
 
 The endpoint is authenticated with the same Hub bearer token as the existing single-task endpoint. It is implemented in the generic Hub layer; processors do not receive PostgreSQL credentials.
 
@@ -37,9 +37,18 @@ The endpoint is authenticated with the same Hub bearer token as the existing sin
 - **No automatic fallback inside a failed batch:** clients retry the immutable completion, preventing a long-running fallback on a contended row from blocking unrelated batch members.
 - **Coverage:** legacy `/tasks/{id}/complete` remains default and is not modified. The new path only supports native routed activities; it cannot be used as a replacement for arbitrary task kinds.
 
+## 100 ms collection-window experiment
+
+Unlike the existing PostgreSQL `SET LOCAL lock_timeout = '100ms'`, a **100 ms collection window** is measured by the processor while accumulating completed activity results. Both remain independent:
+- Flush early when the configured 16, 32 or 64 completed results have arrived.
+- Flush a partial batch 100 ms after the first completion is dequeued, even if no other results arrive.
+- Continue to acknowledge only after a PostgreSQL commit; worker retries replay the frozen task result and lease epoch.
+
+`HubCompletionBatchWindowTests` directly exercise partial-batch deadline, capacity-triggered immediate flush, producer closure, and cancellation. The CI workload compares throughput, workflow p95/p99 and DB commits/workflow for 100 ms versus the earlier 2–5 ms collection windows. Expect potentially better batch fill under moderate arrival rates but additional latency under low traffic; do **not** treat a 100 ms window as a recommended default without repeated measurements.
+
 ## Benchmark and acceptance
 
-CI: `.github/workflows/workflow-hub-completion-microbatch-ab.yml`. The independent A/B jobs use two Hub replicas, four matching shards, identical worker topology and 1,000 `policy-unordered` workflows with one routed activity each; *all 1,000 durable `ActivityResultReceived` events must be present*. Baseline uses the original individual REST/transaction completion. Experimental arms use batch settings `16/2ms`, `32/3ms` and `64/5ms` at eight and sixteen processors.
+CI: `.github/workflows/workflow-hub-completion-microbatch-ab.yml`. The independent A/B jobs use two Hub replicas, four matching shards, identical worker topology and 1,000 `policy-unordered` workflows with one routed activity each; *all 1,000 durable `ActivityResultReceived` events must be present*. Baseline uses the original individual REST/transaction completion. Experimental arms use batch settings `16/2ms`, `32/3ms`, `64/5ms`, and the new **`16/100ms`, `32/100ms`, `64/100ms`** at eight and sixteen processors. Original unbatched completion is the matched baseline. The test verifies exactly 1,000 persisted routed-activity result events in each arm.
 
 Compare workflows/s, workflow p95/p99, failure/retry/expired-lease counts, PostgreSQL commits and wait samples, and `workflow_hub_native_completion_batch_size`, `workflow_hub_native_completion_batch_duration_seconds` and `workflow_hub_native_completion_batch_outcomes`. PostgreSQL commits per workflow should fall if batches fill; the same number of logical task/history/inbox rows must remain durable. CI is a noisy shared-runner screening test, not sufficient for a production or capacity claim.
 
