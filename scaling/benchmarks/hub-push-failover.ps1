@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param([ValidateSet('before-claim','after-claim','during-execution')][string]$Scenario = 'before-claim',
+param([ValidateSet('before-claim','after-claim','during-execution','worker-before-claim','worker-during-execution')][string]$Scenario = 'before-claim',
       [string]$Output = 'scaling/benchmarks/results/push-local/failover')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -24,6 +24,8 @@ $conn = "Host=127.0.0.1;Port=$pgPort;Database=$db;Username=workflow;Password=wor
 $execLog = Join-Path $outDir "$run-execution.jsonl"
 $sideLog = Join-Path $outDir "$run-effects.jsonl"
 $hubA = $null; $hubB = $null; $worker = $null
+$workerFault = $Scenario.StartsWith('worker-')
+$beforeClaim = $Scenario -in @('before-claim','worker-before-claim')
 $result = [ordered]@{ scenario=$Scenario; database=$db; runId=$run; started=[DateTime]::UtcNow.ToString('O'); events=@(); errors=@() }
 function Mark([string]$Name) { $result.events += @{ name=$Name; at=[DateTime]::UtcNow.ToString('O') } }
 function Query([string]$Sql) {
@@ -88,7 +90,7 @@ try {
     Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/health/ready' -TimeoutSec 2).status -eq 'ready' } 30 'Hub B ready'
     Mark 'both-hubs-and-sessions-ready'
     $oldLease = $null
-    if ($Scenario -ne 'before-claim') {
+    if (-not $beforeClaim) {
         for ($i=0; $i -lt 2; $i++) {
             $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=5; runId=$run
                 idempotencyKey="${run}:$i"; input=@{ tenantId="same-$suffix"; organizationName="Failover $i" } } | ConvertTo-Json -Depth 5
@@ -99,35 +101,59 @@ try {
         } else {
             Wait-Until { (Test-Path $execLog) -and ((Get-Content $execLog -Raw) -match '"taskType":"provision-tenant"') } 45 'active provision execution'
         }
-        $oldLease = Query "SELECT json_build_object('id',t.id,'owner',t.owner,'epoch',t.epoch) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run' AND t.state=1 ORDER BY t.sequence LIMIT 1" | ConvertFrom-Json
+        $activeType = if ($Scenario -eq 'worker-during-execution') { "AND t.task_type='provision-tenant'" } else { '' }
+        $oldLease = Query "SELECT json_build_object('id',t.id,'owner',t.owner,'epoch',t.epoch) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run' AND t.state=1 $activeType ORDER BY t.sequence LIMIT 1" | ConvertFrom-Json
+        if ($null -eq $oldLease) { throw 'Expected a live task lease before fault injection' }
         $result.oldTaskLease = $oldLease
     }
     $owner = Query "SELECT split_part(owner_id, ':', 1) FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0"
     if ($owner -ne 'hub-a') { throw "Unexpected initial matching owner: $owner" }
-    Mark 'owner-killed'
     $killTime = [DateTime]::UtcNow
-    Stop-Process -Id $hubA.Id -Force
-    if ($Scenario -eq 'before-claim') {
+    if ($workerFault) {
+        Mark 'worker-hard-killed'
+        # Process.Kill() deliberately skips graceful shutdown, credit release and drain.
+        $worker.Kill()
+        if (-not $worker.WaitForExit(10000)) { throw 'Worker process did not exit after hard kill' }
+        # Reuse the *same* durable credit journal, as on a Kubernetes pod restart
+        # with a persistent identity/volume; use distinct stdout/stderr files.
+        $worker = Start-Process @backgroundWindow -FilePath $dotnet -ArgumentList @($workerDll) -Environment $workerVars -PassThru `
+            -RedirectStandardOutput (Join-Path $outDir "$run-worker-restarted.stdout.log") `
+            -RedirectStandardError (Join-Path $outDir "$run-worker-restarted.stderr.log")
+        Wait-Until {
+            -not $worker.HasExited -and
+            (Invoke-RestMethod 'http://127.0.0.1:54110/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -ge 1
+        } 90 'replacement worker SSE session on the surviving Hub'
+        Mark 'worker-restarted'
+        $result.workerToReconnectSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
+    } else {
+        Mark 'owner-hard-killed'
+        # Hard stop intentionally skips Hub ownership release and SSE drain.
+        $hubA.Kill()
+        if (-not $hubA.WaitForExit(10000)) { throw 'Hub process did not exit after hard kill' }
+        Wait-Until { (Query "SELECT split_part(owner_id, ':', 1) FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0") -eq 'hub-b' } 120 'Hub B ownership takeover'
+        Mark 'owner-takeover'
+        $result.ownerTakeoverSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
+        Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 1 } 60 'worker session reconnected to Hub B'
+        Mark 'sessions-reconnected'
+        $result.ownerToReconnectSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
+        if ($result.ownerToReconnectSeconds -ge 65) { throw 'SSE reconnection exceeded the failover latency budget' }
+    }
+    $survivorPort = if ($workerFault) { 54110 } else { 54111 }
+    $diagUrl = "http://127.0.0.1:$survivorPort/api/hub/workers/transport-diagnostics"
+    $diagRecovered = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
+    if (-not $diagRecovered.candidateEnabled) { throw 'Candidate matching was not active after fault recovery' }
+    $result.recoveredMatching = $diagRecovered
+    if ($beforeClaim) {
         for ($i=0; $i -lt 2; $i++) {
             $body = @{ hubId='onboarding'; definitionId='tenant-onboarding'; version=5; runId=$run
                 idempotencyKey="${run}:$i"; input=@{ tenantId="same-$suffix"; organizationName="Failover $i" } } | ConvertTo-Json -Depth 5
             Invoke-RestMethod 'http://127.0.0.1:54112/api/hub/workflows' -Headers $headers -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 15 | Out-Null
         }
     }
-    Wait-Until { (Query "SELECT split_part(owner_id, ':', 1) FROM wfc_scale.hub_matching_partition_owner WHERE hub_id='onboarding' AND matching_partition=0") -eq 'hub-b' } 120 'Hub B ownership takeover'
-    Mark 'owner-takeover'
-    $result.ownerTakeoverSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
-    Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2).pushConnected -eq 1 } 60 'worker session reconnected'
-    Mark 'sessions-reconnected'
-    $result.ownerToReconnectSeconds = [Math]::Round(([DateTime]::UtcNow - $killTime).TotalSeconds, 2)
-    if ($result.ownerToReconnectSeconds -ge 65) { throw 'SSE reconnection exceeded the failover latency budget' }
-    $diagB = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
-    if (-not $diagB.candidateEnabled) { throw 'Candidate-mode matching was not active on Hub B after takeover' }
-    $result.recoveredMatching = $diagB
     Wait-Until { [int](Query "SELECT count(*) FROM wfc_scale.hub_workflow WHERE run_id='$run' AND completed_at IS NOT NULL") -eq 2 } 180 'both workflows complete'
     Mark 'workflows-completed'
     Wait-Until {
-        $d = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
+        $d = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
         # One stream carries the two independently configured four-slot budgets.
         $d.pushConnected -eq 1 -and
             $d.candidateCredits -ge 0 -and
@@ -136,7 +162,7 @@ try {
             $d.candidateUncertain -eq 0 -and
             $d.candidateAdmissionsActive -eq 0
     } 20 'bounded waiting credits and no leaked reservations, uncertain leases or admissions after completion'
-    $result.finalMatching = Invoke-RestMethod 'http://127.0.0.1:54111/api/hub/workers/transport-diagnostics' -Headers $headers -TimeoutSec 2
+    $result.finalMatching = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
     $result.taskSummary = Query "SELECT json_build_object('tasks',count(*),'complete',count(*) FILTER (WHERE t.state=2),'retries',sum(greatest(t.attempts-1,0))) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow w ON w.id=t.workflow_id WHERE w.run_id='$run'" | ConvertFrom-Json
     $result.fifoOverlaps = [int](Query "SELECT count(*) FROM wfc_scale.hub_task_attempt a JOIN wfc_scale.hub_task ta ON ta.id=a.task_id JOIN wfc_scale.hub_workflow wa ON wa.id=ta.workflow_id JOIN wfc_scale.hub_task_attempt b ON b.task_id<>a.task_id AND a.claimed_at < coalesce(b.finished_at,now()) AND b.claimed_at < coalesce(a.finished_at,now()) JOIN wfc_scale.hub_task tb ON tb.id=b.task_id JOIN wfc_scale.hub_workflow wb ON wb.id=tb.workflow_id WHERE wa.run_id='$run' AND wb.run_id='$run' AND ta.task_type='provision-tenant' AND tb.task_type='provision-tenant'")
     # New onboarding v5 intentionally has no business-key FIFO policy.
@@ -153,7 +179,7 @@ try {
     if ($null -ne $oldLease) {
         try {
             $hb = @{ workerId=$oldLease.owner; epoch=$oldLease.epoch } | ConvertTo-Json
-            Invoke-WebRequest "http://127.0.0.1:54111/api/hub/tasks/$($oldLease.id)/heartbeat" -Headers $headers -Method Post -ContentType 'application/json' -Body $hb -TimeoutSec 10 | Out-Null
+            Invoke-WebRequest "http://127.0.0.1:$survivorPort/api/hub/tasks/$($oldLease.id)/heartbeat" -Headers $headers -Method Post -ContentType 'application/json' -Body $hb -TimeoutSec 10 | Out-Null
             throw 'Stale heartbeat unexpectedly accepted'
         } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
             $result.staleHeartbeatStatus = [int]$_.Exception.Response.StatusCode
