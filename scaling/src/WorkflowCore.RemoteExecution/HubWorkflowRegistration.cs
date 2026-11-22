@@ -19,8 +19,6 @@ public sealed class HubRuntimeOptions
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
     public string? WorkerHub { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_WORKER_HUB");
-    public string? PushCreditJournalPath { get; set; } =
-        Environment.GetEnvironmentVariable("WFC_HUB_PUSH_CREDIT_JOURNAL");
     public bool PushEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     public string[] PushTrustedOwners { get; set; } =
