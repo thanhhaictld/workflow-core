@@ -21,12 +21,45 @@ public sealed class HubSseTaskDistributor
     private const int MaxSessions = 2048;
     private static readonly TimeSpan OwnerCheckInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan CreditClaimTimeout = TimeSpan.FromSeconds(2);
+    private readonly int _mixedClaimBatchSize;
+    private readonly TimeSpan _creditCoalesceWindow;
+    private long _claimCalls, _claimedTasks, _multiTaskClaims;
+    private long _mixedClaimCalls, _mixedClaimedTasks, _mixedMultiTaskClaims;
+    private int _maxTasksClaimed, _mixedMaxTasksClaimed;
+
+    // Diagnostic counters report REAL leased tasks, not requested MaxTasks.
+    // Keep them bounded and process-local; a multi-replica benchmark must sum
+    // both active Hub owners instead of trusting a single Gateway pod.
+    public long ClaimCalls => Interlocked.Read(ref _claimCalls);
+    public long ClaimedTasks => Interlocked.Read(ref _claimedTasks);
+    public long MultiTaskClaims => Interlocked.Read(ref _multiTaskClaims);
+    public int MaxTasksClaimed => Volatile.Read(ref _maxTasksClaimed);
+    public long MixedClaimCalls => Interlocked.Read(ref _mixedClaimCalls);
+    public long MixedClaimedTasks => Interlocked.Read(ref _mixedClaimedTasks);
+    public long MixedMultiTaskClaims => Interlocked.Read(ref _mixedMultiTaskClaims);
+    public int MixedMaxTasksClaimed => Volatile.Read(ref _mixedMaxTasksClaimed);
+    public int MixedClaimBatchSize => _mixedClaimBatchSize;
 
     public HubSseTaskDistributor(HubTaskMatcher matcher) : this(matcher.LongPollAsync) { }
 
-    // Injected matcher enables deterministic unit tests without a database.
+    // Optional args make the single-claim baseline and batched mode testable
+    // without process-global environment changes in parallel test runs.
     public HubSseTaskDistributor(Func<HubClaimRequest, CancellationToken,
-        Task<IReadOnlyList<HubLeasedTask>>> poll) => _poll = poll;
+        Task<IReadOnlyList<HubLeasedTask>>> poll, int? mixedClaimBatchSize = null,
+        int? creditCoalesceMilliseconds = null)
+    {
+        _poll = poll;
+        var sizeSetting = Environment.GetEnvironmentVariable("WFC_HUB_SSE_CLAIM_BATCH_SIZE");
+        var delaySetting = Environment.GetEnvironmentVariable("WFC_HUB_SSE_CREDIT_COALESCE_MS");
+        var requestedSize = mixedClaimBatchSize ??
+            (sizeSetting is null ? 1 : int.TryParse(sizeSetting, out var parsed) ? parsed : -1);
+        var requestedDelay = creditCoalesceMilliseconds ??
+            (delaySetting is null ? 0 : int.TryParse(delaySetting, out var parsedDelay) ? parsedDelay : -1);
+        if (requestedSize is < 1 or > 64 || requestedDelay is < 0 or > 5)
+            throw new ArgumentException("SSE mixed task claim batch must be 1..64 with credit coalescing 0..5ms");
+        _mixedClaimBatchSize = requestedSize;
+        _creditCoalesceWindow = TimeSpan.FromMilliseconds(requestedDelay);
+    }
 
     public sealed record Subscribe(HubClaimRequest Claim, int Capacity, int InitialCredits);
     public sealed record Credit(Guid SessionId, long OwnerEpoch, string WorkerId,
@@ -71,20 +104,44 @@ public sealed class HubSseTaskDistributor
             }
         }
 
-        public async Task<List<Guid>> NextAsync(int maxGrants, CancellationToken ct)
+        public async Task<List<Guid>> NextAsync(int maxGrants, TimeSpan coalesce, CancellationToken ct)
         {
             var id = await _credits.Reader.ReadAsync(ct);
+            var grants = new List<Guid>(maxGrants) { id };
+            // IMPORTANT: mark the first popped credit as claiming BEFORE
+            // waiting for more. Otherwise Offer could oversubscribe capacity
+            // during the aggregation window.
             lock (_sync)
             {
-                var grants = new List<Guid> { id };
                 _pending--;
+                _claiming = 1;
+                Drain();
+            }
+            if (grants.Count >= maxGrants || coalesce <= TimeSpan.Zero) return grants;
+            var started = Stopwatch.GetTimestamp();
+            while (grants.Count < maxGrants)
+            {
+                var remaining = coalesce - Stopwatch.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) break;
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                wait.CancelAfter(remaining);
+                try
+                {
+                    if (!await _credits.Reader.WaitToReadAsync(wait.Token)) break;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { break; }
+                lock (_sync) Drain();
+            }
+            return grants;
+
+            void Drain()
+            {
                 while (grants.Count < maxGrants && _credits.Reader.TryRead(out var next))
                 {
                     grants.Add(next);
                     _pending--;
+                    _claiming++;
                 }
-                _claiming = grants.Count;
-                return grants;
             }
         }
 
@@ -102,6 +159,22 @@ public sealed class HubSseTaskDistributor
     }
 
     public int ActiveSessions => _sessions.Count;
+
+    private void UpdateMaximum(int count, bool nativeOnly)
+    {
+        static void Raise(ref int location, int value)
+        {
+            var old = Volatile.Read(ref location);
+            while (value > old)
+            {
+                var observed = Interlocked.CompareExchange(ref location, value, old);
+                if (observed == old) return;
+                old = observed;
+            }
+        }
+        Raise(ref _maxTasksClaimed, count);
+        if (!nativeOnly) Raise(ref _mixedMaxTasksClaimed, count);
+    }
 
     public bool Offer(Credit credit)
     {
@@ -136,10 +209,16 @@ public sealed class HubSseTaskDistributor
             throw new ArgumentException("Invalid SSE owner/session/credit registration");
 
         var session = new Session(subscribe, ownerEpoch);
-        // Workflow lanes can use atomic batches. Activity fallback sessions
-        // request one lease at a time.
-        var maxGrants = subscribe.Claim.Capabilities.All(c =>
-            c.TaskType == "__native_workflow__") ? 32 : 1;
+        // Native workflow lanes retain their existing batch limit. The same
+        // PostgreSQL batch claim supports remote/managed workflows, activities,
+        // and standalone tasks; unlock it only with an explicit feature flag.
+        // Every accepted grant represents an actual worker execution slot.
+        var nativeOnly = subscribe.Claim.Capabilities.All(c =>
+            c.TaskType == "__native_workflow__");
+        var maxGrants = Math.Min(subscribe.Capacity,
+            nativeOnly ? 32 : _mixedClaimBatchSize);
+        var coalesce = !nativeOnly && maxGrants > 1
+            ? _creditCoalesceWindow : TimeSpan.Zero;
         var connectedAt = Stopwatch.GetTimestamp();
         var dispatched = false;
         var key = (subscribe.Claim.WorkerId, subscribe.Claim.Hubs[0],
@@ -170,7 +249,7 @@ public sealed class HubSseTaskDistributor
                 using (var check = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     check.CancelAfter(OwnerCheckInterval);
-                    try { grants = await session.NextAsync(maxGrants, check.Token); }
+                    try { grants = await session.NextAsync(maxGrants, coalesce, check.Token); }
                     catch (OperationCanceledException) when (!token.IsCancellationRequested)
                     {
                         if (!await stillOwns(token))
@@ -198,6 +277,20 @@ public sealed class HubSseTaskDistributor
                     }
                     if (leases.Count > grants.Count)
                         throw new InvalidOperationException("SSE claim exceeded reserved credits");
+                    Interlocked.Increment(ref _claimCalls);
+                    Interlocked.Add(ref _claimedTasks, leases.Count);
+                    if (leases.Count > 1) Interlocked.Increment(ref _multiTaskClaims);
+                    UpdateMaximum(leases.Count, nativeOnly);
+                    if (!nativeOnly)
+                    {
+                        Interlocked.Increment(ref _mixedClaimCalls);
+                        Interlocked.Add(ref _mixedClaimedTasks, leases.Count);
+                        if (leases.Count > 1) Interlocked.Increment(ref _mixedMultiTaskClaims);
+                    }
+                    var lane = new KeyValuePair<string, object?>(
+                        "lane", nativeOnly ? "native_workflow" : "mixed");
+                    HubTelemetry.SseClaimRequestedCredits.Record(grants.Count, lane);
+                    HubTelemetry.SseClaimLeasedTasks.Record(leases.Count, lane);
                     for (var i = 0; i < grants.Count; i++)
                     {
                         var grant = grants[i];

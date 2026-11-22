@@ -8,6 +8,7 @@ on:
       - 'scaling/src/WorkflowCore.RemoteExecution/**'
       - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseTaskDistributorTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseMixedBatchClaimTests.cs'
       - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseWorkerCreditCoordinatorTests.cs'
       - 'scaling/observability/nginx.matching-ha.conf'
       - 'scaling/observability/compose.yaml'
@@ -54,10 +55,17 @@ jobs:
             --env-file "$ENVFILE" config --quiet
           make --dry-run help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-test-4k obs-test obs-matcher-failover > /tmp/make-targets.txt
           grep -Fq 'Processors 16' /tmp/make-targets.txt
+          # Every 'batch-N' must bootstrap once and issue one audited stress
+          # test with matching N, independent of ups-16's processor setting.
+          for processors in 4 8 16; do
+            make --dry-run "batch-$processors" > "/tmp/make-batch-$processors.txt"
+            test "$(grep -c -- "-Processors $processors" "/tmp/make-batch-$processors.txt")" -eq 2
+            test "$(grep -c 'stress-test' "/tmp/make-batch-$processors.txt")" -eq 1
+          done
       - name: Build and test SSE distributor credit protocol
         run: |
           dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
-            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
+            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseMixedBatchClaimTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
       - name: Start PostgreSQL and two fenced matching Hubs
         run: |
           set -euo pipefail

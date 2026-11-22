@@ -153,6 +153,13 @@ public static class HubTelemetry
     // worker, tenant or unbounded hub labels on histograms.
     public static readonly Histogram<double> NativeCommitDuration =
         Meter.CreateHistogram<double>("workflow_hub_native_commit_duration_seconds", "s");
+    public static readonly Histogram<int> NativeCompletionBatchSize =
+        Meter.CreateHistogram<int>("workflow_hub_native_completion_batch_size");
+    public static readonly Histogram<double> NativeCompletionBatchDuration =
+        Meter.CreateHistogram<double>("workflow_hub_native_completion_batch_duration_seconds", "s");
+    public static readonly Counter<long> NativeCompletionBatchOutcomes =
+        Meter.CreateCounter<long>("workflow_hub_native_completion_batch_outcomes");
+
     // Bounded cardinality diagnostic for the native, event-free fast path.
     public static readonly Counter<long> NativeEventLaneBypass =
         Meter.CreateCounter<long>("workflow_hub_native_event_lane_bypass", "{commit}");
@@ -195,6 +202,12 @@ public static class HubTelemetry
         Meter.CreateUpDownCounter<long>("workflow_hub_sse_task_sessions", "{session}");
     public static readonly Counter<long> SseTasksDispatched =
         Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
+    // A large requested MaxTasks is not necessarily an actual PostgreSQL
+    // batch: record both counts to expose credit/eligibility underfill.
+    public static readonly Histogram<int> SseClaimRequestedCredits =
+        Meter.CreateHistogram<int>("workflow_hub_sse_claim_requested_credits");
+    public static readonly Histogram<int> SseClaimLeasedTasks =
+        Meter.CreateHistogram<int>("workflow_hub_sse_claim_leased_tasks");
     public static readonly Counter<long> MatchingOwnershipChanges =
         Meter.CreateCounter<long>("workflow_hub_matching_ownership_changes", "{change}");
     public static readonly Counter<long> MatchingResolutionFailures =

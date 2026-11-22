@@ -97,7 +97,8 @@ internal sealed class HubNativeWorkflowWorker(HubRestClient client,HubNativeCata
 }
 
 internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCatalog catalog,HubRuntimeOptions options,
-    HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup)
+    HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup,
+    HubCompletionBatcher? batcher = null)
     : HubRuntimeWorker(client,options,logger,options.ActivityConcurrency,
         catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,a.Registration.Version))
             .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,1)) : [])
@@ -106,6 +107,17 @@ internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCata
     protected override async Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct)=>
         new HubTaskResultRequest(owner,task.Epoch,await executor.ExecuteActivityAsync(task,ct));
     protected override string ResultPath(HubLeasedTask task)=>$"api/hub/tasks/{task.Id}/complete";
+
+    protected override async Task<HttpResponseMessage> SendResultAsync(
+        HubLeasedTask task,object result,CancellationToken ct)
+    {
+        if(!options.CompletionMicrobatchEnabled)
+            return await base.SendResultAsync(task,result,ct);
+        if(batcher is null || result is not HubTaskResultRequest completion)
+            throw new InvalidOperationException("Missing Hub native completion batcher");
+        var status=await batcher.SubmitAsync(task,completion,ct);
+        return new HttpResponseMessage(status);
+    }
 }
 
 /// <summary>Bounded remote worker lane. SSE hints reduce latency; periodic claims
@@ -120,6 +132,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         new("lane", workflows is null ? "activity" : "workflow");
     protected abstract Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct);
     protected abstract string ResultPath(HubLeasedTask task);
+    protected virtual Task<HttpResponseMessage> SendResultAsync(
+        HubLeasedTask task,object result,CancellationToken ct) =>
+        client.Http.PostAsJsonAsync(ResultPath(task),result,ct);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -425,18 +440,46 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
     private async Task RunSseGrantSchedulerAsync(
         HubSseWorkerCreditCoordinator credits, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        // HTTP credits were previously POSTed serially. Under multi-task
+        // claims this often leaves one credit per shard when the distributor
+        // checks its queue. Bounded concurrent offers make a real group of
+        // reserved worker slots visible without changing any fencing rule.
+        // Default one preserves original behavior outside the experiment.
+        var configured = Environment.GetEnvironmentVariable("WFC_HUB_SSE_CREDIT_SEND_CONCURRENCY");
+        var concurrency = configured is null ? 1 :
+            int.TryParse(configured, out var parsed) && parsed is >= 1 and <= 32
+                ? parsed : throw new ArgumentException(
+                    "WFC_HUB_SSE_CREDIT_SEND_CONCURRENCY must be 1..32");
+        using var sends = new SemaphoreSlim(concurrency, concurrency);
+        var pending = new List<Task>();
+        try
         {
-            if (!credits.TryOffer(out var offer))
+            while (!ct.IsCancellationRequested)
             {
-                await credits.WaitForChangeAsync(ct);
-                continue;
+                await sends.WaitAsync(ct);
+                if (!credits.TryOffer(out var offer))
+                {
+                    sends.Release();
+                    await credits.WaitForChangeAsync(ct);
+                    continue;
+                }
+                // Exactly one coordinator credit per HTTP offer; calls may
+                // overlap, but total offers + executing never exceed capacity.
+                var send = SendGrantAsync(offer, ct);
+                pending.Add(send);
+                pending.RemoveAll(x => x.IsCompleted);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally
+        {
+            await Task.WhenAll(pending);
+        }
 
+        async Task SendGrantAsync(HubSseWorkerCreditCoordinator.Grant offer, CancellationToken token)
+        {
             try
             {
-                // A task is NOT claimed by this call. The server may lease
-                // exactly one task and push it on the matching SSE stream.
                 using var response = await client.Http.PostAsJsonAsync(
                     "api/hub/workers/tasks:credit",
                     new {
@@ -446,29 +489,29 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                         hubId = capabilities[0].HubId,
                         matchingPartition = offer.Shard,
                         creditId = offer.CreditId
-                    }, ct);
+                    }, token);
                 if (!response.IsSuccessStatusCode)
                 {
                     credits.OfferFailed(offer);
-                    // 409 / 503 / 404 means the session/owner may have
-                    // transitioned. Reconnect rather than retrying a credit
-                    // blindly into the wrong owner's in-memory registry.
+                    // A stale session/epoch may not receive further offers.
                     credits.Invalidate(offer.Shard, offer.SessionId);
                     logger.LogWarning(
                         "SSE credit grant rejected for shard {Shard}: HTTP {Status}",
                         offer.Shard, (int)response.StatusCode);
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token);
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 credits.OfferFailed(offer);
                 credits.Invalidate(offer.Shard, offer.SessionId);
                 logger.LogWarning(ex,
                     "SSE credit grant transport failure on shard {Shard}", offer.Shard);
-                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                try { await Task.Delay(TimeSpan.FromMilliseconds(250), token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             }
+            finally { sends.Release(); }
         }
     }
 
@@ -910,7 +953,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     completionSpan?.SetTag("task.id",task.Id.ToString());
                     completionSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
                     var completionStarted=Stopwatch.GetTimestamp();
-                    using var response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token);
+                    using var response=await SendResultAsync(task,result,execution.Token);
                     var completionSeconds=Stopwatch.GetElapsedTime(completionStarted).TotalSeconds;
                     completionSpan?.SetTag("http.response.status_code",(int)response.StatusCode);
                     completionSpan?.SetTag("completion.duration_seconds",completionSeconds);
