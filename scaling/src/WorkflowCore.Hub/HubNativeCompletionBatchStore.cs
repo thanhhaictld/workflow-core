@@ -132,18 +132,21 @@ public sealed class HubNativeCompletionBatchStore(HubTaskStore tasks)
             if(selected.Count > 0)
             {
                 var workflowIds=selected.Select(x=>metadata[x.TaskId].Workflow).ToArray();
-                var lockedWorkflows=new HashSet<Guid>();
+                // Re-read status under the locked workflow row. The initial
+                // metadata lookup was advisory and may race termination.
+                var lockedWorkflows=new Dictionary<Guid,string>();
                 await using(var cmd=new NpgsqlCommand("""
-                    SELECT id FROM wfc_scale.hub_workflow
+                    SELECT id,native_status FROM wfc_scale.hub_workflow
                     WHERE id=ANY(@ids)
                     ORDER BY id FOR UPDATE SKIP LOCKED
                     """,db,tx))
                 {
                     cmd.Parameters.AddWithValue("ids",workflowIds);
                     await using var reader=await cmd.ExecuteReaderAsync(ct);
-                    while(await reader.ReadAsync(ct))lockedWorkflows.Add(reader.GetGuid(0));
+                    while(await reader.ReadAsync(ct))
+                        lockedWorkflows[reader.GetGuid(0)]=reader.GetString(1);
                 }
-                var toLock=selected.Where(x=>lockedWorkflows.Contains(metadata[x.TaskId].Workflow))
+                var toLock=selected.Where(x=>lockedWorkflows.ContainsKey(metadata[x.TaskId].Workflow))
                     .Select(x=>x.TaskId).ToArray();
                 var locked=new Dictionary<Guid,LockedTask>();
                 if(toLock.Length>0)
@@ -171,7 +174,7 @@ public sealed class HubNativeCompletionBatchStore(HubTaskStore tasks)
                 foreach(var item in selected)
                 {
                     var m=metadata[item.TaskId];
-                    if(!lockedWorkflows.Contains(m.Workflow) || !locked.TryGetValue(item.TaskId,out var row))
+                    if(!lockedWorkflows.TryGetValue(m.Workflow,out var currentStatus) || !locked.TryGetValue(item.TaskId,out var row))
                     {
                         Set(item.TaskId,"retry");
                         continue;
@@ -189,7 +192,7 @@ public sealed class HubNativeCompletionBatchStore(HubTaskStore tasks)
                         continue;
                     }
                     if(row.State!=1 || row.Owner!=item.WorkerId || row.Epoch!=item.Epoch ||
-                       row.LeaseUntil<=DateTime.UtcNow || m.Status is "Complete" or "Terminated")
+                       row.LeaseUntil<=DateTime.UtcNow || currentStatus is "Complete" or "Terminated")
                     {
                         Set(item.TaskId,"fenced");
                         continue;
