@@ -166,7 +166,7 @@ public static class HubWorkflowRuntimeExtensions
            options.PollInterval<TimeSpan.FromMilliseconds(10) ||
            options.MatchingPartitions is < 1 or > 64 ||
            options.CompletionBatchSize is < 16 or > 64 ||
-           options.CompletionBatchDelayMs is < 2 or > 5)
+           options.CompletionBatchDelayMs is < 2 or > 100)
             throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
