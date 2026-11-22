@@ -1,12 +1,14 @@
 name: Workflow Hub Native Completion Microbatch A/B
 
-# Isolated experiment from PR #42: optional processor buffering + PostgreSQL\n# microbatch of independent fenced native activity completions. All ACKs are durable.
+# Isolated experiment from PR #42: optional processor buffering and PostgreSQL
+# microbatch of independent fenced native activity completions. All ACKs are durable.
 on:
   workflow_dispatch:
   pull_request:
     branches: ['experiment/optimistic-hub-owner-admission']
     paths:
       - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/src/WorkflowCore.RemoteExecution/**'
       - 'scaling/observability/compose*.yaml'
       - '.github/workflows/workflow-hub-completion-microbatch-ab.yml'
 
@@ -32,6 +34,14 @@ jobs:
           - { mode: batch16, processors: 16, size: 16, delay: 2 }
           - { mode: batch32, processors: 16, size: 32, delay: 3 }
           - { mode: batch64, processors: 16, size: 64, delay: 5 }
+          # Long-window experiment: flush immediately on reaching the size
+          # limit, or after 100ms when a processor has a partial batch.
+          - { mode: batch16-100ms, processors: 8, size: 16, delay: 100 }
+          - { mode: batch32-100ms, processors: 8, size: 32, delay: 100 }
+          - { mode: batch64-100ms, processors: 8, size: 64, delay: 100 }
+          - { mode: batch16-100ms, processors: 16, size: 16, delay: 100 }
+          - { mode: batch32-100ms, processors: 16, size: 32, delay: 100 }
+          - { mode: batch64-100ms, processors: 16, size: 64, delay: 100 }
     env:
       BENCH_PROCESSORS: ${{ matrix.processors }}
       BENCH_COMPLETION_MODE: ${{ matrix.mode }}
