@@ -22,6 +22,14 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
     /// the final validation but before commit can leave a late old-owner claim.
     /// Task lease CAS/epochs, not matching ownership, fence execution.
     /// </summary>
+    /// <summary>
+    /// Preserve strict, linearized owner admission for existing callers and tests.
+    /// </summary>
+    public static Task<bool> LockOwnerForAdmissionAsync(NpgsqlConnection db,
+        NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
+        int partitionCount, CancellationToken ct) =>
+        ValidateOwnerForAdmissionAsync(db, transaction, captured, partitionCount, true, ct);
+
     public static async Task<bool> ValidateOwnerForAdmissionAsync(NpgsqlConnection db,
         NpgsqlTransaction transaction, HubMatchingPartitionLease captured,
         int partitionCount, bool takeLock, CancellationToken ct)
