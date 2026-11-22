@@ -161,6 +161,12 @@ function Apply-DatabaseSchema {
     Write-Host 'Applying 036_hub_lightweight_shard_signals.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/036_hub_lightweight_shard_signals.sql')
+    Write-Host 'Applying 037_hub_bound_expired_candidate_pages.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/037_hub_bound_expired_candidate_pages.sql')
+    Write-Host 'Applying 038_hub_bound_ready_due_candidate_pages.sql...'
+    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
+        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/038_hub_bound_ready_due_candidate_pages.sql')
 }
 
 function Install-Monitor {

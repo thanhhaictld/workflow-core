@@ -162,8 +162,11 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
             """.Replace("/*deadline*/", ready ? "due_at" : "lease_until")
             .Replace("/*predicate*/", stream switch {
                 HubCandidateStream.Ready => "state=0 AND due_at<=@cutoff AND sequence>@after",
-                HubCandidateStream.ReadyDue => "state=0 AND due_at<=@cutoff AND (due_at,sequence)>(@afterDeadline,@after)",
-                _ => "state=1 AND lease_until<@cutoff AND (lease_until,sequence)>(@afterDeadline,@after)" })
+                // Match the deadline page indexes installed by migrations 037 and 038.
+                HubCandidateStream.ReadyDue => "CASE state WHEN 0 THEN true ELSE false END AND due_at<=@cutoff AND (due_at,sequence)>(@afterDeadline,@after)",
+                // Match migration 037's partial predicate without making the
+                // hub-wide expiry and active-queue indexes eligible.
+                _ => "CASE state WHEN 1 THEN true ELSE false END AND lease_until<@cutoff AND (lease_until,sequence)>(@afterDeadline,@after)" })
             .Replace("/*ordering*/", !byDeadline ? "sequence" : ready ? "due_at,sequence" : "lease_until,sequence")
             .Replace("/*outer_order*/", !byDeadline ? "p.sequence" : "p.deadline,p.sequence");
     }
