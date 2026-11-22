@@ -350,7 +350,10 @@ public static class HubGatewayEndpoints
                 pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions,
                 sseActiveSessions = sse.ActiveSessions, sseClaimBatchLimit = sse.MixedClaimBatchSize,
                 sseClaimCalls = sse.ClaimCalls, sseClaimedTasks = sse.ClaimedTasks,
-                sseMultiTaskClaims = sse.MultiTaskClaims, sseMaxTasksClaimed = sse.MaxTasksClaimed }));
+                sseMultiTaskClaims = sse.MultiTaskClaims, sseMaxTasksClaimed = sse.MaxTasksClaimed,
+                sseMixedClaimCalls = sse.MixedClaimCalls, sseMixedClaimedTasks = sse.MixedClaimedTasks,
+                sseMixedMultiTaskClaims = sse.MixedMultiTaskClaims,
+                sseMixedMaxTasksClaimed = sse.MixedMaxTasksClaimed }));
 
         routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
             HubPushSessions sessions, CancellationToken ct) =>
