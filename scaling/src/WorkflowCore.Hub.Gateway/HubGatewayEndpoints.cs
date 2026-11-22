@@ -32,6 +32,7 @@ public static class HubGatewayEndpoints
         services.AddHostedService(sp => sp.GetRequiredService<HubCandidateAcquisition>());
         services.AddSingleton<HubTaskMatcher>();
         services.AddSingleton<HubPushSessions>();
+        services.AddSingleton<HubMultiplexedPush>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -333,9 +334,11 @@ public static class HubGatewayEndpoints
             return task is null ? Results.NotFound() : Results.Ok(task);
         });
 
-        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions,
+        routes.MapMultiplexedPush();
+        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions, HubMultiplexedPush multiplexed,
             HubCandidateAcquisition candidates, HubReadinessBroadcaster readiness) =>
-            Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
+            Results.Ok(new { pushConnected = sessions.ConnectedCount + multiplexed.ConnectedCount,
+                readinessConnected = readiness.ConnectedCount,
                 candidateEnabled = candidates.Enabled, candidateCredits = candidates.CandidateCredits,
                 candidateReservations = candidates.CandidateReservations,
                 candidateUncertain = candidates.CandidateUncertain,
@@ -343,8 +346,10 @@ public static class HubGatewayEndpoints
                 candidateAdmissionsActive = candidates.AdmissionActive,
                 pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
                 pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
-                pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
-                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions }));
+                pushClaims = sessions.Claims + multiplexed.Claims,
+                pushEmptyClaims = sessions.EmptyClaims + multiplexed.EmptyClaims,
+                pushDeliveries = sessions.Deliveries + multiplexed.Deliveries,
+                pushEndedSessions = sessions.EndedSessions + multiplexed.EndedSessions }));
 
         routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
             HubPushSessions sessions, CancellationToken ct) =>

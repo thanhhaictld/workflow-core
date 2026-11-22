@@ -47,8 +47,10 @@ public sealed class HubMatchingOwnership : BackgroundService
             parsed is < 1 or > 64))
             throw new InvalidOperationException("WFC_HUB_MATCHING_PARTITIONS must be 1..64");
         PartitionCount = rawCount is null ? 1 : int.Parse(rawCount);
-        NodeId = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_NODE_ID") ??
-            Environment.MachineName + "-" + Guid.NewGuid().ToString("N");
+        var nodeName = Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_NODE_ID") ?? Environment.MachineName;
+        // A new Gateway at the same URL must not renew the prior process's
+        // generation. A peer can then prove that a lost session can no longer admit.
+        NodeId = $"{nodeName[..Math.Min(nodeName.Length, 95)]}:{Guid.NewGuid():N}";
         AdvertiseUrl = (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_ADVERTISE_URL") ?? "").TrimEnd('/');
         _trustedPeers = (Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PEERS") ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -57,7 +59,7 @@ public sealed class HubMatchingOwnership : BackgroundService
         _orderedPeers = _trustedPeers.OrderBy(x => x, StringComparer.Ordinal).ToArray();
         if (Enabled && (!Uri.TryCreate(AdvertiseUrl, UriKind.Absolute, out var uri) ||
                         uri.Scheme is not ("http" or "https") ||
-                        NodeId.Length > 128 || _trustedPeers.Count == 0 ||
+                        nodeName.Length > 128 || _trustedPeers.Count == 0 ||
                         !_trustedPeers.Contains(AdvertiseUrl) ||
                         _trustedPeers.Any(p => !Uri.TryCreate(p, UriKind.Absolute, out var peer) ||
                                                peer.Scheme is not ("http" or "https"))))
@@ -98,8 +100,8 @@ public sealed class HubMatchingOwnership : BackgroundService
             await _partitions.EnsureConfigAsync(hub, PartitionCount, ct);
             _configured.TryAdd(hub, 0);
         }
-        var current = await _partitions.ReadAsync(hub, partition, ct);
-        if (current is not null && current.LeaseUntil > DateTime.UtcNow)
+        var current = await _partitions.ReadAsync(hub, partition, ct, activeOnly: true);
+        if (current is not null)
         {
             TrackPartition(hub, partition, current);
             return current;
@@ -125,8 +127,8 @@ public sealed class HubMatchingOwnership : BackgroundService
             }
             // Followers of a concurrent fallback reuse the winning generation
             // instead of repeatedly issuing election UPSERTs and renewing it.
-            var current = await _partitions.ReadAsync(hub, partition, ct);
-            if (current is not null && current.LeaseUntil > DateTime.UtcNow)
+            var current = await _partitions.ReadAsync(hub, partition, ct, activeOnly: true);
+            if (current is not null)
             {
                 TrackPartition(hub, partition, current);
                 return current;
@@ -144,7 +146,11 @@ public sealed class HubMatchingOwnership : BackgroundService
         _partitions.ReadAsync(hub, partition, ct);
 
     public Task<IReadOnlyList<HubMatchingPartitionLease>> ListPartitionsAsync(
-        string hub, CancellationToken ct) => _partitions.ListAsync(hub, ct);
+        string hub, CancellationToken ct, bool activeOnly = false) => _partitions.ListAsync(hub, ct, activeOnly);
+
+    internal HubMatchingPartitionLease? LocalPartition(string hub, int partition, long epoch) =>
+        _partitionOwned.TryGetValue((hub, partition), out var lease) && lease.Epoch == epoch && IsLocal(lease)
+            ? lease : null;
 
     public bool IsLocal(HubMatchingPartitionLease lease) =>
         lease.OwnerId == NodeId && lease.LeaseUntil > DateTime.UtcNow;

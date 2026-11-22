@@ -359,7 +359,7 @@ def experiment(label, victim, busy, seconds, fault='kill'):
         if fault != 'database':
             owner = 'hub-a' if victim == 'hub' else 'hub-b'
             count = int(sql("SELECT count(*) FROM wfc_scale.hub_matching_partition_owner "
-                f"WHERE hub_id='policy-benchmark' AND owner_id='{owner}' AND lease_until>clock_timestamp();"))
+                f"WHERE hub_id='policy-benchmark' AND split_part(owner_id, ':', 1)='{owner}' AND lease_until>clock_timestamp();"))
             emit('victim-owned-shards', count=count)
             if count == 0:
                 raise RuntimeError('Invalid fault precondition: victim owns no live shard')

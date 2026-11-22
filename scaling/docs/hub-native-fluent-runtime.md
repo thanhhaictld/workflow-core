@@ -45,8 +45,8 @@ native steps.
 
 One activity registration supplies publication, worker capability, property
 contract, and Hub resource policy. Hub enforces resource limits across hosts.
-Each host bounds its workflow and activity lanes independently. A waiting workflow
-releases workflow worker capacity.
+Each processor configures separate total workflow and activity slots. A waiting
+workflow releases its workflow slot.
 
 Input properties stay at the payload's top level for resource admission. Typed
 values also travel in an adapter envelope so boxed numbers, DTOs, arrays, and
@@ -136,9 +136,8 @@ Enable `WFC_HUB_PUSH_ENABLED=true` on the Hub and native hosts. Configure matchi
 Older Gateway binaries do not understand native task completion and inbox delivery.
 
 The onboarding sample publishes native **v3 and v4** workflow definitions and
-runs both lanes in `WorkflowCore.Provisioner.Host`. Compose no longer deploys the
-standalone sequential Processor. Sequential adapters remain in the library for
-explicit compatibility deployments, but the sample does not publish or claim v1.
+runs workflow and activity tasks in `WorkflowCore.Provisioner.Host`. The library
+also provides the v1 sequential adapters for explicit compatibility deployments.
 
 Workflow definitions and step bodies live in the separate
 `WorkflowCore.Provisioner.Workflows` assembly. Keep operational policy and worker

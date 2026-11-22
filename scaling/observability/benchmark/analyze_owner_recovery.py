@@ -116,7 +116,8 @@ def recovery(directory):
     before = [r for r in rows if r['kind'] == 'database' and r['elapsed'] < fault_at][-1]
     previous = {o['matching_partition']: o for o in before['data']['owners'] if o['hub_id'] == 'policy-benchmark'}
     victim = 'hub-a' if begin['victim'] == 'hub' else 'hub-b'
-    affected = list(previous) if result['fault'] == 'database' else [k for k, o in previous.items() if o['owner_id'] == victim and o['live']]
+    affected = list(previous) if result['fault'] == 'database' else [
+        k for k, o in previous.items() if o['owner_id'].split(':', 1)[0] == victim and o['live']]
     result['shards'] = []
     events = json.loads((directory / 'hub_workflow_event.json').read_text())
     workflows = {w['id']: w for w in json.loads((directory / 'hub_workflow.json').read_text())}

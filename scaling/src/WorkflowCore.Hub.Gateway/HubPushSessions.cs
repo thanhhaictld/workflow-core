@@ -228,7 +228,7 @@ public sealed class HubPushSessions
                 using var claimDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 claimDeadline.CancelAfter(TimeSpan.FromSeconds(10));
                 try { claimed = _candidate?.Enabled == true
-                    ? await _candidate.AcquireAsync(request, claimDeadline.Token)
+                    ? await _candidate.AcquireAsync(request, claimDeadline.Token, session.Owner)
                     : await _matcher.LongPollAsync(request, claimDeadline.Token); }
                 catch (HubCandidateCapacityException ex)
                 {
