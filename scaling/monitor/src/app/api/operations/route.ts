@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-type PrometheusMetric = "sseConnections" | "hubClaimP95Seconds" |
-  "workerExecutionP95Seconds" | "httpP95Seconds" | "timerLagP95Seconds" |
-  "timerSchedulerErrors5m" | "workerInflight" | "taskClaimsPerSecond" |
-  "workflowFailures5m" | "postgresCpuPercent" | "postgresDatabaseBytes" |
-  "postgresDeadTaskRows" | "postgresCommitsPerSecond" | "postgresRollbacksPerSecond" |
-  "taskSeqRowsPerSecond" | "taskSeqScansPerSecond" | "taskIndexRowsPerSecond" | "taskIndexScansPerSecond" |
-  "workflowSeqRowsPerSecond" | "workflowSeqScansPerSecond" | "workflowIndexRowsPerSecond" | "workflowIndexScansPerSecond";
+import { hubMonitorQueriesEnabled } from "@/lib/hub-monitor-queries";
+import type { OperationsSnapshot } from "@/lib/operations";
+
+type PrometheusMetric = keyof OperationsSnapshot["processMetrics"]["values"];
 
 const promQueries: Record<PrometheusMetric, string> = {
   sseConnections: "sum(workflow_hub_sse_connections)",
@@ -16,6 +13,7 @@ const promQueries: Record<PrometheusMetric, string> = {
   timerSchedulerErrors5m: "sum(increase(workflow_hub_timer_scheduler_errors_total[5m]))",
   workerInflight: "sum(workflow_hub_worker_inflight)",
   taskClaimsPerSecond: "sum(rate(workflow_hub_tasks_claimed_total[5m]))",
+  workflowCompletionsPerSecond: "sum(rate(workflow_hub_workflows_completed_total[1m]))",
   workflowFailures5m: "sum(increase(workflow_hub_workflows_failed_total[5m]))",
   postgresCpuPercent: '100 * sum(rate(namedprocess_namegroup_cpu_seconds_total{job="postgres-process",groupname="postgres"}[1m]))',
   postgresDatabaseBytes: "sum(postgresql_db_size_bytes)",
@@ -32,7 +30,7 @@ const promQueries: Record<PrometheusMetric, string> = {
   workflowIndexScansPerSecond: 'sum(rate(workflow_postgres_table_index_scans_total{schemaname="wfc_scale",relname="hub_workflow"}[1m]))'
 };
 
-async function processMetrics() {
+async function processMetrics(): Promise<OperationsSnapshot["processMetrics"]> {
   const endpoint = process.env.WORKFLOW_PROMETHEUS_URL;
   if (!endpoint) return { available: false, scope: "global", values: {} };
   const results = await Promise.all(Object.entries(promQueries).map(async ([key, expression]) => {
@@ -62,6 +60,13 @@ export const runtime = "nodejs";
 // Same authentication boundary as /api/hub-overview; do not publish this
 // development monitor without gateway auth, scoped access and TLS.
 export async function GET(request: NextRequest) {
+  if (!hubMonitorQueriesEnabled()) {
+    return NextResponse.json({
+      hubQueriesEnabled: false,
+      observedAt: new Date().toISOString(),
+      processMetrics: await processMetrics(),
+    }, { headers: { "Cache-Control": "no-store" } });
+  }
   const base = process.env.WORKFLOW_HUB_URL;
   const token = process.env.WORKFLOW_HUB_TOKEN;
   if (!base || !token) return NextResponse.json(

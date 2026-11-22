@@ -25,6 +25,12 @@ endpoints. It remains a development host and is not a production-ready API.
 - **Real API only:** never substitutes demo fixtures or fake metrics when the
   backend is unreachable.
 
+Set `WORKFLOW_HUB_QUERIES_ENABLED=false` on the monitor server for benchmark
+sessions that need telemetry without Hub monitor reads. The Operations page
+shows global Prometheus metrics, and workflow, definition, and trace queries
+report that Hub reads are disabled. Set the flag back to `true` and restart
+the monitor to restore the full views. The default is `true`.
+
 Native Hub runs also expose persisted snapshots, pointer/predecessor/scope and
 retry identities in history. Activity waterfall rows use task/dispatch identities
 so repeated steps stay separate. Timer windows use timer IDs. See the

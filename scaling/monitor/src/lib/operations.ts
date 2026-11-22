@@ -9,7 +9,7 @@ export interface OperationsSnapshot {
     values: Partial<Record<
       "sseConnections" | "hubClaimP95Seconds" | "workerExecutionP95Seconds" |
       "httpP95Seconds" | "timerLagP95Seconds" | "timerSchedulerErrors5m" |
-      "workerInflight" | "taskClaimsPerSecond" | "workflowFailures5m" |
+      "workerInflight" | "taskClaimsPerSecond" | "workflowCompletionsPerSecond" | "workflowFailures5m" |
       "postgresCpuPercent" | "postgresDatabaseBytes" | "postgresDeadTaskRows" |
       "postgresCommitsPerSecond" | "postgresRollbacksPerSecond" |
       "taskSeqRowsPerSecond" | "taskSeqScansPerSecond" | "taskIndexRowsPerSecond" | "taskIndexScansPerSecond" |
@@ -46,6 +46,9 @@ export interface OperationsSnapshot {
     ready: number | null; leased: number | null; runnable: number | null;
   }>;
 }
+export type OperationsResponse = OperationsSnapshot | (
+  Pick<OperationsSnapshot, "observedAt" | "processMetrics"> & { hubQueriesEnabled: false }
+);
 export function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }

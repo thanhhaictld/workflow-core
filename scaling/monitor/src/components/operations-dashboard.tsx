@@ -8,7 +8,7 @@ import {
   ListChecks, Network, RefreshCcw, Server
 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, EmptyState, Select, cn } from "./ui";
-import type { OperationsSnapshot, OperationsWindow } from "@/lib/operations";
+import type { OperationsResponse, OperationsSnapshot, OperationsWindow } from "@/lib/operations";
 import { formatAge, formatCount, partitionSkew } from "@/lib/operations";
 import { countScale } from "@/lib/count-scale";
 
@@ -135,6 +135,62 @@ function WorkerRows({ data }: { data: OperationsSnapshot }) {
   </TableFrame>;
 }
 
+function ProcessTelemetry({ metrics }: { metrics: OperationsSnapshot["processMetrics"] }) {
+  return <>
+    <div>
+      <h2 className="mb-2 text-lg font-semibold">PostgreSQL telemetry</h2>
+      <p className="mb-3 text-xs text-muted-foreground">Global metrics from the PostgreSQL collector; rates use a one-minute window. Missing samples show N/A.</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <Kpi label="PostgreSQL CPU" value={metrics.values.postgresCpuPercent == null ? "N/A" : formatCount(metrics.values.postgresCpuPercent) + "%"} caption="Sampled PostgreSQL processes; 100% = one core" />
+        <Kpi label="Database size" value={metrics.values.postgresDatabaseBytes == null ? "N/A" : formatCount(metrics.values.postgresDatabaseBytes / 1048576) + " MiB"} caption="Configured database" />
+        <Kpi label="Dead task rows" value={metrics.values.postgresDeadTaskRows ?? "N/A"} caption="Estimated; includes rows awaiting vacuum" />
+        <Kpi label="Commits / sec" value={metrics.values.postgresCommitsPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
+        <Kpi label="Rollbacks / sec" value={metrics.values.postgresRollbacksPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
+      </div>
+    </div>
+    <Card className="p-5">
+      <h2 className="text-lg font-semibold">PostgreSQL table scan rates</h2>
+      <p className="mt-1 text-xs text-muted-foreground">One-minute rates across all hubs. Sequential rows are read by sequential scans; index rows are live table rows fetched by index scans. Missing samples show N/A.</p>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead><tr className="border-b border-border text-xs text-muted-foreground"><th className="py-2 pr-4">Table</th><th className="p-2">Sequential scans / sec</th><th className="p-2">Sequential rows / sec</th><th className="p-2">Index scans / sec</th><th className="p-2">Index rows fetched / sec</th></tr></thead>
+          <tbody>
+            {([
+              ["hub_task", metrics.values.taskSeqScansPerSecond, metrics.values.taskSeqRowsPerSecond, metrics.values.taskIndexScansPerSecond, metrics.values.taskIndexRowsPerSecond],
+              ["hub_workflow", metrics.values.workflowSeqScansPerSecond, metrics.values.workflowSeqRowsPerSecond, metrics.values.workflowIndexScansPerSecond, metrics.values.workflowIndexRowsPerSecond]
+            ] as const).map(([name, ...values]) => <tr key={name} className="border-b border-border last:border-0"><th className="py-2 pr-4 font-medium">{name}</th>{values.map((value, i) => <td key={i} className="p-2 tabular-nums">{value == null ? "N/A" : formatCount(value)}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Kpi label="Workflows completed / sec" value={metrics.values.workflowCompletionsPerSecond ?? "N/A"}
+        caption="Workflow completion counter, 1m rate" />
+      <Kpi label="SSE sessions" value={metrics.values.sseConnections === undefined ||
+        metrics.values.sseConnections === null ? "N/A" : metrics.values.sseConnections}
+        caption="Current OTel Prometheus gauge; global" />
+      <Kpi label="Hub claim latency P95" value={formatAge(metrics.values.hubClaimP95Seconds ?? null)}
+        caption="Claim operation latency, last 5m" />
+      <Kpi label="Worker execution P95" value={formatAge(metrics.values.workerExecutionP95Seconds ?? null)}
+        caption="Activity worker duration, last 5m" />
+      <Kpi label="Timer fire lag P95" value={formatAge(metrics.values.timerLagP95Seconds ?? null)}
+        caption="Scheduler trigger lateness, last 5m" />
+      <Kpi label="Hub HTTP latency P95" value={formatAge(metrics.values.httpP95Seconds ?? null)}
+        caption="HTTP request latency, last 5m" />
+      <Kpi label="Scheduler errors (5m)" value={metrics.values.timerSchedulerErrors5m ?? "N/A"}
+        caption="OTel counter increase" />
+    </div>
+    <Card className="p-5">
+      <p className="font-semibold">Gateway delivery and process telemetry</p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {metrics.available ? "Prometheus connected. Process metrics are global across business hubs." :
+          "Prometheus unavailable or unconfigured. Set WORKFLOW_PROMETHEUS_URL on the monitor server; metrics will show N/A rather than fake zeros."}
+        {" "}Detailed worker/process trends, HTTP routes and SSE counters remain in Grafana.
+      </p>
+    </Card>
+  </>;
+}
+
 export function OperationsDashboard() {
   const pathname = usePathname();
   const suffix = pathname.split("/")[2] || "overview";
@@ -142,7 +198,7 @@ export function OperationsDashboard() {
   const [hub, setHub] = useState("");
   const [windowMinutes, setWindowMinutes] = useState<OperationsWindow>(60);
   const [revision, setRevision] = useState(0);
-  const [data, setData] = useState<OperationsSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<OperationsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -158,9 +214,9 @@ export function OperationsDashboard() {
         const response = await fetch("/api/operations?" + query.toString(), { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Operations API error");
-        if (!disposed) { setData(payload as OperationsSnapshot); setError(null); }
+        if (!disposed) { setSnapshot(payload as OperationsResponse); setError(null); }
       } catch (e) {
-        if (!disposed) { setError(e instanceof Error ? e.message : "Operations API failed"); setData(null); }
+        if (!disposed) { setError(e instanceof Error ? e.message : "Operations API failed"); setSnapshot(null); }
       } finally {
         active = false;
         if (!disposed) setLoading(false);
@@ -172,6 +228,8 @@ export function OperationsDashboard() {
     return () => { disposed = true; window.clearInterval(timer); };
   }, [hub, windowMinutes, revision]);
 
+  const prometheusOnly = snapshot !== null && "hubQueriesEnabled" in snapshot;
+  const data = snapshot && !("hubQueriesEnabled" in snapshot) ? snapshot : null;
   const hubs = useMemo(() => Array.from(new Set([
     ...(data?.partitions.map(p => p.hubId) ?? []),
     ...(data?.activities.map(a => a.hubId) ?? []),
@@ -185,26 +243,29 @@ export function OperationsDashboard() {
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
         <div className="flex items-center gap-2"><h1 className="text-2xl font-bold tracking-tight">Workflow operations</h1>
-          <Badge tone="blue">Hub runtime</Badge></div>
+          <Badge tone="blue">{prometheusOnly ? "Prometheus" : "Hub runtime"}</Badge></div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Live PostgreSQL state Â· durable backlog history Â· auto-refresh every 15 seconds
+          {prometheusOnly ? "Hub monitor queries are disabled. Showing global Prometheus metrics." :
+            "Live PostgreSQL state Â· durable backlog history Â· auto-refresh every 15 seconds"}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Select aria-label="Select business Hub" value={hub} onChange={e => setHub(e.target.value)}>
-          <option value="">All hubs</option>{hubs.map(h => <option key={h} value={h}>{h}</option>)}
-        </Select>
-        <Select aria-label="Select time range" value={windowMinutes}
-          onChange={e => setWindowMinutes(Number(e.target.value) as OperationsWindow)}>
-          <option value={60}>Last hour</option><option value={360}>Last 6 hours</option>
-          <option value={1440}>Last 24 hours</option>
-        </Select>
+        {!prometheusOnly && <>
+          <Select aria-label="Select business Hub" value={hub} onChange={e => setHub(e.target.value)}>
+            <option value="">All hubs</option>{hubs.map(h => <option key={h} value={h}>{h}</option>)}
+          </Select>
+          <Select aria-label="Select time range" value={windowMinutes}
+            onChange={e => setWindowMinutes(Number(e.target.value) as OperationsWindow)}>
+            <option value={60}>Last hour</option><option value={360}>Last 6 hours</option>
+            <option value={1440}>Last 24 hours</option>
+          </Select>
+        </>}
         <Button size="sm" onClick={() => setRevision(v => v + 1)}>
           <RefreshCcw size={14} /> Refresh
         </Button>
       </div>
     </div>
-    <div className="flex flex-wrap gap-1 border-b border-border pb-2">
+    {!prometheusOnly && <div className="flex flex-wrap gap-1 border-b border-border pb-2">
       {sections.map(s => {
         const Icon = s.icon;
         return <Link key={s.id} href={"/operations" + (s.id === "overview" ? "" : "/" + s.id)}
@@ -212,13 +273,13 @@ export function OperationsDashboard() {
             section === s.id ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted")}>
           <Icon size={15} />{s.title}</Link>;
       })}
-    </div>
+    </div>}
     {error && <Card className="border-destructive/40 p-5" role="alert">
       <div className="flex items-center gap-2 font-semibold text-destructive"><AlertTriangle size={17} /> Monitoring unavailable</div>
       <p className="mt-2 text-sm text-muted-foreground">{error}</p>
       <p className="mt-1 text-xs text-muted-foreground">Configure WORKFLOW_HUB_URL and WORKFLOW_HUB_TOKEN; apply migration 011. No fake metrics are displayed.</p>
     </Card>}
-    {!data && !error && <Card className="p-8 text-sm text-muted-foreground">{loading ? "Reading Hub metricsâ€¦" : "No metrics returned"}</Card>}
+    {!snapshot && !error && <Card className="p-8 text-sm text-muted-foreground">{loading ? "Reading Hub metricsâ€¦" : "No metrics returned"}</Card>}
     {data && <>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>Sampled {new Date(data.observedAt).toLocaleString()} Â· {hub || "All hubs"}</span>
@@ -278,60 +339,11 @@ export function OperationsDashboard() {
           <Kpi label="PostgreSQL connections" value={data.database.connections} caption="Connections to Hub database" />
           <Kpi label="Active SQL connections" value={data.database.activeConnections} caption="Currently executing queries" />
         </div>
-        <div>
-          <h2 className="mb-2 text-lg font-semibold">PostgreSQL telemetry</h2>
-          <p className="mb-3 text-xs text-muted-foreground">Global metrics from the PostgreSQL collector; rates use a one-minute window. Missing samples show N/A.</p>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <Kpi label="PostgreSQL CPU" value={data.processMetrics.values.postgresCpuPercent == null ? "N/A" : formatCount(data.processMetrics.values.postgresCpuPercent) + "%"} caption="Sampled PostgreSQL processes; 100% = one core" />
-            <Kpi label="Database size" value={data.processMetrics.values.postgresDatabaseBytes == null ? "N/A" : formatCount(data.processMetrics.values.postgresDatabaseBytes / 1048576) + " MiB"} caption="Configured database" />
-            <Kpi label="Dead task rows" value={data.processMetrics.values.postgresDeadTaskRows ?? "N/A"} caption="Estimated; includes rows awaiting vacuum" />
-            <Kpi label="Commits / sec" value={data.processMetrics.values.postgresCommitsPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
-            <Kpi label="Rollbacks / sec" value={data.processMetrics.values.postgresRollbacksPerSecond ?? "N/A"} caption="Database transactions, 1m rate" />
-          </div>
-        </div>
-        <Card className="p-5">
-          <h2 className="text-lg font-semibold">PostgreSQL table scan rates</h2>
-          <p className="mt-1 text-xs text-muted-foreground">One-minute rates across all hubs. Sequential rows are read by sequential scans; index rows are live table rows fetched by index scans. Missing samples show N/A.</p>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead><tr className="border-b border-border text-xs text-muted-foreground"><th className="py-2 pr-4">Table</th><th className="p-2">Sequential scans / sec</th><th className="p-2">Sequential rows / sec</th><th className="p-2">Index scans / sec</th><th className="p-2">Index rows fetched / sec</th></tr></thead>
-              <tbody>
-                {([
-                  ["hub_task", data.processMetrics.values.taskSeqScansPerSecond, data.processMetrics.values.taskSeqRowsPerSecond, data.processMetrics.values.taskIndexScansPerSecond, data.processMetrics.values.taskIndexRowsPerSecond],
-                  ["hub_workflow", data.processMetrics.values.workflowSeqScansPerSecond, data.processMetrics.values.workflowSeqRowsPerSecond, data.processMetrics.values.workflowIndexScansPerSecond, data.processMetrics.values.workflowIndexRowsPerSecond]
-                ] as const).map(([name, ...values]) => <tr key={name} className="border-b border-border last:border-0"><th className="py-2 pr-4 font-medium">{name}</th>{values.map((value, i) => <td key={i} className="p-2 tabular-nums">{value == null ? "N/A" : formatCount(value)}</td>)}</tr>)}
-              </tbody>
-            </table>
-          </div>
-        </Card>
         <div className="grid gap-4 lg:grid-cols-2">
           <ChartBars title="Activity completion events" description="Terminal tasks per bucket, based on updated_at"
             points={data.trends} property="activityCompleted" />
           <ChartBars title="Active leases" description="Persisted queue samples" points={data.trends} property="leased" isNullable />
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Kpi label="SSE sessions" value={data.processMetrics.values.sseConnections === undefined ||
-            data.processMetrics.values.sseConnections === null ? "N/A" : data.processMetrics.values.sseConnections}
-            caption="Current OTel Prometheus gauge; global" />
-          <Kpi label="Hub claim latency P95" value={formatAge(data.processMetrics.values.hubClaimP95Seconds ?? null)}
-            caption="Claim operation latency, last 5m" />
-          <Kpi label="Worker execution P95" value={formatAge(data.processMetrics.values.workerExecutionP95Seconds ?? null)}
-            caption="Activity worker duration, last 5m" />
-          <Kpi label="Timer fire lag P95" value={formatAge(data.processMetrics.values.timerLagP95Seconds ?? null)}
-            caption="Scheduler trigger lateness, last 5m" />
-          <Kpi label="Hub HTTP latency P95" value={formatAge(data.processMetrics.values.httpP95Seconds ?? null)}
-            caption="HTTP request latency, last 5m" />
-          <Kpi label="Scheduler errors (5m)" value={data.processMetrics.values.timerSchedulerErrors5m ?? "N/A"}
-            caption="OTel counter increase" />
-        </div>
-        <Card className="p-5">
-          <p className="font-semibold">Gateway delivery and process telemetry</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {data.processMetrics.available ? "Prometheus connected. Process metrics are global across business hubs." :
-              "Prometheus unavailable or unconfigured. Set WORKFLOW_PROMETHEUS_URL on the monitor server; metrics will show N/A rather than fake zeros."}
-            {" "}Detailed worker/process trends, HTTP routes and SSE counters remain in Grafana.
-          </p>
-        </Card>
       </>}
       {section === "workers" && <>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -359,5 +371,6 @@ export function OperationsDashboard() {
         </Card>
       </>}
     </>}
+    {snapshot && (prometheusOnly || section === "hub") && <ProcessTelemetry metrics={snapshot.processMetrics} />}
   </div>;
 }

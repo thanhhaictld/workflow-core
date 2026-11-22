@@ -386,7 +386,7 @@ index-only migrations (023 and 025–027), then apply 031 after 030 with
 autocommit, never inside a transaction block, followed by additive migration
 032 for task-ID hints. Repeated application of 032 is safe.
 Task data, unique indexes, the three candidate discovery indexes, the global
-claim-sequence index, readiness/expiry, operations and reconciliation indexes
+claim-sequence index, readiness/expiry, and reconciliation indexes
 are retained. Migration 028 remains in the repository for databases where it
 was previously installed; active setup does not apply or reverse it.
 
@@ -396,6 +396,17 @@ previous index set for a compatibility rollback, explicitly reapply migrations
 023 and 025–027 after normal setup; their index builds can block writes. Use
 equivalent `CREATE INDEX CONCURRENTLY` statements outside a transaction for an
 online restore. Subsequent normal schema setup applies 031 and removes them again.
+
+Migration `039_hub_retire_task_operations_index.sql` removes the broad
+`ix_hub_task_operations` index on existing databases. Run it with autocommit.
+Migration 011 still creates the monitor sample table and the workflow operations
+index. If a deployment needs the former task index for selective monitor reads,
+restore it explicitly outside a transaction after normal schema setup.
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_hub_task_operations
+    ON wfc_scale.hub_task (hub_id, partition_id, task_type, state, due_at);
+```
 
 ### Verification
 

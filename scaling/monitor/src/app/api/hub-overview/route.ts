@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rejectDisabledHubMonitorQueries } from "@/lib/hub-monitor-queries";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -6,6 +7,8 @@ export const runtime = "nodejs";
 // The browser never receives the Hub bearer token. This development-only
 // server endpoint exposes aggregate counts, not workflow/tenant payloads.
 export async function GET() {
+  const disabled = rejectDisabledHubMonitorQueries();
+  if (disabled) return disabled;
   const base = process.env.WORKFLOW_HUB_URL;
   const token = process.env.WORKFLOW_HUB_TOKEN;
   if (!base || !token) {
