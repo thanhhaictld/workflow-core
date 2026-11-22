@@ -97,7 +97,8 @@ internal sealed class HubNativeWorkflowWorker(HubRestClient client,HubNativeCata
 }
 
 internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCatalog catalog,HubRuntimeOptions options,
-    HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup)
+    HubNativeExecutor executor,ILogger<HubNativeActivityWorker> logger,HubRuntimeStartup startup,
+    HubCompletionBatcher? batcher = null)
     : HubRuntimeWorker(client,options,logger,options.ActivityConcurrency,
         catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,a.Registration.Version))
             .Concat(options.SequentialVersionOneCompatibility ? catalog.Activities.Where(a=>options.WorkerHub is null || a.Registration.HubId==options.WorkerHub).Select(a=>new HubCapability(a.Registration.HubId,a.Registration.ActivityType,1)) : [])
@@ -106,6 +107,17 @@ internal sealed class HubNativeActivityWorker(HubRestClient client,HubNativeCata
     protected override async Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct)=>
         new HubTaskResultRequest(owner,task.Epoch,await executor.ExecuteActivityAsync(task,ct));
     protected override string ResultPath(HubLeasedTask task)=>$"api/hub/tasks/{task.Id}/complete";
+
+    protected override async Task<HttpResponseMessage> SendResultAsync(
+        HubLeasedTask task,object result,CancellationToken ct)
+    {
+        if(!options.CompletionMicrobatchEnabled)
+            return await base.SendResultAsync(task,result,ct);
+        if(batcher is null || result is not HubTaskResultRequest completion)
+            throw new InvalidOperationException("Missing Hub native completion batcher");
+        var status=await batcher.SubmitAsync(task,completion,ct);
+        return new HttpResponseMessage(status);
+    }
 }
 
 /// <summary>Bounded remote worker lane. SSE hints reduce latency; periodic claims
@@ -120,6 +132,9 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
         new("lane", workflows is null ? "activity" : "workflow");
     protected abstract Task<object> Execute(HubLeasedTask task,string owner,CancellationToken ct);
     protected abstract string ResultPath(HubLeasedTask task);
+    protected virtual Task<HttpResponseMessage> SendResultAsync(
+        HubLeasedTask task,object result,CancellationToken ct) =>
+        client.Http.PostAsJsonAsync(ResultPath(task),result,ct);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -910,7 +925,7 @@ internal abstract class HubRuntimeWorker(HubRestClient client,HubRuntimeOptions 
                     completionSpan?.SetTag("task.id",task.Id.ToString());
                     completionSpan?.SetTag("workflow.id",task.WorkflowId?.ToString());
                     var completionStarted=Stopwatch.GetTimestamp();
-                    using var response=await client.Http.PostAsJsonAsync(ResultPath(task),result,execution.Token);
+                    using var response=await SendResultAsync(task,result,execution.Token);
                     var completionSeconds=Stopwatch.GetElapsedTime(completionStarted).TotalSeconds;
                     completionSpan?.SetTag("http.response.status_code",(int)response.StatusCode);
                     completionSpan?.SetTag("completion.duration_seconds",completionSeconds);
