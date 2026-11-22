@@ -9,10 +9,10 @@ This document records what the `hub-matching-failover-suite.ps1` integration run
 | `before-claim` | Hard-kill Hub A before workflows are submitted | Hub B acquires the owner epoch; worker reconnects; both workflows finish |
 | `after-claim` | Delay SSE transmission and hard-kill Hub A after a durable task lease is committed | Lost delivery is recovered via lease expiry; owner takeover and completion are durable |
 | `during-execution` | Hard-kill Hub A while the surviving worker executes an activity | Worker reconnects to Hub B; running work is completed without bypassing the task fence |
-| `worker-before-claim` | Hard-kill an idle worker with no graceful drain; start a replacement with its original credit journal | Replacement reconnects to the original Hub and executes both newly submitted workflows |
-| `worker-during-execution` | Hard-kill the worker after a `provision-tenant` activity begins; start a replacement with its original credit journal | Orphaned lease expires; replacement claims remaining work; both workflows complete |
+| `worker-before-claim` | Hard-kill an idle worker with no graceful drain; start a stateless replacement with new empty scratch storage | Replacement reconnects to the original Hub and executes both newly submitted workflows |
+| `worker-during-execution` | Hard-kill the worker after a `provision-tenant` activity begins; start a stateless replacement with new empty scratch storage | Orphaned lease expires; replacement claims remaining work; both workflows complete |
 
-The worker cases deliberately reuse the same `WFC_HUB_PUSH_CREDIT_JOURNAL` file after a process hard-kill, approximating a same-identity restart on a persistent mount. Each test checks durable task completion, no duplicate same-epoch execution starts, no duplicate *observed* side-effect dispatch keys in the sample, a bounded candidate reservation count, and rejection of a stale heartbeat when an old lease was captured. Hub takeover tests also record owner-takeover and SSE-reconnect intervals.
+The worker cases hard-kill the old worker and launch a **new stateless incarnation on separate empty scratch storage**, without a persisted grant journal or reused processor identity. The Hub expires old session credits and PostgreSQL leases govern recovery. The `worker-during-execution` scenario requires an actual task lease retry. Each test checks durable task completion, no duplicate same-epoch execution starts, no duplicate *observed* side-effect dispatch keys in the sample, a bounded candidate reservation count, and rejection of a stale heartbeat when an old lease was captured. Hub takeover tests also record owner-takeover and SSE-reconnect intervals.
 
 The test sends two onboarding v5 workflows, with three sample activity executions per workflow. It is a **correctness smoke test**, not a sustained-load or disaster-recovery benchmark. Its sample side-effect log is not an independent external-service exactly-once guarantee.
 
@@ -36,7 +36,7 @@ Each scenario writes an event timeline, old task lease, owner observations, side
 
 - Simultaneous Hub and worker hard-kill under live workload.
 - SIGTERM with a shortened Kubernetes termination grace period, preStop hooks, or an eviction with partial drain.
-- Replacement on a different node **without** the original persisted journal (and the resulting lost local credit state).
+- Real multi-node Kubernetes eviction/rescheduling (this harness simulates a new pod filesystem without shared storage).
 - Network partitions where a process is alive but separated from PostgreSQL or peer Hubs.
 - Sustained chaos at 16+ processors, multi-Hub owner churn, and measured recovery p95/p99.
 - Real external activity side effects in the window after effect execution and before durable completion; idempotency must be exercised against a downstream service.
