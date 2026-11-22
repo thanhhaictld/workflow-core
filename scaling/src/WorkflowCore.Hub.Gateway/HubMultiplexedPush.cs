@@ -213,6 +213,9 @@ internal sealed class HubMultiplexedPush(
             RemoveIfDrained(session);
         }
         session.Stop.Cancel();
+        // A dead SSE stream cannot consume uncommitted matcher credits.
+        // Do not release committed or ambiguous leases: they remain fenced.
+        if (candidate.Enabled) candidate.CancelUncommittedSessionCredits(session.Identity.SessionId);
     }
 
     private void RemoveIfDrained(Session session)
