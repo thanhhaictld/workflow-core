@@ -154,6 +154,9 @@ try {
     Mark 'workflows-completed'
     Wait-Until {
         $d = Invoke-RestMethod $diagUrl -Headers $headers -TimeoutSec 2
+        # Preserve the last observation even when the cleanup assertion times out,
+        # so leaked credit, pending admission, and stale SSE session are distinguishable.
+        $result.postCompletionDiagnostics = $d
         # One stream carries the two independently configured four-slot budgets.
         $d.pushConnected -eq 1 -and
             $d.candidateCredits -ge 0 -and
