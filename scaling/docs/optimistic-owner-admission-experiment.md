@@ -7,7 +7,7 @@ The Hub can avoid taking `FOR SHARE` on
 contention with shard owner renewals, release and takeover. This is an
 **experimental consistency trade-off**, not a production default.
 
-Base: PR #41 (`hub-memory-candidates-luna`).
+Base: PR #41 (`thanhhaictld/hub-memory-candidates-luna`).
 
 ## Switching modes
 
@@ -68,7 +68,7 @@ default `false` setting.
 - `.github/workflows/workflow-hub-sse-stress-1000-16.yml`: strict versus
   optimistic at **4, 8, and 16** processor replicas, using two Hubs and
   four matching shards. Automatic only for pull requests targeting
-  `hub-memory-candidates-luna`; also supports manual dispatch.
+  `thanhhaictld/hub-memory-candidates-luna`; also supports manual dispatch.
 - Compare throughput (workflows/s), completion p95/p99, PostgreSQL commits,
   connection pressure, owner-lock wait samples, and task failure count.
 - All 1,000 workflow completions must be durable with zero failures.
