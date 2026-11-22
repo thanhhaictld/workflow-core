@@ -29,6 +29,7 @@ public sealed class HubSseMixedBatchClaimTests
     [InlineData("activity",8)]
     [InlineData("activity",16)]
     [InlineData("activity",32)]
+    [InlineData("activity",64)]
     [InlineData("standalone-task",8)]
     public async Task QueuedCreditsClaimAndDispatchBatchesForAllKinds(string type,int count)
     {
@@ -172,7 +173,7 @@ public sealed class HubSseMixedBatchClaimTests
 
     [Theory]
     [InlineData(0,0)]
-    [InlineData(33,0)]
+    [InlineData(65,0)]
     [InlineData(4,6)]
     public void InvalidSseBatchParametersRejectAtStartup(int batchSize,int coalesceMs)
     {
