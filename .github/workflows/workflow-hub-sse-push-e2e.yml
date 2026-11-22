@@ -53,15 +53,15 @@ jobs:
           set -euo pipefail
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" config --quiet
-          make --dry-run help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-test-4k obs-test obs-matcher-failover \
-            ups-batch-4 ups-batch-8 ups-batch-16 batch-4 batch-8 batch-16 > /tmp/make-targets.txt
+          make --dry-run help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-test-4k obs-test obs-matcher-failover > /tmp/make-targets.txt
           grep -Fq 'Processors 16' /tmp/make-targets.txt
-          # Every 'batch-N' must bootstrap once and issue one audited stress test
-          # with the same N (never inherit ups-16's hard-coded processor count).
+          # Every 'batch-N' must bootstrap once and issue one audited stress
+          # test with matching N, independent of ups-16's processor setting.
           for processors in 4 8 16; do
-            test "$(grep -c -- "-Processors $processors" /tmp/make-targets.txt)" -eq 2
+            make --dry-run "batch-$processors" > "/tmp/make-batch-$processors.txt"
+            test "$(grep -c -- "-Processors $processors" "/tmp/make-batch-$processors.txt")" -eq 2
+            test "$(grep -c 'stress-test' "/tmp/make-batch-$processors.txt")" -eq 1
           done
-          test "$(grep -c 'stress-test' /tmp/make-targets.txt)" -ge 3
       - name: Build and test SSE distributor credit protocol
         run: |
           dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
