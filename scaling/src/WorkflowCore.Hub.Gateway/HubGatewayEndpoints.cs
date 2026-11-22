@@ -50,8 +50,7 @@ public static class HubGatewayEndpoints
             services.AddHostedService<PostgresHubNotificationDispatcher>();
         // Each Gateway pod holds one dedicated LISTEN session. The existing
         // PostgreSQL sweep remains authoritative if hints are lost or disabled.
-        var notifyFlag = Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_ENABLED");
-        if (notifyFlag != "0" && !string.Equals(notifyFlag, "false", StringComparison.OrdinalIgnoreCase))
+        if (PostgresHubNotificationListener.Enabled)
             services.AddHostedService(sp => new PostgresHubNotificationListener(
                 Environment.GetEnvironmentVariable("WFC_HUB_PG_NOTIFY_CONNECTION") ?? connectionString,
                 sp.GetRequiredService<HubReadinessBroadcaster>(),

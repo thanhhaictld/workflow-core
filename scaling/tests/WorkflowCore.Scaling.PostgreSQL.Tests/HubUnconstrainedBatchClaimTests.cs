@@ -267,7 +267,7 @@ public sealed class HubUnconstrainedBatchClaimTests
     }
 
     [Fact]
-    public async Task NativeBatchIgnoresHistoricalConstraintRows()
+    public async Task NativeBatchRejectsTasksWithResidualConstraintRows()
     {
         if (Database is null) return;
         var hub = Hub();
@@ -289,7 +289,7 @@ public sealed class HubUnconstrainedBatchClaimTests
             await cmd.ExecuteNonQueryAsync();
         }
         var leases = await Claim(store, hub, "native-a", 8, "__native_workflow__");
-        Assert.Equal(new HashSet<Guid> { free, constrained }, leases.Select(x => x.Id).ToHashSet());
+        Assert.Equal(new HashSet<Guid> { free }, leases.Select(x => x.Id).ToHashSet());
         Assert.Empty(await Claim(store, hub, "native-b", 8, "__native_workflow__"));
     }
 

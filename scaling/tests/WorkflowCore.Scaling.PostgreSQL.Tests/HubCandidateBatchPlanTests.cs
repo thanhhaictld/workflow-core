@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Npgsql;
 using NpgsqlTypes;
 using WorkflowCore.Hub;
@@ -28,7 +29,10 @@ public sealed class HubCandidateBatchPlanTests
         if (!freshStatistics)
             await SeedAsync(101, backlog);
 
-        var sql = HubTaskStore.CandidateBatchAdmissionSql.Replace("wfc_scale.hub_task", "pg_temp.hub_task");
+        // Match the full table identifier only: hub_task_constraint stays
+        // authoritative in wfc_scale and is not a temp-table fixture.
+        var sql = Regex.Replace(HubTaskStore.CandidateBatchAdmissionSql,
+            @"wfc_scale\.hub_task\b", "pg_temp.hub_task");
         foreach (var mode in new[] { "force_custom_plan", "force_generic_plan" })
         foreach (var size in new[] { 1, 8, 16, 32 })
         {
@@ -92,9 +96,9 @@ public sealed class HubCandidateBatchPlanTests
         {
             await using var command = new NpgsqlCommand("""
                 INSERT INTO pg_temp.hub_task
-                    (id,sequence,hub_id,partition_id,task_type,task_version,payload,state,attempts,max_attempts,due_at,created_at,updated_at,epoch)
+                    (id,sequence,hub_id,partition_id,task_type,task_version,payload,state,attempts,max_attempts,due_at,created_at,updated_at,epoch,admission)
                 SELECT (lpad(to_hex(sequence),8,'0') || '-0000-0000-0000-000000000000')::uuid,
-                       sequence,'plan',0,'activity',1,'{}',0,0,5,now(),now(),now(),0
+                       sequence,'plan',0,'activity',1,'{}',0,0,5,now(),now(),now(),0,1
                 FROM generate_series(@first,@last) AS rows(sequence)
                 """, db, tx);
             command.Parameters.AddWithValue("first", first);

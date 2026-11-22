@@ -378,13 +378,18 @@ public sealed class HubPartitionCandidateRegistryTests
     }
 
     [Fact]
-    public async Task SchedulerSerializesSqlAndRotatesPartitionsUnderPressure()
+    public async Task DiscoveryRunsIndependentPartitionsConcurrentlyButNotTheSamePartition()
     {
         var clock = new Clock(); var source = new Discovery { Entered = new(TaskCreationOptions.RunContinuationsAsynchronously), Release = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         using var registry = new HubPartitionCandidateRegistry(source,Options(),clock); registry.StartGeneration(Owner("one"),64); registry.StartGeneration(Owner("two"),64);
         var first = registry.RunOneTurnAsync(clock.Now,default); await source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.False(await registry.RunOneTurnAsync(clock.Now,default)); Assert.Equal(1,source.MaxActive);
-        source.Release.SetResult(); Assert.True(await first); source.Entered=null;
+        var other=registry.RunOneTurnAsync(clock.Now,default);
+        Assert.Equal(2,source.MaxActive);
+        Assert.False(await registry.RunOneTurnAsync(clock.Now,default));
+        source.Release.SetResult();
+        Assert.True(await first);
+        Assert.True(await other);
+        source.Entered=null;
         await Pump(registry,clock,6);
         Assert.Contains(source.Calls,x => x.Hub=="one"); Assert.Contains(source.Calls,x => x.Hub=="two");
         var snapshot=registry.Snapshot(); Assert.InRange(snapshot.Bytes,0,262144); Assert.InRange(snapshot.Entries,0,16); Assert.Equal(0,snapshot.InFlightPages);
@@ -423,6 +428,59 @@ public sealed class HubPartitionCandidateRegistryTests
         Assert.False(registry.AddCredit(hub,0,2,Credit("two",hub)));
         registry.ResolveUncertain(reservation.Id,HubCandidateUncertainResolution.AuthoritativeNoCommit,clock.Now);
         Assert.True(registry.AddCredit(hub,0,2,Credit("two",hub)));
+    }
+
+
+    [Fact]
+    public async Task BucketSignalUsesThrottledTargetedQueryWithoutRestartingRecovery()
+    {
+        var clock = new Clock();
+        var source = new Discovery();
+        var hub = "light-signal";
+        using var registry = new HubPartitionCandidateRegistry(source,
+            Options() with { SignalThrottleCadence = TimeSpan.FromMilliseconds(100) }, clock);
+        registry.StartGeneration(Owner(hub), 64);
+        await Pump(registry,clock,4); // Finish initial durable recovery sweep.
+        Assert.Equal(1, registry.Snapshot().CompletedSweeps);
+        var initialCaptures = source.Captures;
+        var before = source.Calls.Count;
+        for (var n=0;n<100;n++) registry.Notify(hub,0,1,bucket:0);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(initialCaptures,source.Captures);
+        Assert.Equal(before+1,source.Calls.Count);
+        Assert.Equal(0,source.Calls[^1].Bucket);
+        Assert.Equal(HubCandidateStream.ReadyDue,source.Calls[^1].Stream);
+        for (var n=0;n<100;n++) registry.Notify(hub,0,1,bucket:0);
+        Assert.False(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(before+1,source.Calls.Count); // Still throttled.
+        clock.Advance(TimeSpan.FromMilliseconds(101));
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(before+2,source.Calls.Count);
+        Assert.Equal(initialCaptures,source.Captures);
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
+    }
+
+
+    [Fact]
+    public async Task ThrottledSignalQueryRotatesBucketsDuringAHotBucketStorm()
+    {
+        var clock = new Clock();
+        var source = new Discovery();
+        var hub = "signal-bucket-fairness";
+        using var registry = new HubPartitionCandidateRegistry(source,
+            Options() with { SignalThrottleCadence = TimeSpan.FromMilliseconds(100) }, clock);
+        registry.StartGeneration(Owner(hub),32);
+        await Pump(registry,clock,6);
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
+        var before = source.Calls.Count;
+        for (var i=0;i<20;i++) registry.Notify(hub,0,1,bucket:0);
+        registry.Notify(hub,0,1,bucket:32);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        clock.Advance(TimeSpan.FromMilliseconds(101));
+        for (var i=0;i<20;i++) registry.Notify(hub,0,1,bucket:0);
+        Assert.True(await registry.RunOneTurnAsync(clock.Now,default));
+        Assert.Equal(new[] {0,32},source.Calls.Skip(before).Select(x => x.Bucket).ToArray());
+        Assert.Equal(1,registry.Snapshot().CompletedSweeps);
     }
 
     [Fact]

@@ -82,12 +82,20 @@ public static class HubTelemetry
         Meter.CreateHistogram<int>("workflow_hub_candidate_batch_fill", "{task}");
     public static readonly Histogram<double> CandidateAdmissionLatency =
         Meter.CreateHistogram<double>("workflow_hub_candidate_admission_seconds", "s");
+    public static readonly Histogram<double> CandidateOwnerFenceWait =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_owner_fence_wait_seconds", "s");
+    public static readonly Histogram<double> CandidateOwnerRenewalDuration =
+        Meter.CreateHistogram<double>("workflow_hub_candidate_owner_renewal_seconds", "s");
     public static readonly Histogram<double> CandidateDemandToAdmissionDuration =
         Meter.CreateHistogram<double>("workflow_hub_candidate_demand_to_admission_seconds", "s");
     public static readonly UpDownCounter<long> CandidateWaitingSessions =
         Meter.CreateUpDownCounter<long>("workflow_hub_candidate_waiting_sessions", "{session}");
     public static readonly Histogram<double> CandidateCapacityWait =
         Meter.CreateHistogram<double>("workflow_hub_candidate_capacity_wait_seconds", "s");
+    public static readonly Counter<long> CandidateSignalBucketQueries =
+        Meter.CreateCounter<long>("workflow_hub_candidate_signal_bucket_queries", "{query}");
+    public static readonly Counter<long> CandidateSignalHintsCoalesced =
+        Meter.CreateCounter<long>("workflow_hub_candidate_signal_hints_coalesced", "{hint}");
     public static readonly Counter<long> CandidateDiscoveryRows =
         Meter.CreateCounter<long>("workflow_hub_candidate_discovery_rows", "{row}");
     public static readonly Counter<long> CandidateHintsReceived =

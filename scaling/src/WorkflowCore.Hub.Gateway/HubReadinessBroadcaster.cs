@@ -19,7 +19,11 @@ public sealed class HubReadinessBroadcaster(
     private readonly ConcurrentDictionary<Guid, Subscriber> _clients = new();
     private readonly bool _pushEnabled =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
+    private readonly bool _postgresNotificationsEnabled = PostgresHubNotificationListener.Enabled;
     private long _lastMatchingRecoveryAt;
+    private long _lastHubWideRecoveryAt;
+    private readonly bool _candidateSignalsEnabled =
+        Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_CANDIDATES_ENABLED") is "true" or "1" or "True";
     private (string Hub, string TaskType, int Version, int Partition)? _recoveryCursor;
     private readonly SemaphoreSlim _matchingRecoveryGate = new(1, 1);
     public int ConnectedCount => _clients.Count;
@@ -42,16 +46,15 @@ public sealed class HubReadinessBroadcaster(
 
     /// <summary>
     /// Wake legacy matchers and SSE subscribers after a local durable mutation,
-    /// and request bounded indexed recovery. Exact PostgreSQL task-ID events use
-    /// PublishCandidateTaskChanged and do not dirty every owner bucket.
+    /// and forward any available partition hint. PostgreSQL signals drive candidate
+    /// discovery for unpartitioned hints unless the listener is disabled.
     /// </summary>
     public void PublishFallback(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
     {
-        if (!string.IsNullOrEmpty(hub))
-        {
-            TaskReady?.Invoke(hub, taskType, version, taskPartitionId);
-            CandidateRescanRequested?.Invoke(hub, taskType, version, taskPartitionId);
-        }
+        if (taskPartitionId.HasValue || !_postgresNotificationsEnabled)
+            PublishMatchingHint(hub, taskType, version, taskPartitionId);
+        else
+            PublishMatchingFallbackHint(hub, taskType, version, taskPartitionId);
         PublishLegacy(hub);
     }
 
@@ -131,23 +134,33 @@ public sealed class HubReadinessBroadcaster(
     /// <summary>Catch up after LISTEN/reconnect; also used by the periodic safety sweep.</summary>
     public async Task ReconcileReadyAsync(CancellationToken ct)
     {
-        foreach (var hub in await store.ReadyHubsAsync(ct))
-            PublishRecoveryHub(hub);
+        // Each candidate owner already performs an indexed durable recovery
+        // sweep. The old hub-wide query is retained as a slower safety net,
+        // not a two-second source of full rediscovery under continuous load.
+        var now = Stopwatch.GetTimestamp();
+        if (!_candidateSignalsEnabled || _lastHubWideRecoveryAt == 0 ||
+            Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastHubWideRecoveryAt)) >= TimeSpan.FromSeconds(30))
+        {
+            foreach (var hub in await store.ReadyHubsAsync(ct))
+                PublishRecoveryHub(hub);
+            Interlocked.Exchange(ref _lastHubWideRecoveryAt, now);
+        }
         if (!_pushEnabled) return;
 
         // Recovery must not turn into a worker *SQL-claim storm*: every
         // 10 seconds one Hub-wide query yields task type + partition hints.
         // Newly committed tasks normally use PostgreSQL LISTEN/NOTIFY.
-        var now = Stopwatch.GetTimestamp();
+        now = Stopwatch.GetTimestamp();
+        var matchingRecoverySeconds = _candidateSignalsEnabled ? 30 : 10;
         if (_lastMatchingRecoveryAt != 0 &&
-            Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastMatchingRecoveryAt)).TotalSeconds < 10)
+            Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastMatchingRecoveryAt)).TotalSeconds < matchingRecoverySeconds)
             return;
         if (!await _matchingRecoveryGate.WaitAsync(0, ct)) return;
         try
         {
             now = Stopwatch.GetTimestamp();
             if (_lastMatchingRecoveryAt != 0 &&
-                Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastMatchingRecoveryAt)).TotalSeconds < 10)
+                Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastMatchingRecoveryAt)).TotalSeconds < matchingRecoverySeconds)
                 return;
             // A failed scan must be retried on the next sweep.
             // Continue from the previous page instead of repeatedly scanning

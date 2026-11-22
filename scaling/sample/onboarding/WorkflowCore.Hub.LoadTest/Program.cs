@@ -192,7 +192,7 @@ else if (phase.Equals("verify", StringComparison.OrdinalIgnoreCase))
     var completed = Field(summary, "completed");
     var failed = Field(summary, "failed");
 
-    // Verify real three-step workflow results and ordered, durable history.
+    // Verify persisted step order for the supported code-first workflow version.
     var sampled = 0;
     foreach (var id in previous.RootElement.GetProperty("sampleWorkflowIds")
                  .EnumerateArray().Select(x => x.GetString()).Where(x => x is not null))
@@ -202,13 +202,16 @@ else if (phase.Equals("verify", StringComparison.OrdinalIgnoreCase))
         var steps = history.EnumerateArray()
             .Where(x => x.GetProperty("eventType").GetString() == "StepCompleted")
             .Select(x => x.GetProperty("stepIndex").GetInt32()).ToArray();
-        var correct = status.GetProperty("state").GetString() == "Complete" && steps.SequenceEqual(new[] { 0, 1, 2 });
-        if (status.GetProperty("version").GetInt32()>=2)
+        var workflowVersion = status.GetProperty("version").GetInt32();
+        var expectedSteps = workflowVersion >= 4 ? new[] { 0, 1, 2, 3 } : new[] { 0, 1, 2 };
+        var correct = status.GetProperty("state").GetString() == "Complete" && steps.SequenceEqual(expectedSteps);
+        if (workflowVersion>=2)
         {
             var runtime=await GetJson($"api/hub/workflows/{id}/native-runtime",CancellationToken.None);
             var data=runtime.GetProperty("snapshot").GetProperty("Data").GetProperty("value");
             correct=correct && data.GetProperty("Validated").GetBoolean() && data.GetProperty("WelcomeSent").GetBoolean() &&
-                !string.IsNullOrEmpty(data.GetProperty("WorkspaceId").GetString());
+                !string.IsNullOrEmpty(data.GetProperty("WorkspaceId").GetString()) &&
+                (workflowVersion < 4 || data.GetProperty("AccessConfigured").GetBoolean());
         }
         else
         {

@@ -113,6 +113,89 @@ public sealed class HubPostgresNotificationTests
         }
     }
 
+
+    [Fact]
+    public async Task LightweightSignalsCoalesceMultirowStatementsByBucketAndWakeOncePerBucket()
+    {
+        if (Database is null) return;
+        var hub = Hub();
+        var matching = new List<string>();
+        var legacy = new List<string>();
+        await using var listener = new NpgsqlConnection(Database);
+        await listener.OpenAsync();
+        listener.Notification += (_, e) =>
+        {
+            if (e.Channel == "wfc_hub_matching_ready") matching.Add(e.Payload);
+            if (e.Channel == "wfc_hub_task_ready") legacy.Add(e.Payload);
+        };
+        await using (var listen = new NpgsqlCommand(
+            "LISTEN wfc_hub_matching_ready; LISTEN wfc_hub_task_ready", listener))
+            await listen.ExecuteNonQueryAsync();
+        await using var writer = new NpgsqlConnection(Database);
+        await writer.OpenAsync();
+        await using (var tx = await writer.BeginTransactionAsync())
+        {
+            await using var insert = new NpgsqlCommand("""
+                SET LOCAL wfc.hub_candidate_task_id_hints='off';
+                SET LOCAL wfc.hub_notification_outbox='off';
+                INSERT INTO wfc_scale.hub_task
+                    (id,hub_id,partition_id,task_type,task_version,payload)
+                SELECT gen_random_uuid(),@hub,
+                       CASE WHEN n%2=0 THEN 64 ELSE 1 END,'bulk-ready',1,'{}'::jsonb
+                FROM generate_series(1,100) n
+                """, writer, tx);
+            insert.Parameters.AddWithValue("hub", hub);
+            await insert.ExecuteNonQueryAsync();
+            // PostgreSQL only delivers a notification after commit.
+            Assert.Empty(matching);
+            await tx.CommitAsync();
+        }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (matching.Count < 2 || legacy.Count < 1)
+            await listener.WaitAsync(timeout.Token);
+        Assert.Equal(2, matching.Count);
+        Assert.Single(legacy);
+        Assert.Equal(hub, legacy[0]);
+        var buckets = matching.Select(payload =>
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(payload);
+            Assert.Equal(hub, json.RootElement.GetProperty("hub").GetString());
+            Assert.Equal("signal", json.RootElement.GetProperty("kind").GetString());
+            Assert.False(json.RootElement.TryGetProperty("taskId", out _));
+            return json.RootElement.GetProperty("partition").GetInt32();
+        }).Order().ToArray();
+        Assert.Equal(new[] {0,1}, buckets);
+
+        matching.Clear(); legacy.Clear();
+        await using (var lease = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task SET state=1,owner='bulk-worker',
+                lease_until=now()+interval '1 minute',epoch=epoch+1
+            WHERE hub_id=@hub
+            """, writer))
+        {
+            lease.Parameters.AddWithValue("hub",hub);
+            await lease.ExecuteNonQueryAsync();
+        }
+        using (var quiet = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+        {
+            try { await listener.WaitAsync(quiet.Token); }
+            catch (OperationCanceledException) when (quiet.IsCancellationRequested) { }
+        }
+        Assert.Empty(matching);
+        await using (var retry = new NpgsqlCommand("""
+            UPDATE wfc_scale.hub_task SET state=0,due_at=now(),
+                owner=NULL,lease_until=NULL WHERE hub_id=@hub
+            """, writer))
+        {
+            retry.Parameters.AddWithValue("hub",hub);
+            await retry.ExecuteNonQueryAsync();
+        }
+        using var resume = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (matching.Count < 2)
+            await listener.WaitAsync(resume.Token);
+        Assert.Equal(2, matching.Count);
+    }
+
     [Fact]
     public async Task ExactTaskIdHintIsCommitCoupledForInsertAndStateInvalidation()
     {
@@ -260,7 +343,9 @@ public sealed class HubPostgresNotificationTests
         Assert.Equal(1, Volatile.Read(ref readyNotifications));
         using var json = System.Text.Json.JsonDocument.Parse(received);
         Assert.Equal(hub, json.RootElement.GetProperty("hub").GetString());
-        Assert.Equal(64, json.RootElement.GetProperty("partition").GetInt32());
+        // The lightweight default groups physical partitions into 64 buckets.
+        Assert.Equal(0, json.RootElement.GetProperty("partition").GetInt32());
+        Assert.Equal("signal", json.RootElement.GetProperty("kind").GetString());
         Assert.False(json.RootElement.TryGetProperty("taskId", out _));
         received = null;
         await using (var claim = new NpgsqlCommand("UPDATE wfc_scale.hub_task SET state=1,owner='legacy-worker',lease_until=now()+interval '1 minute',epoch=epoch+1 WHERE id=@id", writer))
@@ -408,24 +493,54 @@ public sealed class HubPostgresNotificationTests
         finally { await listener.StopAsync(CancellationToken.None); }
     }
 
-    [Fact]
-    public async Task LocalFallbackAndReadyHubReconciliationRequestCandidateRecovery()
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("FaLsE", false)]
+    [InlineData("0", false)]
+    public async Task UnpartitionedLocalFallbackDefersCandidateDiscoveryWhenNotificationsAreEnabled(
+        string? notifyFlag, bool notificationsEnabled)
     {
-        if (Database is null) return;
+        if (Database is not { } database) return;
+        const string setting = "WFC_HUB_PG_NOTIFY_ENABLED";
+        var previous = Environment.GetEnvironmentVariable(setting);
+        try
+        {
+            Environment.SetEnvironmentVariable(setting, notifyFlag);
+            await VerifyLocalFallbackAsync(database, notificationsEnabled);
+        }
+        finally { Environment.SetEnvironmentVariable(setting, previous); }
+    }
+
+    private static async Task VerifyLocalFallbackAsync(string database, bool notificationsEnabled)
+    {
         var hub = Hub();
-        await using var store = new HubTaskStore(Database);
+        await using var store = new HubTaskStore(database);
         using var readiness = new HubReadinessBroadcaster(store,
             new HubWorkflowStore(store, new HubTaskRouteRegistry(), new HubWorkflowRegistry()),
             NullLogger<HubReadinessBroadcaster>.Instance);
         var rescans = new List<(string Hub, int? Partition)>();
         readiness.CandidateRescanRequested += (observed, _, _, partition) => rescans.Add((observed, partition));
-        readiness.PublishFallback(hub, "local", 1, 64);
-        Assert.Contains(rescans, hint => hint == (hub, 64));
+        var legacyHints = new List<(string Hub, string? Type, int Version, int? Partition)>();
+        readiness.TaskReady += (observed, type, version, partition) => legacyHints.Add((observed, type, version, partition));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var subscriber = readiness.Subscribe([hub], timeout.Token).GetAsyncEnumerator();
+        Assert.True(await subscriber.MoveNextAsync()); // Initial SSE wakeup.
+
+        readiness.PublishFallback(hub, "local", 1);
+        Assert.Equal((hub, "local", 1, (int?)null), Assert.Single(legacyHints));
+        Assert.True(await subscriber.MoveNextAsync());
+        Assert.Equal(hub, subscriber.Current);
+        if (notificationsEnabled) Assert.Empty(rescans);
+        else Assert.Equal((hub, (int?)null), Assert.Single(rescans));
+
         rescans.Clear();
-        await using var writer = new NpgsqlConnection(Database); await writer.OpenAsync();
+        readiness.PublishFallback(hub, "local", 1, 64);
+        Assert.Equal((hub, (int?)64), Assert.Single(rescans));
+        rescans.Clear();
+        await using var writer = new NpgsqlConnection(database); await writer.OpenAsync();
         await InsertTaskAsync(writer, hub);
         await readiness.ReconcileReadyAsync(default);
-        Assert.Contains(rescans, hint => hint.Hub == hub);
+        Assert.Contains(rescans, hint => hint == (hub, null));
     }
 
     [Fact]

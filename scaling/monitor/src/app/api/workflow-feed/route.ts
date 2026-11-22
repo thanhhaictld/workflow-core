@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectDisabledHubMonitorQueries } from "@/lib/hub-monitor-queries";
 import type { WorkflowItem, WorkflowOverview, WorkflowPage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +75,8 @@ function toItem(item: HubItem): WorkflowItem {
 }
 
 export async function GET(request: NextRequest) {
+  const disabled = rejectDisabledHubMonitorQueries();
+  if (disabled) return disabled;
   const query = request.nextUrl.searchParams;
   const hub = query.get("hub") ?? "all";
   const status = query.get("status") ?? "All";

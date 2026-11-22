@@ -7,20 +7,22 @@ internal sealed record HubCandidateCoordinatorOptions(
     long PartitionBytes = 4 * 1024 * 1024, long ProcessBytes = 64 * 1024 * 1024,
     int PartitionCredits = 2048, int ProcessCredits = 16384, int ProcessPartitions = 1024,
     int SequenceProbeEverySweeps = 8, TimeSpan? RecoveryCadence = null,
-    TimeSpan? AdmissionCooldown = null, bool RequireDemand = false)
+    TimeSpan? AdmissionCooldown = null, bool RequireDemand = false,
+    TimeSpan? SignalThrottleCadence = null)
 {
     // Reserve both page objects and temporary materialization. UTF-8 wire bytes
     // alone undercount managed UTF-16 strings, array slots and object headers.
     internal long PageReservationBytes => (long)PageWireBytes * 4 + (long)PageSize * 1024;
     internal TimeSpan Recovery => RecoveryCadence ?? TimeSpan.FromSeconds(10);
     internal TimeSpan Cooldown => AdmissionCooldown ?? TimeSpan.FromSeconds(1);
+    internal TimeSpan SignalThrottle => SignalThrottleCadence ?? TimeSpan.FromMilliseconds(100);
     internal void Validate()
     {
         if (PageSize is < 1 or > 1024 || PageWireBytes is < 256 or > 16 * 1024 * 1024 ||
             PartitionEntries < PageSize || ProcessEntries < PartitionEntries ||
             PartitionBytes < PageReservationBytes || ProcessBytes < PartitionBytes ||
             PartitionCredits < 1 || ProcessCredits < PartitionCredits || ProcessPartitions < 1 || SequenceProbeEverySweeps < 1 ||
-            Recovery <= TimeSpan.Zero || Cooldown <= TimeSpan.Zero)
+            Recovery <= TimeSpan.Zero || Cooldown <= TimeSpan.Zero || SignalThrottle <= TimeSpan.Zero)
             throw new ArgumentException("Invalid candidate coordinator limits");
     }
 }
@@ -38,7 +40,8 @@ internal sealed record HubCandidateCoordinatorSnapshot(int Partitions, int Entri
 
 /// <summary>
 /// One process-wide registry. All state transitions, including credit and ID
-/// reservations, run under one lock; SQL page reads run through one scheduler.
+/// reservations, run under one lock; SQL discovery turns may run concurrently
+/// across partitions but never concurrently within a partition.
 /// The host must run RunAsync exactly once and bind its lifecycle to ownership.
 /// </summary>
 internal sealed class HubPartitionCandidateRegistry : IDisposable
@@ -76,6 +79,11 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public readonly LinkedList<Guid> Pending = new();
         public readonly List<Stream> Streams = [];
         public readonly HashSet<int> HintedBuckets = [];
+        // At most 64 independent signal buckets per owner; an updated signal
+        // resets its cursor without restarting the full recovery sweep.
+        public readonly Dictionary<int, (HubCandidateCursor? Cursor, int Version)> SignalBuckets = [];
+        public DateTimeOffset NextSignalQuery;
+        public int NextSignalBucket;
         public readonly Queue<Guid> ExactIds = new();
         public readonly HashSet<Guid> ExactSet = [];
         public int WaitingDemands;
@@ -87,6 +95,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public int ExactHydrationsSinceRecovery;
         public int NextHeadBucket;
         public bool Active = true;
+        public bool TurnInFlight;
         public long Bytes;
         public bool BaseReleased;
         public int InFlightEntries;
@@ -116,7 +125,6 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     private readonly Dictionary<string, (Partition Partition, Credit Credit)> _credits = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, Reservation> _reservations = new();
     private readonly HashSet<(string Hub, Guid Task)> _reservedTasks = new();
-    private readonly SemaphoreSlim _scheduler = new(1, 1);
     private int _nextPartition;
     private int _entries;
     private long _bytes;
@@ -185,7 +193,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             // Dispatched claims may have committed. The candidate and credit
             // stay charged until the caller supplies a definite resolution.
         }
-        p.Pending.Clear();
+        p.Pending.Clear(); p.SignalBuckets.Clear();
         ReleaseStoppedPartitionLocked(p);
     }
 
@@ -381,9 +389,24 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         lock (_sync)
             if (GetLocked(hub, partition, epoch, out var p))
             {
-                p.Dirty = true;
-                p.HeadRequested = true;
-                if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition) p.HintedBuckets.Add(bucket.Value);
+                if (bucket is >= 0 and < 64 && bucket % p.Count == p.Owner.Partition)
+                {
+                    // Bucket signals are advisory, not full sweep requests.
+                    if (!p.SignalBuckets.TryGetValue(bucket.Value, out var previous))
+                        p.SignalBuckets[bucket.Value] = (null, 1);
+                    else
+                    {
+                        p.SignalBuckets[bucket.Value] = (null, unchecked(previous.Version + 1));
+                        HubTelemetry.CandidateSignalHintsCoalesced.Add(1);
+                    }
+                    p.HintedBuckets.Add(bucket.Value);
+                }
+                else
+                {
+                    // Unknown bucket is a deliberate hub-wide recovery signal.
+                    p.Dirty = true;
+                    p.HeadRequested = true;
+                }
                 MatchLocked(p, _clock.GetUtcNow());
             }
     }
@@ -420,9 +443,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
     internal async Task<bool> RunOneTurnAsync(DateTimeOffset now, CancellationToken ct,
         Action<Exception>? reportError = null)
     {
-        if (!await _scheduler.WaitAsync(0, ct)) return false;
         Partition? p = null; Stream? stream = null; Guid[]? hydrateIds = null;
         bool capture = false; bool booked = false; bool head = false;
+        int? targetedBucket = null; int targetedVersion = 0;
         try
         {
             lock (_sync)
@@ -432,12 +455,18 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 for (var i = 0; i < all.Length; i++)
                 {
                     var index = (_nextPartition + i) % all.Length; var candidate = all[index];
+                    // A capture/page/hydration turn mutates the partition's cursor
+                    // and reserved-page accounting. Never overlap two such turns.
+                    if (!candidate.Active || candidate.TurnInFlight) continue;
                     MatchLocked(candidate, now);
                     if (_options.RequireDemand && !candidate.Credits.Any(c => !c.Granted && c.Reservation is null) &&
                         (candidate.WaitingDemands == 0 || GroupCredits(candidate.Owner.HubId, candidate.Owner.Partition) >= _options.PartitionCredits ||
                          _credits.Count >= _options.ProcessCredits)) continue;
-                    if (candidate.ExactIds.Count == 0 && candidate.Horizon is null && !candidate.Dirty && now < candidate.NextSweep) continue;
-                    p = candidate; _nextPartition = (index + 1) % all.Length; break;
+                    var targetedDue = candidate.SignalBuckets.Count > 0 && now >= candidate.NextSignalQuery;
+                    if (candidate.ExactIds.Count == 0 && candidate.Horizon is null &&
+                        !candidate.Dirty && now < candidate.NextSweep && !targetedDue) continue;
+                    p = candidate; p.TurnInFlight = true;
+                    _nextPartition = (index + 1) % all.Length; break;
                 }
                 if (p is null) return false;
                 var recoveryTurnDue = p.Dirty || p.Horizon is not null || now >= p.NextSweep;
@@ -470,6 +499,22 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     }
                     p.ExactHydrationsSinceRecovery++;
                     booked = true;
+                }
+                else if (p.Horizon is null && !p.Dirty && now < p.NextSweep &&
+                         p.SignalBuckets.Count > 0 && now >= p.NextSignalQuery)
+                {
+                    // Single indexed ReadyDue page, without scanning every
+                    // physical bucket or capturing a global sequence horizon.
+                    // Round-robin physical buckets, so one saturated bucket
+                    // cannot starve a second bucket with ready work.
+                    var first = p.SignalBuckets.OrderBy(pair =>
+                        pair.Key >= p.NextSignalBucket ? pair.Key : pair.Key + 64).First();
+                    p.NextSignalBucket = (first.Key + 1) % 64;
+                    targetedBucket = first.Key; targetedVersion = first.Value.Version;
+                    stream = new(first.Key, HubCandidateStream.ReadyDue) { Cursor = first.Value.Cursor };
+                    if (!BookPageLocked(p)) return false;
+                    booked = true;
+                    p.NextSignalQuery = now + _options.SignalThrottle;
                 }
                 else if (p.Horizon is null) { capture = true; p.Dirty = false; p.HeadRequested = false; p.ForwardSinceHead = 0; }
                 else
@@ -527,7 +572,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                 }
                 return true;
             }
-            var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, p.Horizon!, stream.Cursor,
+            var pageHorizon = p.Horizon ?? new HubCandidateHorizon(long.MaxValue, now.UtcDateTime);
+            if (targetedBucket.HasValue) HubTelemetry.CandidateSignalBucketQueries.Add(1);
+            var page = await _reader.ReadPageAsync(p.Owner.HubId, stream!.Bucket, stream.Kind, pageHorizon, stream.Cursor,
                 _options.PageSize, _options.PageWireBytes, linked.Token);
             HubTelemetry.CandidateDiscoveryRows.Add(page.Items.Count);
             if (page.WorkflowMetadataError is { } metadataError) reportError?.Invoke(metadataError);
@@ -569,7 +616,18 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
                     p.Bytes += size; _bytes += size; _entries++;
                     MatchLocked(p, now);
                 }
-                if (!head)
+                if (targetedBucket is int bucket)
+                {
+                    // A newer notification invalidates the cursor captured by
+                    // this query. Never drop a newly committed wake-up.
+                    if (p.SignalBuckets.TryGetValue(bucket, out var current) &&
+                        current.Version == targetedVersion)
+                    {
+                        if (page.EndOfStream) p.SignalBuckets.Remove(bucket);
+                        else p.SignalBuckets[bucket] = (page.Next, current.Version);
+                    }
+                }
+                else if (!head)
                 {
                     stream.Cursor = page.Next;
                     stream.Done = page.EndOfStream;
@@ -604,8 +662,12 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         }
         finally
         {
-            if (booked && p is not null) lock (_sync) ReleasePageLocked(p);
-            _scheduler.Release();
+            if (p is not null) lock (_sync)
+            {
+                if (booked) ReleasePageLocked(p);
+                p.TurnInFlight = false;
+                ReleaseStoppedPartitionLocked(p);
+            }
         }
     }
     private void ApplyHydratedLocked(Partition p, IReadOnlyList<Guid> requested, IReadOnlyList<HubTaskCandidate> items, DateTimeOffset now)

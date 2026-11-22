@@ -411,8 +411,8 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using var q=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             payload,request_key)
-            VALUES (@id,@hub,@partition,'__workflow__',1,@workflow,'{}'::jsonb,@key)
+             payload,request_key,admission)
+            VALUES (@id,@hub,@partition,'__workflow__',1,@workflow,'{}'::jsonb,@key,1)
             ON CONFLICT DO NOTHING RETURNING id
             """,db,tx);
         q.Parameters.AddWithValue("id",Guid.NewGuid());
@@ -434,9 +434,9 @@ public sealed class HubRemoteWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await using(var insert=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_task
             (id,hub_id,partition_id,task_type,task_version,workflow_id,
-             workflow_step,payload,execution_pointer_id,dispatch_key,native_step_id,due_at)
+             workflow_step,payload,execution_pointer_id,dispatch_key,native_step_id,due_at,admission)
             VALUES (@id,@hub,@partition,@type,@version,@workflow,@step,@payload,
-                    @pointer,@dispatch,@nativeStep,COALESCE(@due::timestamptz,now()))
+                    @pointer,@dispatch,@nativeStep,COALESCE(@due::timestamptz,now()),1)
             """,db,tx))
         {
             insert.Parameters.AddWithValue("id",taskId);
