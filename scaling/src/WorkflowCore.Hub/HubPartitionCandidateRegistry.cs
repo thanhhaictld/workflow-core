@@ -292,6 +292,22 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             return true;
         }
     }
+    // After an SSE session ends, no future demand from it can receive an
+    // assignment. Drop only credits without committed leases; dispatched
+    // admissions are marked for cleanup when the DB result becomes known.
+    // Granted/ambiguous leases remain fenced until completion or retirement.
+    internal void CancelUncommittedSessionCredits(Guid sessionId)
+    {
+        var prefix = $"push:{sessionId:N}:";
+        string[] credits;
+        lock (_sync)
+            credits = _credits.Where(x =>
+                !x.Value.Credit.Granted &&
+                x.Value.Credit.Value.WorkerId.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(x => x.Key).ToArray();
+        foreach (var id in credits) CancelCredit(id);
+    }
+
     // Called only when transport/session accounting confirms the granted slot
     // is no longer outstanding. Owner loss alone never releases it.
     internal bool ReleaseGrantedCredit(string creditId)
