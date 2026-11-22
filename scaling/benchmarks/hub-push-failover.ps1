@@ -70,11 +70,17 @@ try {
     $delay = if ($Scenario -eq 'after-claim') { 20000 } else { 0 }
     $hubA = Start-Hub 54110 'hub-a' $delay
     Wait-Until { (Invoke-RestMethod 'http://127.0.0.1:54110/health/ready' -TimeoutSec 2).status -eq 'ready' } 30 'Hub A ready'
+    # Each worker process gets a different scratch filesystem, like a new
+    # Kubernetes pod on another node with no mounted worker data.
+    $firstScratch = Join-Path $outDir "$run-first-pod"
+    $replacementScratch = Join-Path $outDir "$run-replacement-pod"
+    New-Item -ItemType Directory -Force -Path $firstScratch,$replacementScratch | Out-Null
+    $result.workerScratch = @($firstScratch,$replacementScratch)
     $workerVars = @{
         WFC_HUB_URL='http://127.0.0.1:54112'; WFC_HUB_AUTH_TOKEN=$token; WFC_HUB_PUSH_ENABLED='true'
         WFC_HUB_PUSH_TRUSTED_OWNERS='http://127.0.0.1:54110,http://127.0.0.1:54111'
         WFC_HUB_MATCHING_PARTITIONS='1'; WFC_HUB_WORKER_HUB='onboarding'
-        WFC_HUB_PUSH_CREDIT_JOURNAL=(Join-Path $outDir "$run-worker-credits.json")
+        TMPDIR=$firstScratch
         WORKFLOW_WORKERS='4'; ACTIVITY_WORKERS='4'; WFC_SAMPLE_PROVISION_DELAY_MS='15000'
         WFC_HUB_EXECUTION_OBSERVATION_LOG=$execLog; WFC_HUB_SIDE_EFFECT_OBSERVATION_LOG=$sideLog
         Logging__LogLevel__Default='Warning'
@@ -114,8 +120,9 @@ try {
         # Process.Kill() deliberately skips graceful shutdown, credit release and drain.
         $worker.Kill()
         if (-not $worker.WaitForExit(10000)) { throw 'Worker process did not exit after hard kill' }
-        # Reuse the *same* durable credit journal, as on a Kubernetes pod restart
-        # with a persistent identity/volume; use distinct stdout/stderr files.
+        # A new incarnation gets a fresh scratch filesystem, no journal or
+        # mounted state. PostgreSQL leases and Hub session cleanup recover work.
+        $workerVars.TMPDIR = $replacementScratch
         $worker = Start-Process @backgroundWindow -FilePath $dotnet -ArgumentList @($workerDll) -Environment $workerVars -PassThru `
             -RedirectStandardOutput (Join-Path $outDir "$run-worker-restarted.stdout.log") `
             -RedirectStandardError (Join-Path $outDir "$run-worker-restarted.stderr.log")
@@ -177,6 +184,9 @@ try {
     # New onboarding v5 intentionally has no business-key FIFO policy.
     # Cross-workflow provisioning overlap is allowed and recorded for diagnosis.
     if ($result.taskSummary.tasks -ne $result.taskSummary.complete) { throw 'Incomplete tasks after failover' }
+    if ($Scenario -eq 'worker-during-execution' -and $result.taskSummary.retries -lt 1) {
+        throw 'Expected a durable task lease retry after the worker was killed during execution'
+    }
     $starts = @(Get-Content $execLog | ForEach-Object { $_ | ConvertFrom-Json })
     $effects = @(Get-Content $sideLog | ForEach-Object { $_ | ConvertFrom-Json })
     $result.executionStarts = $starts.Count
@@ -185,6 +195,9 @@ try {
     $result.missingDispatchKeys = @($effects | Where-Object { -not $_.dispatchKey }).Count
     $result.duplicateSideEffects = [int]($effects | Group-Object { "$($_.workflowId):$($_.dispatchKey)" } | Where-Object Count -gt 1 | ForEach-Object { $_.Count - 1 } | Measure-Object -Sum).Sum
     if ($result.duplicateSameEpochStarts -or $result.missingDispatchKeys -or $result.duplicateSideEffects -or $result.sideEffects -ne 6) { throw 'Unexpected execution or side-effect observation' }
+    # Catch accidental reintroduction of the worker-side credit journal.
+    $workerJournals = @(Get-ChildItem -Path $firstScratch,$replacementScratch -Filter 'wfc-hub-push-*.json' -Recurse -File -ErrorAction SilentlyContinue)
+    if ($workerJournals.Count -gt 0) { throw 'Stateless worker unexpectedly wrote a credit journal' }
     if ($null -ne $oldLease) {
         try {
             $hb = @{ workerId=$oldLease.owner; epoch=$oldLease.epoch } | ConvertTo-Json
