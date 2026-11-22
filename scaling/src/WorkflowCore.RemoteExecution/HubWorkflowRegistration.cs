@@ -23,11 +23,10 @@ public sealed class HubRuntimeOptions
         int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_LANE_INSTANCES"), out var lanes) ? lanes : 1;
     public string? WorkerHub { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_WORKER_HUB");
     // Opt-in processor-side cap. Applies independently to workflow and
-    // activity lanes, including long-poll demand; 0 keeps legacy settings.
+    // activity lanes; 0 uses each lane's configured concurrency.
     public int WorkerConcurrencyCap { get; set; } =
         int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_MAX_INFLIGHT_PER_LANE"),
             out var laneCap) ? laneCap : 0;
-    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
     public bool PushEnabled { get; set; } =
         Environment.GetEnvironmentVariable("WFC_HUB_PUSH_ENABLED") is "true" or "1" or "True";
     public string[] PushTrustedOwners { get; set; } =
@@ -38,9 +37,6 @@ public sealed class HubRuntimeOptions
     public int MatchingPartitions { get; set; } =
         int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PARTITIONS"),
             out var count) ? count : 1;
-    // Feature flag for controlled baseline/optimized benchmark runs.
-    public bool AdaptiveClaimsEnabled { get; set; } =
-        Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
     public TimeSpan ErrorRetryInterval { get; set; } = TimeSpan.FromSeconds(60);
     public bool RegisterOnly { get; set; }
     public bool SequentialVersionOneCompatibility { get; set; }
@@ -152,7 +148,6 @@ public static class HubWorkflowRuntimeExtensions
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
            options.LaneInstances is <1 or >2000 ||
            options.WorkerConcurrencyCap is < 0 or > 256 ||
-           options.PollInterval<TimeSpan.FromMilliseconds(10) ||
            options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{

@@ -4,7 +4,7 @@
 
 **[Hub-native architecture: partition candidate matching + fenced SSE push](current-runtime.md)** is the canonical description of the current distributed runtime, its configuration, failure recovery and tests. PostgreSQL is the sole lease authority; in-memory matching is advisory.
 
-This is one selected architecture, not a menu of recommended polling/streaming alternatives. Adaptive HTTP claims and historical stream adapters remain implementation-level compatibility and emergency rollback paths. The development preset uses two Hub replicas, matching partitions and SSE push.
+Native workers receive tasks through owner-fenced SSE push sessions. The development preset uses two Hub replicas and matching partitions.
 
 ## Build and operate the Hub runtime
 
@@ -13,6 +13,7 @@ This is one selected architecture, not a menu of recommended polling/streaming a
 | [Native workflow contracts](hub-native-fluent-runtime.md) | C# workflow definitions, activity registration, supported constructs and version compatibility |
 | [Scheduler and remote hosts](hub-remote-scheduler-implementation.md) | Generic Gateway, internal scheduling module, and separate processor/provisioner hosts |
 | [Candidate metadata enrichment](hub-candidate-metadata-enrichment.md) | Bounded workflow cache, discovery/hydration shape, and conservative unknown metadata behavior |
+| [Decision to retire exact task-ID hints](decision-retire-exact-task-id-hints.md) | Accepted removal decision and implementation plan; exact-ID mode only |
 | [Observability and dashboard](operations-dashboard.md) | Backlogs, task/activity latency, owner health and workflow trace |
 | [CI contract](ci-primary-architecture.md) | Current correctness gates, manual 16-processor stress, removed historical CI |
 | [Monitoring service](../monitor/README.md) | Next.js monitor and development API |

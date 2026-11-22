@@ -7,8 +7,8 @@ on:
       - 'scaling/src/WorkflowCore.Hub.Gateway/**'
       - 'scaling/src/WorkflowCore.RemoteExecution/**'
       - 'scaling/src/WorkflowCore.Hub/HubTelemetry.cs'
-      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseTaskDistributorTests.cs'
-      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseWorkerCreditCoordinatorTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubPushSessionTests.cs'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubNativeTransportTests.cs'
       - 'scaling/observability/nginx.matching-ha.conf'
       - 'scaling/observability/compose.yaml'
       - 'Makefile'
@@ -32,12 +32,9 @@ jobs:
       POLICY_BENCH_ACTIVITY_WORKERS: '8'
       OFFBOARD_PROCESSOR_WORKERS: '8'
       # Primary runtime: partition-owned in-memory candidates + owner-fenced
-      # PostgreSQL admission and push sessions. The retained task-SSE
-      # distributor and capacity-fanout worker modes are disabled in this job.
+      # PostgreSQL admission and push sessions.
       WFC_HUB_PUSH_ENABLED: 'true'
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
-      WFC_HUB_TASK_SSE_PUSH: 'false'
-      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
       WFC_HUB_MATCHING_PARTITIONS: '4'
       WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
       WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
@@ -54,10 +51,10 @@ jobs:
             --env-file "$ENVFILE" config --quiet
           make --dry-run help ups-16 obs-setup obs-config obs-ps obs-logs obs-down obs-test-4k obs-test obs-matcher-failover > /tmp/make-targets.txt
           grep -Fq 'Processors 16' /tmp/make-targets.txt
-      - name: Build and test SSE distributor credit protocol
+      - name: Build and test the native push protocol
         run: |
           dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj \
-            -c Release --filter "FullyQualifiedName~HubSseTaskDistributorTests|FullyQualifiedName~HubSseWorkerCreditCoordinatorTests" --verbosity minimal
+            -c Release --filter "FullyQualifiedName~HubPushSessionTests|FullyQualifiedName~HubNativeTransportTests" --verbosity minimal
       - name: Start PostgreSQL and two fenced matching Hubs
         run: |
           set -euo pipefail

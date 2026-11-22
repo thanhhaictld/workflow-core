@@ -45,15 +45,6 @@ public static class HubTelemetry
         Meter.CreateHistogram<double>("workflow_hub_timer_batch_duration_seconds", "s");
     public static readonly Counter<long> TimerSchedulerErrors =
         Meter.CreateCounter<long>("workflow_hub_timer_scheduler_errors", "{error}");
-    // Worker-observed HTTP claims and newly committed activity completions.
-    // Names omit Prometheus suffixes; the collector adds _total to counters.
-    public static readonly Counter<long> ClaimAttempts = Meter.CreateCounter<long>("workflow_claim_attempts");
-    // Pending worker HTTP requests, including server-held long polls; not task execution.
-    public static readonly UpDownCounter<long> ClaimInflight = Meter.CreateUpDownCounter<long>("workflow_claim_inflight");
-    public static readonly Counter<long> ClaimEmpty = Meter.CreateCounter<long>("workflow_claim_empty");
-    public static readonly Counter<long> ClaimSuccess = Meter.CreateCounter<long>("workflow_claim_success");
-    public static readonly Histogram<double> ClaimHttpDuration = Meter.CreateHistogram<double>("workflow_claim_duration_seconds", "s");
-    public static readonly Histogram<int> ClaimBatchSize = Meter.CreateHistogram<int>("workflow_claim_batch_size");
     public static readonly Counter<long> ActivitiesCompleted = Meter.CreateCounter<long>("workflow_activities_completed");
     public static readonly Counter<long> TasksClaimed =
         Meter.CreateCounter<long>("workflow_hub_tasks_claimed", "{task}");
@@ -197,10 +188,6 @@ public static class HubTelemetry
         Meter.CreateCounter<long>("workflow_hub_sse_tasks_dispatched", "{task}");
     public static readonly Counter<long> MatchingOwnershipChanges =
         Meter.CreateCounter<long>("workflow_hub_matching_ownership_changes", "{change}");
-    public static readonly Counter<long> MatchingResolutionFailures =
-        Meter.CreateCounter<long>("workflow_hub_matching_resolution_failures", "{failure}");
-    public static readonly Counter<long> MatchingRouteFallbacks =
-        Meter.CreateCounter<long>("workflow_hub_matching_route_fallbacks", "{fallback}");
     public static readonly Counter<long> SseTaskReconnects =
         Meter.CreateCounter<long>("workflow_hub_sse_task_reconnects", "{reconnect}");
     public static readonly Histogram<double> SseSessionFirstDispatch =
@@ -238,19 +225,6 @@ public static class HubTelemetry
     // Includes in-memory matching wait and deferred SQL admission retries.
     public static readonly Histogram<double> MatchingPollDuration =
         Meter.CreateHistogram<double>("workflow_hub_matching_poll_duration_seconds", "s");
-    public static readonly Counter<long> WorkerClaimRequests =
-        Meter.CreateCounter<long>("workflow_hub_worker_claim_requests", "{request}");
-    // Credits are worker-local reservations for pending shard polls (not durable
-    // task leases). Each reserved credit is paired with MaxTasks=1.
-    public static readonly UpDownCounter<long> WorkerShardPollCredits =
-        Meter.CreateUpDownCounter<long>("workflow_hub_worker_shard_poll_credits", "{credit}");
-    // Client-observed claim/poll latency, including long-poll queueing and
-    // HTTP transport. Guardrail against hiding latency by deferring server SQL.
-    public static readonly Histogram<double> WorkerClaimHttpDuration =
-        Meter.CreateHistogram<double>("workflow_hub_worker_claim_http_duration_seconds", "s");
-    public static readonly Histogram<double> WorkerEmptyClaimBackoff =
-        Meter.CreateHistogram<double>("workflow_hub_worker_empty_claim_backoff_seconds", "s");
-
     // These observable instruments are process-local, not estimates of
     // total machine / container memory. Resource service.instance.id disambiguates.
     private static readonly Meter ProcessMeter = new("WorkflowCore.Hub.Process", "1.0.0");

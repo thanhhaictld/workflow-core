@@ -796,7 +796,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 165,
+        "y": 125,
         "w": 12,
         "h": 8
       },
@@ -1722,352 +1722,15 @@
       }
     },
     {
-      "id": 31,
-      "type": "timeseries",
-      "title": "Activity claim attempts/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 117,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "attempts/s",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 32,
-      "type": "timeseries",
-      "title": "Empty activity claims (%)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 117,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "100 * sum(rate(workflow_claim_empty_total{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "empty %",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 33,
       "type": "timeseries",
-      "title": "Activity throughput/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 125,
-        "w": 12,
-        "h": 8
-      },
+      "title": "Durable activity completions / second",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 125, "w": 12, "h": 8 },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_success_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "claimed",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "sum(rate(workflow_activities_completed_total[5m]))",
-          "legendFormat": "durably completed",
-          "range": true
-        }
+        { "refId": "A", "expr": "sum(rate(workflow_activities_completed_total[5m]))", "legendFormat": "completed", "range": true }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 34,
-      "type": "timeseries",
-      "title": "Activity claim latency p95/p99 by transport",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 125,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
-          "legendFormat": "p95 {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
-          "legendFormat": "p99 {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 35,
-      "type": "timeseries",
-      "title": "Activity claim average batch size",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 133,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_batch_size_sum{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_batch_size_count{lane=\"activity\"}[5m]))",
-          "legendFormat": "tasks / successful request",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 36,
-      "type": "timeseries",
-      "title": "Activity claim HTTP outcomes/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 133,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (transport, outcome) (rate(workflow_claim_duration_seconds_count{lane=\"activity\"}[5m]))",
-          "legendFormat": "{{transport}} {{outcome}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 37,
-      "type": "timeseries",
-      "title": "Claim requests started / ended per second",
-      "description": "Worker-observed HTTP request starts and finishes, including empty responses, errors and cancellations. Finishes do not mean task execution completed. Rates are averaged over one minute.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport) (rate(workflow_claim_attempts_total[1m]))",
-          "legendFormat": "started {{lane}} {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (lane, transport) (rate(workflow_claim_duration_seconds_count[1m]))",
-          "legendFormat": "ended {{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 38,
-      "type": "timeseries",
-      "title": "Claim requests in flight",
-      "description": "Pending worker HTTP claim requests and long polls. Long-poll waiting is included; task execution, backoff and persistent SSE task streams are excluded. Process-local, sampled telemetry; abrupt exits may lose final measurements.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport) (workflow_claim_inflight)",
-          "legendFormat": "{{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 39,
-      "type": "timeseries",
-      "title": "Claim requests ended by outcome",
-      "description": "One finish per HTTP request, whether claimed, empty, error or cancelled. A claimed response can contain multiple tasks. Includes both workflow and activity lanes; excludes persistent SSE task delivery.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 149,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport, outcome) (rate(workflow_claim_duration_seconds_count[1m]))",
-          "legendFormat": "{{lane}} {{transport}} {{outcome}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 40,
-      "type": "timeseries",
-      "title": "Claim request latency p95 / p99",
-      "description": "Worker-observed HTTP latency, including server-held long-poll waiting and transport time, excluding retry backoff and task execution. Aggregates buckets across worker instances before calculating percentiles.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 149,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
-          "legendFormat": "p95 {{lane}} {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
-          "legendFormat": "p99 {{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] }
     },
     {
       "id": 41,
@@ -2075,7 +1738,7 @@
       "title": "Candidate registry occupancy",
       "description": "Current in-process candidate credits, reservations and cached task metadata. These process-wide gauges are not task completion counts.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 157, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 117, "w": 12, "h": 8 },
       "targets": [
         { "refId": "A", "expr": "workflow_hub_candidate_credits", "legendFormat": "credits", "range": true },
         { "refId": "B", "expr": "workflow_hub_candidate_reservations", "legendFormat": "reservations", "range": true },
@@ -2089,7 +1752,7 @@
       "title": "Candidate registry memory estimate",
       "description": "Estimated managed bytes charged to candidate metadata, credits, and in-flight database pages.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 157, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 117, "w": 12, "h": 8 },
       "targets": [
         { "refId": "A", "expr": "workflow_hub_candidate_bytes", "legendFormat": "estimated bytes", "range": true }
       ],
@@ -2101,7 +1764,7 @@
       "title": "Candidate credit capacity fallback rate",
       "description": "Rate of candidate acquisitions that could not reserve one bounded credit and used the existing owner-fenced claim fallback.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 165, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 125, "w": 12, "h": 8 },
       "targets": [
         { "refId": "A", "expr": "sum(rate(workflow_hub_candidate_capacity_fallbacks_total[5m]))", "legendFormat": "fallbacks/s", "range": true }
       ],
@@ -2113,7 +1776,7 @@
       "title": "CPU utilization by service instance",
       "description": "X is time; each row is a service.name / service.instance.id pair; block color represents the one-minute average process CPU percentage of the processor count visible to .NET. Select Service name and Service instance ID above to focus one Hub or worker process.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 181, "w": 24, "h": 12 },
+      "gridPos": { "x": 0, "y": 133, "w": 24, "h": 12 },
       "targets": [
         {
           "refId": "A",

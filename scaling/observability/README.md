@@ -95,18 +95,14 @@ for other owner-recovery actions.
 
 The golden preset enables snapshot contract reuse, demand-aware claim admission,
 split batch claim candidates, indexed matching buckets, completion fast paths,
-batched history, the subscription-based native event lane, scheduler,
-adaptive claims, matching candidates, candidate backpressure and cross-worker
-batching. Candidate admission concurrency is 2. The dispatcher outbox setting
-is `WFC_HUB_OUTBOX_ENABLED=true`; database outbox writes are configured
-separately. The periodic SQL metrics sampler, task SSE push, and worker capacity
-fanout are disabled in this preset. OTEL metrics, traces and logs remain enabled.
+batched history, the subscription-based native event lane, the scheduler,
+matching candidates, candidate backpressure and cross-worker batching.
+Candidate admission concurrency is 2. The dispatcher outbox setting is
+`WFC_HUB_OUTBOX_ENABLED=true`. Database outbox writes are configured separately.
+The periodic SQL metrics sampler is disabled. OpenTelemetry export stays enabled.
 
-The retained task SSE and capacity-fanout modes are independently controlled by
-`WFC_HUB_TASK_SSE_PUSH` and `WFC_HUB_WORKER_CAPACITY_FANOUT`; task SSE takes
-precedence when both are enabled. Neither requires the removed single rotating
-long-poll worker mode. Existing indexes and data are retained; migrations are
-forward-only.
+Native workers use SSE push sessions. The preset sets
+`WFC_HUB_PUSH_ENABLED=true` on the Hub replicas and processors.
 
 Make exports the golden flags for its short commands, overriding `.env` values;
 explicit Make assignments can override them for a run. `OBS_ENV_FILE` and
@@ -391,48 +387,6 @@ retaining claim/execution metrics and OTEL export. Sampled queue/connection
 series remain absent until a real sample is published, and operations history
 has a gap. Collector SQL, on-demand monitor queries, and runtime scheduling
 remain active. See [sampler A/B usage](owner-recovery.md#start-test-and-stress).
-
-The `WorkflowCore.Hub` meter exports `workflow_claim_attempts_total`,
-`workflow_claim_empty_total`, and `workflow_claim_success_total`, plus
-`workflow_claim_duration_seconds` and `workflow_claim_batch_size` histograms.
-Each attempt is one worker HTTP claim or long poll, including errors and
-cancellation; it is distinct from Hub database claim scans. Empty counts only
-successful responses with zero tasks. Success counts returned tasks, not requests.
-The duration covers the entire HTTP call, including long-poll wait but excluding
-error backoff; its `outcome` is `claimed`, `empty`, `error`, or `cancelled`.
-Batch size records every successful response including zero; its explicit bounds
-are 0, 1, 2, 4, 8, 16, 24, and 32. Duration bounds are 0.0005, 0.001,
-0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-30, and 60 seconds. Both include the implicit +Inf bucket.
-
-`workflow_claim_inflight` tracks pending worker HTTP requests, including held
-long polls. It increases before sending and decreases when the request finishes,
-including errors and cancellation. It uses `lane` and `transport` labels and
-excludes task execution, retry backoff, and persistent SSE task delivery.
-`workflow_claim_attempts_total` counts request starts; the duration histogram's
-`workflow_claim_duration_seconds_count` counts request finishes with an outcome.
-Finishing a request does not mean its returned tasks have completed execution.
-
-Dashboard panels 37–40 show starts versus finishes per second, requests in flight,
-finished outcomes, and p95/p99 HTTP latency for both workflow and activity lanes,
-split by transport. Rates and percentiles use a one-minute window. In-flight is
-summed directly across worker instances, rather than inferred by subtracting
-counters. The default Compose stack exports and scrapes metrics every five
-seconds; these are sampled aggregates, not individual request timelines.
-Process termination can lose final measurements, and an in-flight series from a
-terminated instance may persist until it becomes stale. Missing series remain
-missing. Long-poll waits can legitimately produce high latency and nonzero
-in-flight while no tasks are executing.
-
-Claim labels are bounded: `lane=activity|workflow` and `transport=claim|poll`;
-duration also has `outcome`. Workflow-lane tasks are processor work, not
-business activities. Success uses the returned task type to classify its lane;
-the other claim measurements describe the requesting lane. Activity panels
-filter `lane="activity"`. The empty percentage divides by all attempts, so
-errors and cancellations are in the denominator; the outcome panel shows them
-separately. Percentiles aggregate histogram buckets across instances before
-`histogram_quantile`. An absent series or zero denominator is not replaced by
-invented data.
 
 `workflow_activities_completed_total` counts newly accepted durable activity
 completions in the Hub process, including standalone, managed, sequential remote,

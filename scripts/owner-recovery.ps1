@@ -25,7 +25,7 @@ $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 if ($Task -eq 'help') {
     Write-Host @'
 Owner recovery on the existing observability stack:
-  make ups-16                         Build/start the primary 16-processor stack
+  make ups-4 / ups-8 / ups-16        Build/start the stack with 4, 8 or 16 processors
   make obs-config                     Inspect the resolved Compose configuration
   make obs-ps / obs-logs / obs-down   Inspect, log or stop the same stack (keep data)
   make obs-clean                     Stop the stack and delete its Compose volumes

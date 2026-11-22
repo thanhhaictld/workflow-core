@@ -1,5 +1,7 @@
 # Capacity-aware matching: architecture and sequence diagrams
 
+> Historical reference. Reproduction commands apply to the revision measured below. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 **Scope:** [PR #28](https://github.com/thanhhaictld/workflow-core/pull/28), derived from PR #27 including PostgreSQL optimization migrations 020–022. These diagrams explain the **task delivery/matching path**, not a change to workflow definitions. **Fanout is experimental and default OFF**.
 
 ## 1. High-level topology

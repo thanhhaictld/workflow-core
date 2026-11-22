@@ -59,11 +59,6 @@ public static class HubOpenTelemetryExtensions
                 };
                 metrics.AddView("workflow_hub_native_event_lane_lock_wait_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_claim_duration_seconds", latencyBuckets);
-                metrics.AddView("workflow_claim_duration_seconds", latencyBuckets);
-                metrics.AddView("workflow_claim_batch_size", new ExplicitBucketHistogramConfiguration
-                {
-                    Boundaries = new double[] { 0, 1, 2, 4, 8, 16, 24, 32 }
-                });
                 // Capture sub-second tail latency for every claim stage, not
                 // just the outer claim. Default buckets are too coarse here.
                 metrics.AddView("workflow_hub_claim_admission_wait_seconds", latencyBuckets);
@@ -81,7 +76,6 @@ public static class HubOpenTelemetryExtensions
                 // Worker-side completion HTTP latency must not regress when
                 // admission gives non-claim DB work priority.
                 metrics.AddView("workflow_hub_worker_completion_http_duration_seconds", latencyBuckets);
-                metrics.AddView("workflow_hub_worker_claim_http_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_matching_poll_duration_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_sse_session_first_dispatch_seconds", latencyBuckets);
                 metrics.AddView("workflow_hub_native_commit_duration_seconds", latencyBuckets);

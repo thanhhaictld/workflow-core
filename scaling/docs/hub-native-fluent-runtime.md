@@ -132,7 +132,7 @@ migrations 023 and 025–027. Run 031 with autocommit, outside a transaction blo
 see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.
-Deploy the updated Hub code before starting native hosts or submitting native runs.
+Enable `WFC_HUB_PUSH_ENABLED=true` on the Hub and native hosts. Configure matching and reachable owner URLs as described in [current runtime](current-runtime.md#standard-development-deployment).
 Older Gateway binaries do not understand native task completion and inbox delivery.
 
 The onboarding sample publishes native **v3 and v4** workflow definitions and

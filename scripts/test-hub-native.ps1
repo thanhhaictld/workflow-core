@@ -26,6 +26,12 @@ function Start-ManagedHost([string]$Project, [switch]$RegisterOnly) {
     $start.ArgumentList.Add($binary)
     $start.Environment['WFC_HUB_AUTH_TOKEN'] = $HubToken
     $start.Environment['WFC_HUB_URL'] = $ApiUrl
+    $start.Environment['WFC_HUB_PUSH_ENABLED'] = 'true'
+    $start.Environment['WFC_HUB_MATCHING_ENABLED'] = 'true'
+    $start.Environment['WFC_HUB_MATCHING_ADVERTISE_URL'] = $ApiUrl
+    $start.Environment['WFC_HUB_MATCHING_PEERS'] = $ApiUrl
+    $start.Environment['WFC_HUB_MATCHING_PARTITIONS'] = '1'
+    $start.Environment.Remove('WFC_HUB_WORKER_HUB') | Out-Null
     $start.Environment['Logging__LogLevel__Default'] = 'Warning'
     $start.Environment['OTEL_SDK_DISABLED'] = 'true'
     $start.Environment.Remove('WFC_PG') | Out-Null
