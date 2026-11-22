@@ -5,7 +5,7 @@ name: Workflow Hub SSE Stress - 1000 Workflows (Owner Admission A/B)
 on:
   workflow_dispatch:
   pull_request:
-    branches: [hub-memory-candidates-luna]
+    branches: ['thanhhaictld/hub-memory-candidates-luna']
     paths:
       - 'scaling/src/WorkflowCore.Hub/**'
       - 'scaling/observability/compose*.yaml'
