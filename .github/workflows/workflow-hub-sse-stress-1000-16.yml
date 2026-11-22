@@ -91,13 +91,13 @@ jobs:
               docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
                 exec -T hub-lb wget -q -O - --header "Authorization: Bearer $token" \
                 http://hub-2:5100/api/hub/workers/transport-diagnostics > /tmp/stress-hub-b.json &&
-              jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+              jq -e -s --argjson expected "$BENCH_PROCESSORS" '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= $expected)' \
                 /tmp/stress-hub-a.json /tmp/stress-hub-b.json > /dev/null; then
               break
             fi
             sleep 2
           done
-          jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+          jq -e -s --argjson expected "$BENCH_PROCESSORS" '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= $expected)' \
             /tmp/stress-hub-a.json /tmp/stress-hub-b.json
           echo "PASS: $BENCH_PROCESSORS registered sessions; owner admission $BENCH_OWNER_MODE"
 
