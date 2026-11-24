@@ -143,13 +143,17 @@ public sealed class HubTaskStore : IAsyncDisposable
     // retains the legacy modulo expression for comparison.
     private readonly bool _indexedMatchingBucketClaimsEnabled;
     private readonly bool _splitBatchClaimCandidatesEnabled;
+    // Experiment only: allow eventual matching-owner takeover without blocking
+    // task claim transactions. Task leases and completion fencing remain atomic.
+    private readonly bool _optimisticOwnerAdmissionEnabled;
     internal NpgsqlDataSource DataSource => _dataSource;
 
     public HubTaskStore(string connectionString, int maxPoolSize = 12,
         bool? enableUnconstrainedBatchClaims = null,
         bool? enableIndexedMatchingBucketClaims = null,
         bool? enableSplitBatchClaimCandidates = null,
-        bool? enableTaskIdHints = null)
+        bool? enableTaskIdHints = null,
+        bool? enableOptimisticOwnerAdmission = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
@@ -201,6 +205,10 @@ public sealed class HubTaskStore : IAsyncDisposable
         var splitBatchMode = Environment.GetEnvironmentVariable("WFC_HUB_SPLIT_BATCH_CLAIM_CANDIDATES");
         _splitBatchClaimCandidatesEnabled = enableSplitBatchClaimCandidates ??
             (!string.Equals(splitBatchMode, "false", StringComparison.OrdinalIgnoreCase) && splitBatchMode != "0");
+        var optimisticOwnerMode = Environment.GetEnvironmentVariable("WFC_HUB_OPTIMISTIC_OWNER_ADMISSION");
+        _optimisticOwnerAdmissionEnabled = enableOptimisticOwnerAdmission ??
+            (string.Equals(optimisticOwnerMode, "true", StringComparison.OrdinalIgnoreCase) ||
+             optimisticOwnerMode == "1");
     }
 
     public async Task<Guid> EnqueueAsync(HubTaskRoute route, string payload,
@@ -580,7 +588,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         {
             await using var db = await _dataSource.OpenConnectionAsync(ct);
             await using var tx = await db.BeginTransactionAsync(ct);
-            if (!await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(db,tx,request.Owner,request.PartitionCount,ct))
+            if (!await HubMatchingPartitionLeaseStore.ValidateOwnerForAdmissionAsync(
+                    db, tx, request.Owner, request.PartitionCount,
+                    !_optimisticOwnerAdmissionEnabled, ct))
                 return new(HubCandidateClaimStatus.OwnerLost,[]);
             var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
             await using (var cmd = new NpgsqlCommand(CandidateBatchAdmissionSql,db,tx))
@@ -818,8 +828,8 @@ public sealed class HubTaskStore : IAsyncDisposable
         var started = Stopwatch.GetTimestamp();
         await using var tx = await db.BeginTransactionAsync(ct);
         if (matchingOwner is not null &&
-            !await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(
-                db, tx, matchingOwner, matchingCount, ct))
+            !await HubMatchingPartitionLeaseStore.ValidateOwnerForAdmissionAsync(
+                db, tx, matchingOwner, matchingCount, !_optimisticOwnerAdmissionEnabled, ct))
             throw new InvalidOperationException("Matching owner generation is no longer valid");
         await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition, ownerFence, true, ct);
         var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
@@ -945,7 +955,13 @@ public sealed class HubTaskStore : IAsyncDisposable
             await journal.ExecuteNonQueryAsync(ct);
         }
 
-        await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition, ownerFence, false, ct);
+        // An optimistic admission must recheck owner generation after all
+        // task and history writes. There remains a deliberate recheck-to-commit
+        // race; a late old-owner task claim is valid until its task lease ends.
+        await CheckClaimOwnerAsync(db, tx, hubs[0], matchingPartition,
+            ownerFence ?? (matchingOwner is null ? null :
+                new HubClaimOwnerFence(matchingOwner.OwnerId, matchingOwner.Epoch)),
+            false, ct);
         await tx.CommitAsync(ct);
         HubTelemetry.ClaimUnconstrainedBatchCount.Record(claimed.Count);
         HubTelemetry.ClaimUnconstrainedBatchDuration.Record(
@@ -956,9 +972,9 @@ public sealed class HubTaskStore : IAsyncDisposable
         return claimed.Select(item => item.Lease).ToArray();
     }
 
-    // The shared row lock serializes takeover against this transaction. Check
-    // the deadline again after task/history writes so a long claim cannot
-    // commit based solely on an already-expired owner lease.
+    // Strict mode uses a shared row lock to serialize owner changes.
+    // Optimistic mode rechecks after task/history writes but intentionally
+    // tolerates a takeover in the interval between recheck and commit.
     private static async Task CheckClaimOwnerAsync(NpgsqlConnection db, NpgsqlTransaction tx,
         string hub, int partition, HubClaimOwnerFence? fence, bool takeLock, CancellationToken ct)
     {

@@ -1,8 +1,15 @@
-name: Workflow Hub SSE Stress - 1000 Workflows 16 Processors
+name: Workflow Hub SSE Stress - 1000 Workflows (Owner Admission A/B)
 
-# Expensive performance run: invoke manually after correctness gates pass.
+# Manual or automatic only for the isolated owner-admission experiment PR.
+# Keep this benchmark out of unrelated PRs to limit runner consumption.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: ['thanhhaictld/hub-memory-candidates-luna']
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/**'
+      - 'scaling/observability/compose*.yaml'
+      - '.github/workflows/workflow-hub-sse-stress-1000-16.yml'
 
 concurrency:
   group: workflow-hub-sse-stress-1000-16-${{ github.event.pull_request.number || github.ref }}
@@ -10,9 +17,19 @@ concurrency:
 
 jobs:
   sse-stress-1000-16:
+    name: ${{ matrix.owner_mode }} / ${{ matrix.processors }} processors
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        owner_mode: [strict, optimistic]
+        processors: [4, 8, 16]
     env:
+      BENCH_PROCESSORS: ${{ matrix.processors }}
+      BENCH_OWNER_MODE: ${{ matrix.owner_mode }}
+      WFC_HUB_OPTIMISTIC_OWNER_ADMISSION: ${{ matrix.owner_mode == 'optimistic' }}
       COMPOSE: scaling/observability/compose.yaml
       HA: scaling/observability/compose.matching-ha.yaml
       SHARDS: scaling/observability/compose.matching-shards.yaml
@@ -42,7 +59,7 @@ jobs:
           free -h
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" config --quiet
-          echo "RUN_ID=sse-stress-1000-16-$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+          echo "RUN_ID=sse-stress-1000-$BENCH_OWNER_MODE-$BENCH_PROCESSORS-$GITHUB_RUN_ID" >> "$GITHUB_ENV"
           mkdir -p scaling/observability/results/sse-stress-1000-16
           chmod 0777 scaling/observability/results scaling/observability/results/sse-stress-1000-16
 
@@ -57,16 +74,16 @@ jobs:
           done
           curl --fail-with-body -fsS http://127.0.0.1:5110/health/ready
 
-      - name: Start exactly 16 native offboarding processors with SSE push
+      - name: Start selected native offboarding processors with SSE push
         run: |
           set -euo pipefail
           docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" --profile offboarding-load \
-            up -d --build --no-deps --scale processor=16 processor
+            up -d --build --no-deps --scale processor="$BENCH_PROCESSORS" processor
           count="$(docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" \
             --env-file "$ENVFILE" --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
-          echo "Processor containers running: $count"
-          test "$count" -eq 16
+          echo "Processor containers running: $count (expected $BENCH_PROCESSORS)"
+          test "$count" -eq "$BENCH_PROCESSORS"
           token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
           for i in {1..90}; do
             if curl -fsS -H "Authorization: Bearer $token" \
@@ -74,15 +91,15 @@ jobs:
               docker compose -f "$COMPOSE" -f "$HA" -f "$SHARDS" --env-file "$ENVFILE" \
                 exec -T hub-lb wget -q -O - --header "Authorization: Bearer $token" \
                 http://hub-2:5100/api/hub/workers/transport-diagnostics > /tmp/stress-hub-b.json &&
-              jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+              jq -e -s --argjson expected "$BENCH_PROCESSORS" '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= $expected)' \
                 /tmp/stress-hub-a.json /tmp/stress-hub-b.json > /dev/null; then
               break
             fi
             sleep 2
           done
-          jq -e -s '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= 16)' \
+          jq -e -s --argjson expected "$BENCH_PROCESSORS" '(all(.[]; .candidateEnabled == true)) and ((map(.pushConnected) | add) >= $expected)' \
             /tmp/stress-hub-a.json /tmp/stress-hub-b.json
-          echo 'PASS: 16 registered sessions with candidate matching and owner-fenced SSE push'
+          echo "PASS: $BENCH_PROCESSORS registered sessions; owner admission $BENCH_OWNER_MODE"
 
       - name: Run 1,000-workflow k6 stress while sampling PostgreSQL and CPU
         run: |
@@ -131,8 +148,9 @@ jobs:
           pressure=json.loads((root/"pressure.json").read_text())
           commits=(pressure.get("dbDelta") or {}).get("xact_commit")
           report={
-              "runId":run,"transport":"partition-candidate-matching+owner-fenced-SSE",
-              "hubs":2,"matchingShards":4,"processorReplicas":16,
+              "runId":run,"transport":"partition-candidate-matching+SSE",
+              "matchingOwnerAdmission":os.environ["BENCH_OWNER_MODE"],
+              "hubs":2,"matchingShards":4,"processorReplicas":int(os.environ["BENCH_PROCESSORS"]),
               "workflowSlotsPerProcessor":8,"k6VUs":200,"submitted":result["total"],
               "completed":result["completed"],"failed":result["failed"],
               "workflowType":"tenant-offboarding-fast","elapsedSeconds":round(elapsed,3),
@@ -152,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: workflow-hub-sse-stress-1000-16
+          name: workflow-hub-sse-stress-${{ matrix.owner_mode }}-${{ matrix.processors }}
           path: scaling/observability/results/sse-stress-1000-16/
           if-no-files-found: warn
 
