@@ -82,6 +82,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/037_hub_bound_expired_candidate_pages.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
       - name: Build dedicated scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release
       - name: Build OTEL library
@@ -167,6 +168,11 @@ jobs:
             exit 1
           fi
           # Hub runs as a separate deployable process with its own bounded pool.
+          WFC_HUB_PUSH_ENABLED=true WFC_HUB_MATCHING_ENABLED=true \
+          WFC_HUB_MATCHING_CANDIDATES_ENABLED=true \
+          WFC_HUB_MATCHING_ADVERTISE_URL=http://127.0.0.1:5100 \
+          WFC_HUB_MATCHING_PEERS=http://127.0.0.1:5100 \
+          WFC_HUB_MATCHING_PARTITIONS=1 \
           WFC_PG="Host=127.0.0.1;Port=55432;Database=workflow;Username=workflow;Password=workflow_dev_only" \
             dotnet run --no-launch-profile --project scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj \
             --urls http://127.0.0.1:5100 > /tmp/hub-standalone.log 2>&1 &
@@ -183,7 +189,8 @@ jobs:
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             -- --register-only
           # Combined Provisioner receives no workflow PostgreSQL credentials.
-          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WORKFLOW_WORKERS=4 ACTIVITY_WORKERS=4 \
+          env -u WFC_PG WFC_HUB_URL=http://127.0.0.1:5100 WFC_HUB_PUSH_ENABLED=true \
+            WFC_HUB_MATCHING_PARTITIONS=1 WORKFLOW_WORKERS=4 ACTIVITY_WORKERS=4 \
             dotnet run --no-launch-profile \
             --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
             > /tmp/hub-remote-worker.log 2>&1 &
@@ -252,11 +259,10 @@ jobs:
       WFC_HUB_URL: http://127.0.0.1:5100
       WFC_HUB_AUTH_TOKEN: ci-hub-performance-token-very-long-2026
       WFC_HUB_DB_POOL: '12'
-      # Same PostgreSQL/worker topology in both arms. Only the matching
-      # transport and owner-fenced candidate scheduler are switched.
-      WFC_HUB_MATCHING_ENABLED: ${{ matrix.mode == 'candidate' }}
+      # Both arms use push sessions; the candidate arm enables candidate matching.
+      WFC_HUB_MATCHING_ENABLED: 'true'
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: ${{ matrix.mode == 'candidate' }}
-      WFC_HUB_PUSH_ENABLED: ${{ matrix.mode == 'candidate' }}
+      WFC_HUB_PUSH_ENABLED: 'true'
       WFC_HUB_MATCHING_PARTITIONS: '4'
       WFC_HUB_MATCHING_NODE_ID: 'hub-load-1000'
       WFC_HUB_MATCHING_ADVERTISE_URL: 'http://127.0.0.1:5100'
@@ -271,9 +277,6 @@ jobs:
       WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY: '3'
       WFC_HUB_CANDIDATE_ADMISSION_PER_PARTITION: '2'
       WFC_HUB_CANDIDATE_DISCOVERY_PARALLELISM: '4'
-      WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED: 'false'
-      WFC_HUB_TASK_SSE_PUSH: 'false'
-      WFC_HUB_WORKER_CAPACITY_FANOUT: 'false'
       WFC_LOAD_COUNT: '1000'
       WFC_LOAD_VERSION: '5'
       WFC_LOAD_SUBMISSION_CONCURRENCY: '200'
@@ -318,6 +321,7 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/037_hub_bound_expired_candidate_pages.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
       - name: Build Hub, remote worker and performance harness
         run: |
           dotnet build scaling/src/WorkflowCore.Hub.Server/WorkflowCore.Hub.Server.csproj -c Release
@@ -354,8 +358,9 @@ jobs:
             exit 1
           fi
           for i in 1 2 3 4; do
-            # No PostgreSQL credential is available to application hosts.
-            env -u WFC_PG WORKFLOW_WORKERS=16 ACTIVITY_WORKERS=32 dotnet run --no-build -c Release \
+            # Stateless worker processes share no files or PostgreSQL credentials.
+            env -u WFC_PG \
+              WORKFLOW_WORKERS=16 ACTIVITY_WORKERS=32 dotnet run --no-build -c Release \
               --project scaling/sample/onboarding/WorkflowCore.Provisioner.Host/WorkflowCore.Provisioner.Host.csproj \
               > "/tmp/perf-worker-$i.log" 2>&1 &
             worker_pids="$worker_pids $!"
