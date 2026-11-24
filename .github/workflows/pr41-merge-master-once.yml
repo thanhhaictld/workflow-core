@@ -132,6 +132,20 @@ jobs:
           # gateway implementation intact instead of reviving it.
           Path(gateway).write_text(show('origin/master',gateway))
           PY
+      - name: Align PostgreSQL readiness listener with retired task-ID hints
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from subprocess import check_output
+          for path in [
+              'scaling/src/WorkflowCore.Hub.Gateway/PostgresHubNotificationListener.cs',
+              'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubPostgresNotificationTests.cs',
+              'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubNotificationOutboxTests.cs',
+              'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubCandidateAcquisitionRuntimeTests.cs',
+          ]:
+              Path(path).write_text(check_output(['git','show','origin/master:'+path], text=True))
+          PY
       - name: Build merged scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release --nologo
       - name: Test merged scaling suite
