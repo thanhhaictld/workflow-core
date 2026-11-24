@@ -127,15 +127,10 @@ jobs:
           # than the PR's removed SSE credit coordination abstractions.
           Path(workers).write_text(show('origin/master',workers))
           gateway = 'scaling/src/WorkflowCore.Hub.Gateway/HubGatewayEndpoints.cs'
-          current = show('origin/master',gateway)
-          original = show('HEAD',gateway)
-          start = original.index('        // Temporal-inspired demand-driven task matching.')
-          end = original.index('        routes.MapGet("/matching/owner/{hub}"',start)
-          poll_endpoint = original[start:end]
-          marker = '        routes.MapGet("/matching/owner/{hub}"'
-          assert marker in current
-          assert '/workers/tasks:poll' not in current
-          Path(gateway).write_text(current.replace(marker,poll_endpoint+marker,1))
+          # New master owns routing through multiplexed push. The old
+          # tasks:poll route depends on deleted forwarding APIs; keep the new
+          # gateway implementation intact instead of reviving it.
+          Path(gateway).write_text(show('origin/master',gateway))
           PY
       - name: Build merged scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release --nologo
