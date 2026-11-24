@@ -60,6 +60,9 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         public long Bytes = bytes;
         public Guid? Reservation;
         public bool Granted;
+        // Cancellation during a dispatched admission cannot release its credit
+        // until PostgreSQL has authoritatively resolved the claim.
+        public bool CancelRequested;
     }
     private sealed class Stream(int bucket, HubCandidateStream kind)
     {
@@ -281,7 +284,14 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             if (!_credits.TryGetValue(creditId, out var pair) || pair.Credit.Granted) return false;
             if (pair.Credit.Reservation is Guid id)
             {
-                if (!_reservations.TryGetValue(id, out var reservation) || reservation.Dispatched) return false;
+                if (!_reservations.TryGetValue(id, out var reservation)) return false;
+                if (reservation.Dispatched)
+                {
+                    // Defer removal until the DB admission reports its outcome.
+                    // A successful lease still retains its credit until completion.
+                    pair.Credit.CancelRequested = true;
+                    return false;
+                }
                 // This reservation has never left the local drain: no database
                 // transaction can exist, so its candidate is safe to retain.
                 FinishLocked(reservation, true, false);
@@ -291,6 +301,22 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
             return true;
         }
     }
+    // After an SSE session ends, no future demand from it can receive an
+    // assignment. Drop only credits without committed leases; dispatched
+    // admissions are marked for cleanup when the DB result becomes known.
+    // Granted/ambiguous leases remain fenced until completion or retirement.
+    internal void CancelUncommittedSessionCredits(Guid sessionId)
+    {
+        var prefix = $"push:{sessionId:N}:";
+        string[] credits;
+        lock (_sync)
+            credits = _credits.Where(x =>
+                !x.Value.Credit.Granted &&
+                x.Value.Credit.Value.WorkerId.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(x => x.Key).ToArray();
+        foreach (var id in credits) CancelCredit(id);
+    }
+
     // Called only when transport/session accounting confirms the granted slot
     // is no longer outstanding. Owner loss alone never releases it.
     internal bool ReleaseGrantedCredit(string creditId)
@@ -379,7 +405,7 @@ internal sealed class HubPartitionCandidateRegistry : IDisposable
         entry.Reservation = null; credit.Reservation = null;
         if (!retainCandidate || !p.Active) RemoveEntryLocked(p, entry);
         if (consumeCredit) credit.Granted = true;
-        else if (!p.Active) RemoveCreditLocked(p, credit);
+        else if (!p.Active || credit.CancelRequested) RemoveCreditLocked(p, credit);
         // Rotating a released credit prevents one worker monopolizing matches.
         else { p.Credits.Remove(credit); p.Credits.AddLast(credit); }
         ReleaseStoppedPartitionLocked(p);

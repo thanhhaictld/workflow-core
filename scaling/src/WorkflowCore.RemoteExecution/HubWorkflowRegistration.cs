@@ -18,9 +18,6 @@ public sealed class HubRuntimeOptions
     public bool AllowInsecureHttp { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true";
     public int WorkflowConcurrency { get; set; } = 8;
     public int ActivityConcurrency { get; set; } = 16;
-    // Logical lane replicas within one host, intended for controlled load tests.
-    public int LaneInstances { get; set; } =
-        int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_WORKER_LANE_INSTANCES"), out var lanes) ? lanes : 1;
     public string? WorkerHub { get; set; } = Environment.GetEnvironmentVariable("WFC_HUB_WORKER_HUB");
     // Opt-in processor-side cap. Applies independently to workflow and
     // activity lanes, including long-poll demand; 0 keeps legacy settings.
@@ -38,9 +35,6 @@ public sealed class HubRuntimeOptions
     public int MatchingPartitions { get; set; } =
         int.TryParse(Environment.GetEnvironmentVariable("WFC_HUB_MATCHING_PARTITIONS"),
             out var count) ? count : 1;
-    // Feature flag for controlled baseline/optimized benchmark runs.
-    public bool AdaptiveClaimsEnabled { get; set; } =
-        Environment.GetEnvironmentVariable("WFC_HUB_ADAPTIVE_CLAIMS") is not ("0" or "false" or "False");
     public TimeSpan ErrorRetryInterval { get; set; } = TimeSpan.FromSeconds(60);
     public bool RegisterOnly { get; set; }
     public bool SequentialVersionOneCompatibility { get; set; }
@@ -150,9 +144,6 @@ public static class HubWorkflowRuntimeExtensions
     {
         var options=new HubRuntimeOptions();configure?.Invoke(options);
         if(options.WorkflowConcurrency is <1 or >256 || options.ActivityConcurrency is <1 or >256 ||
-           options.LaneInstances is <1 or >2000 ||
-           options.WorkerConcurrencyCap is < 0 or > 256 ||
-           options.PollInterval<TimeSpan.FromMilliseconds(10) ||
            options.MatchingPartitions is < 1 or > 64)throw new ArgumentException("Invalid Hub worker options");
         services.AddSingleton(options);
         services.AddWorkflow(o=>{
@@ -171,15 +162,14 @@ public static class HubWorkflowRuntimeExtensions
         services.AddTransient<HubNativeExecutor>();
         services.AddTransient<HubWorkflowClient>();
         services.AddWorkflowStepMiddleware<HubActivityMiddleware>();
-        services.TryAddSingleton(_=>new HubRestClient(options.HubUrl,options.Token,options.AllowInsecureHttp));
+        services.TryAddSingleton(_=>new HubRestClient(options.HubUrl,options.Token,options.AllowInsecureHttp,
+            allowRedirects: false));
         services.AddHostedService<HubRuntimePublisher>();
         if(!options.RegisterOnly)
         {
-            for (var i = 0; i < options.LaneInstances; i++)
-            {
-                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeWorkflowWorker>(sp));
-                services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<HubNativeActivityWorker>(sp));
-            }
+            services.AddSingleton<HubNativeWorkflowWorker>();
+            services.AddSingleton<HubNativeActivityWorker>();
+            services.AddHostedService<HubPushProcessor>();
         }
         return new(services);
     }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WorkflowCore.Hub;
 
@@ -17,7 +18,12 @@ public sealed record HubNativeCommit(int ProtocolVersion, string WorkerId, long 
     long ExpectedRevision, Guid TaskId, JsonElement Snapshot, string Status,
     bool Runnable, DateTime? WakeAt, long[] ConsumedInbox,
     HubNativeSubscription[] Subscriptions, HubNativeDispatch[] Activities, HubNativeHistory[] History,
-    string[]? ActiveDispatches = null, HubNativeTimer? Timer = null);
+    string[]? ActiveDispatches = null, HubNativeTimer? Timer = null)
+{
+    // Keys removed from the active set in this revision. Null selects full reconciliation.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? ObsoleteDispatches { get; init; }
+}
 public sealed record HubNativeEvent(string EventName, string EventKey, JsonElement Data,
     string IdempotencyKey, DateTime? EffectiveAt = null);
 public sealed record HubNativeStatusChange(string Status, string IdempotencyKey);

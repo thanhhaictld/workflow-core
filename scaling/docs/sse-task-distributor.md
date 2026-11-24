@@ -1,5 +1,7 @@
 # Hub SSE Task Distributor — owner-fenced sessions and dynamic worker credits
 
+> Historical reference. Reproduction commands apply to the revision measured below. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 **Status:** Experimental, **default OFF**. [Hardening PR #30](https://github.com/thanhhaictld/workflow-core/pull/30) is stacked on [SSE transport PR #29](https://github.com/thanhhaictld/workflow-core/pull/29), [long-poll fanout PR #28](https://github.com/thanhhaictld/workflow-core/pull/28), and the PostgreSQL optimizations from PR #27 (migrations 020–022).
 
 The Hub **pushes a PostgreSQL-leased task over SSE**. This differs from the old `workers/events` endpoint, which only pushed `tasks.available` hints, and from the worker-initiated `tasks:poll` long-poll.

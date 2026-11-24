@@ -1,5 +1,7 @@
 # Distributed Task Matching for Hub: Phase 1 + Phase 2
 
+> Historical reference. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 ## Status and architectural contract
 
 Implementation branch: `feat/distributed-task-matching-ha`, based on PR #18

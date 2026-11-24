@@ -206,6 +206,10 @@ function Start-Hub {
     if (-not $env:WFC_HUB_AUTH_TOKEN) { throw "Set WFC_HUB_AUTH_TOKEN (24+ characters) before starting the Hub" }
     Apply-DatabaseSchema
     $env:WFC_PG = $LocalConnection
+    $env:WFC_HUB_PUSH_ENABLED ??= 'true'
+    $env:WFC_HUB_MATCHING_ENABLED ??= 'true'
+    $env:WFC_HUB_MATCHING_ADVERTISE_URL ??= "http://127.0.0.1:$HubPort"
+    $env:WFC_HUB_MATCHING_PEERS ??= $env:WFC_HUB_MATCHING_ADVERTISE_URL
     Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project',
         $HubProject, '--urls', "http://127.0.0.1:$HubPort")
 }
@@ -332,6 +336,7 @@ try {
             if (-not $env:WFC_HUB_AUTH_TOKEN) { throw 'Set WFC_HUB_AUTH_TOKEN' }
             if (-not $env:WFC_HUB_URL) { $env:WFC_HUB_URL = "http://127.0.0.1:$HubPort" }
             Remove-Item Env:WFC_PG -ErrorAction SilentlyContinue
+            $env:WFC_HUB_PUSH_ENABLED ??= 'true'
             Invoke-External -Executable 'dotnet' -Arguments @('run', '--no-launch-profile', '--project', $ProvisionerProject)
         }
         'ui'          { Start-Ui }

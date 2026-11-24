@@ -11,7 +11,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 2,
+  "version": 3,
   "editable": false,
   "refresh": "5s",
   "time": {
@@ -77,7 +77,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(workflow_hub_workflows_completed_total[1m])) or vector(0)",
+          "expr": "sum(rate(workflow_hub_workflows_completed_total[1m])) or 0 * count(workflow_hub_process_working_set_bytes{service_name=\"workflow-hub\"})",
           "legendFormat": "",
           "range": true,
           "interval": ""
@@ -109,7 +109,8 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Database sessions",
+      "title": "Hub database connections in use",
+      "description": "Checked-out connections from the Hub Npgsql pools.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -121,13 +122,7 @@
         "h": 5
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(workflow_hub_database_connections)",
-          "legendFormat": "",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "sum(db_client_connections_usage{service_name=\"workflow-hub\",state=\"used\"})", "legendFormat": "", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
@@ -169,7 +164,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(workflow_hub_workflows_failed_total[15m])) or vector(0)",
+          "expr": "sum(increase(workflow_hub_workflows_failed_total[15m])) or 0 * count(workflow_hub_process_working_set_bytes{service_name=\"workflow-hub\"})",
           "legendFormat": "",
           "range": true,
           "interval": ""
@@ -213,13 +208,7 @@
         "h": 5
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(workflow_hub_worker_inflight) or vector(0)",
-          "legendFormat": "",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "sum(workflow_hub_worker_inflight{task_kind=\"activity\"})", "legendFormat": "", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
@@ -454,15 +443,15 @@
         },
         {
           "refId": "F",
-          "expr": "histogram_quantile(0.95,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95,sum by(le,claim_strategy,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m]))) or (label_replace(histogram_quantile(0.95,sum by(le)(rate(workflow_hub_candidate_admission_seconds_bucket[2m]))), \"claim_strategy\", \"candidate\", \"claim_strategy\", \".*\") unless on (claim_strategy) count by (claim_strategy) (workflow_hub_claim_duration_seconds_count{claim_strategy=\"candidate\"}))",
           "range": true,
-          "legendFormat": "P0 claim p95 {{history_mode}} {{outcome}}"
+          "legendFormat": "P0 claim p95 {{claim_strategy}} {{history_mode}} {{outcome}}"
         },
         {
           "refId": "G",
-          "expr": "histogram_quantile(0.99,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.99,sum by(le,claim_strategy,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m]))) or (label_replace(histogram_quantile(0.99,sum by(le)(rate(workflow_hub_candidate_admission_seconds_bucket[2m]))), \"claim_strategy\", \"candidate\", \"claim_strategy\", \".*\") unless on (claim_strategy) count by (claim_strategy) (workflow_hub_claim_duration_seconds_count{claim_strategy=\"candidate\"}))",
           "range": true,
-          "legendFormat": "P0 claim p99 {{history_mode}} {{outcome}}"
+          "legendFormat": "P0 claim p99 {{claim_strategy}} {{history_mode}} {{outcome}}"
         }
       ],
       "fieldConfig": {
@@ -542,12 +531,13 @@
           "sort": "none"
         }
       },
-      "description": "Correlate workflow throughput with row-lock p95/p99 by event lane lock mode and P0 claim p95/p99 by history mode and outcome. Latency uses the left axis (seconds); workflow rates use the right axis (workflows/second). Percentiles are histogram estimates."
+      "description": "Compare workflow throughput with row-lock and claim percentiles by strategy and outcome. The left axis shows latency in seconds. The right axis shows workflows per second."
     },
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Durable queue depth (5s sampled)",
+      "title": "Hub task transport throughput",
+      "description": "Process counters measure confirmed task leases, flushed push assignments, and newly committed activity results.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -559,31 +549,13 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(workflow_hub_queue_ready)",
-          "legendFormat": "Ready",
-          "range": true,
-          "interval": ""
-        },
-        {
-          "refId": "B",
-          "expr": "sum(workflow_hub_queue_leased)",
-          "legendFormat": "Leased",
-          "range": true,
-          "interval": ""
-        },
-        {
-          "refId": "C",
-          "expr": "sum(workflow_hub_queue_dead)",
-          "legendFormat": "Dead",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "sum(rate(workflow_hub_tasks_claimed_total[1m])) or sum(rate(workflow_hub_candidate_leased_total[1m]))", "legendFormat": "Leases/s", "range": true},
+        {"refId": "B", "expr": "sum(rate(workflow_hub_sse_tasks_dispatched_total[1m]))", "legendFormat": "Push assignments/s", "range": true},
+        {"refId": "C", "expr": "sum(rate(workflow_activities_completed_total[1m]))", "legendFormat": "Activity results/s", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
@@ -612,7 +584,8 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "PostgreSQL sessions (5s sampled)",
+      "title": "Hub Npgsql pools by instance",
+      "description": "Open, checked-out and idle connections come from each Hub library client. Waiters are pending pool checkouts.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -624,20 +597,8 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(workflow_hub_database_connections)",
-          "legendFormat": "Total connections",
-          "range": true,
-          "interval": ""
-        },
-        {
-          "refId": "B",
-          "expr": "sum(workflow_hub_database_active_connections)",
-          "legendFormat": "Active connections",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "sum by (service_instance_id, state) (db_client_connections_usage{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} {{state}}", "range": true},
+        {"refId": "B", "expr": "sum by (service_instance_id) (db_client_connections_pending_requests{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} waiters", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
@@ -789,7 +750,8 @@
     {
       "id": 12,
       "type": "timeseries",
-      "title": "Connected SSE sessions",
+      "title": "Active SSE streams by Hub",
+      "description": "Push streams carry task assignments. Readiness subscriptions are the compatibility transport.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -801,13 +763,8 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(workflow_hub_sse_connections)",
-          "legendFormat": "SSE subscriptions",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "sum by (service_instance_id) (workflow_hub_sse_task_sessions{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} push", "range": true},
+        {"refId": "B", "expr": "sum by (service_instance_id) (workflow_hub_sse_connections{service_name=\"workflow-hub\"})", "legendFormat": "{{service_instance_id}} readiness", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
@@ -892,6 +849,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Hub claim latency p95",
+      "description": "Native candidate admission measures the Hub's time in the database claim path. Compatibility claims are shown separately.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -903,17 +861,12 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
-          "legendFormat": "Claim p95",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(workflow_hub_candidate_admission_seconds_bucket[2m])))", "legendFormat": "Candidate admission p95", "range": true},
+        {"refId": "B", "expr": "histogram_quantile(0.95, sum by (le, claim_strategy) (rate(workflow_hub_claim_duration_seconds_bucket{claim_strategy!=\"candidate\"}[2m])))", "legendFormat": "{{claim_strategy}} p95", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": 37,
+          "unit": "s",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
@@ -964,7 +917,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": 45,
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
@@ -994,6 +947,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Hub HTTP p95 latency",
+      "description": "Latency of finite HTTP requests. Active delivery and readiness streams appear in the SSE panel.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1005,17 +959,11 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,http_route) (rate(http_server_request_duration_seconds_bucket{service_name=\"workflow-hub\"}[2m])))",
-          "legendFormat": "{{http_route}}",
-          "range": true,
-          "interval": ""
-        }
+        {"refId": "A", "expr": "histogram_quantile(0.95, sum by (le,http_route) (rate(http_server_request_duration_seconds_bucket{service_name=\"workflow-hub\",http_route!~\"/api/hub/workers/(.*/)?events\"}[2m])))", "legendFormat": "{{http_route}}", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": 45,
+          "unit": "s",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
@@ -1543,8 +1491,8 @@
     {
       "id": 26,
       "type": "timeseries",
-      "title": "P0 Claim duration p95/p99",
-      "description": "P0 diagnosis: mode isolates old and batched history writes. Percentiles come from histogram buckets, not k6 request latency.",
+      "title": "Hub claim p95/p99 by strategy",
+      "description": "Candidate claims report admission outcomes. Compatibility claims also include the history mode.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1558,14 +1506,14 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
-          "legendFormat": "p95 {{history_mode}} {{outcome}}",
+          "expr": "histogram_quantile(0.95,sum by(le,claim_strategy,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m]))) or (label_replace(histogram_quantile(0.95,sum by(le)(rate(workflow_hub_candidate_admission_seconds_bucket[2m]))), \"claim_strategy\", \"candidate\", \"claim_strategy\", \".*\") unless on (claim_strategy) count by (claim_strategy) (workflow_hub_claim_duration_seconds_count{claim_strategy=\"candidate\"}))",
+          "legendFormat": "p95 {{claim_strategy}} {{history_mode}} {{outcome}}",
           "range": true
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99,sum by(le,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m])))",
-          "legendFormat": "p99 {{history_mode}} {{outcome}}",
+          "expr": "histogram_quantile(0.99,sum by(le,claim_strategy,outcome,history_mode)(rate(workflow_hub_claim_duration_seconds_bucket[2m]))) or (label_replace(histogram_quantile(0.99,sum by(le)(rate(workflow_hub_candidate_admission_seconds_bucket[2m]))), \"claim_strategy\", \"candidate\", \"claim_strategy\", \".*\") unless on (claim_strategy) count by (claim_strategy) (workflow_hub_claim_duration_seconds_count{claim_strategy=\"candidate\"}))",
+          "legendFormat": "p99 {{claim_strategy}} {{history_mode}} {{outcome}}",
           "range": true
         }
       ],
@@ -1595,8 +1543,8 @@
     {
       "id": 27,
       "type": "timeseries",
-      "title": "P0 Claim candidate scan amplification",
-      "description": "Number of candidate rows scanned for each claim request. A high count with empty claims indicates queue-head contention.",
+      "title": "Claim inputs per committed lease",
+      "description": "Candidate mode counts reserved inputs sent for admission. Compatibility mode reports scanned candidates. A ratio is available while the corresponding path is granting leases.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1608,12 +1556,8 @@
         "h": 8
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_hub_claim_candidates_scanned_sum[2m])) / clamp_min(sum(rate(workflow_hub_claim_tasks_returned_sum[2m])), 1e-6)",
-          "legendFormat": "scanned candidates / claimed task",
-          "range": true
-        }
+        {"refId": "A", "expr": "sum(rate(workflow_hub_candidate_batch_fill_sum[2m])) / (sum(rate(workflow_hub_candidate_leased_total[2m])) > 0)", "legendFormat": "Candidate reservations / lease", "range": true},
+        {"refId": "B", "expr": "sum(rate(workflow_hub_claim_candidates_scanned_sum[2m])) / (sum(rate(workflow_hub_claim_tasks_returned_sum[2m])) > 0)", "legendFormat": "Compatibility candidates scanned / lease", "range": true}
       ],
       "fieldConfig": {
         "defaults": {
@@ -1722,352 +1666,15 @@
       }
     },
     {
-      "id": 31,
-      "type": "timeseries",
-      "title": "Activity claim attempts/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 117,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "attempts/s",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 32,
-      "type": "timeseries",
-      "title": "Empty activity claims (%)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 117,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "100 * sum(rate(workflow_claim_empty_total{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_attempts_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "empty %",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 33,
       "type": "timeseries",
-      "title": "Activity throughput/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 125,
-        "w": 12,
-        "h": 8
-      },
+      "title": "Durable activity completions / second",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 125, "w": 12, "h": 8 },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_success_total{lane=\"activity\"}[5m]))",
-          "legendFormat": "claimed",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "sum(rate(workflow_activities_completed_total[5m]))",
-          "legendFormat": "durably completed",
-          "range": true
-        }
+        { "refId": "A", "expr": "sum(rate(workflow_activities_completed_total[5m]))", "legendFormat": "completed", "range": true }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 34,
-      "type": "timeseries",
-      "title": "Activity claim latency p95/p99 by transport",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 125,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
-          "legendFormat": "p95 {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le, transport) (rate(workflow_claim_duration_seconds_bucket{lane=\"activity\"}[5m])))",
-          "legendFormat": "p99 {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 35,
-      "type": "timeseries",
-      "title": "Activity claim average batch size",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 133,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(workflow_claim_batch_size_sum{lane=\"activity\"}[5m])) / sum(rate(workflow_claim_batch_size_count{lane=\"activity\"}[5m]))",
-          "legendFormat": "tasks / successful request",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 36,
-      "type": "timeseries",
-      "title": "Activity claim HTTP outcomes/s",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 133,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (transport, outcome) (rate(workflow_claim_duration_seconds_count{lane=\"activity\"}[5m]))",
-          "legendFormat": "{{transport}} {{outcome}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 37,
-      "type": "timeseries",
-      "title": "Claim requests started / ended per second",
-      "description": "Worker-observed HTTP request starts and finishes, including empty responses, errors and cancellations. Finishes do not mean task execution completed. Rates are averaged over one minute.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport) (rate(workflow_claim_attempts_total[1m]))",
-          "legendFormat": "started {{lane}} {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (lane, transport) (rate(workflow_claim_duration_seconds_count[1m]))",
-          "legendFormat": "ended {{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 38,
-      "type": "timeseries",
-      "title": "Claim requests in flight",
-      "description": "Pending worker HTTP claim requests and long polls. Long-poll waiting is included; task execution, backoff and persistent SSE task streams are excluded. Process-local, sampled telemetry; abrupt exits may lose final measurements.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 141,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport) (workflow_claim_inflight)",
-          "legendFormat": "{{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 39,
-      "type": "timeseries",
-      "title": "Claim requests ended by outcome",
-      "description": "One finish per HTTP request, whether claimed, empty, error or cancelled. A claimed response can contain multiple tasks. Includes both workflow and activity lanes; excludes persistent SSE task delivery.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 149,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (lane, transport, outcome) (rate(workflow_claim_duration_seconds_count[1m]))",
-          "legendFormat": "{{lane}} {{transport}} {{outcome}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 40,
-      "type": "timeseries",
-      "title": "Claim request latency p95 / p99",
-      "description": "Worker-observed HTTP latency, including server-held long-poll waiting and transport time, excluding retry backoff and task execution. Aggregates buckets across worker instances before calculating percentiles.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 149,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
-          "legendFormat": "p95 {{lane}} {{transport}}",
-          "range": true
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le, lane, transport) (rate(workflow_claim_duration_seconds_bucket[1m])))",
-          "legendFormat": "p99 {{lane}} {{transport}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      }
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] }
     },
     {
       "id": 41,
@@ -2075,11 +1682,11 @@
       "title": "Candidate registry occupancy",
       "description": "Current in-process candidate credits, reservations and cached task metadata. These process-wide gauges are not task completion counts.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 157, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 117, "w": 12, "h": 8 },
       "targets": [
-        { "refId": "A", "expr": "workflow_hub_candidate_credits", "legendFormat": "credits", "range": true },
-        { "refId": "B", "expr": "workflow_hub_candidate_reservations", "legendFormat": "reservations", "range": true },
-        { "refId": "C", "expr": "workflow_hub_candidate_entries", "legendFormat": "cached entries", "range": true }
+        { "refId": "A", "expr": "workflow_hub_candidate_credits{service_name=\"workflow-hub\"}", "legendFormat": "{{service_instance_id}} credits", "range": true },
+        { "refId": "B", "expr": "workflow_hub_candidate_reservations{service_name=\"workflow-hub\"}", "legendFormat": "{{service_instance_id}} reservations", "range": true },
+        { "refId": "C", "expr": "workflow_hub_candidate_entries{service_name=\"workflow-hub\"}", "legendFormat": "{{service_instance_id}} cached entries", "range": true }
       ],
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] }
     },
@@ -2089,9 +1696,9 @@
       "title": "Candidate registry memory estimate",
       "description": "Estimated managed bytes charged to candidate metadata, credits, and in-flight database pages.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 157, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 117, "w": 12, "h": 8 },
       "targets": [
-        { "refId": "A", "expr": "workflow_hub_candidate_bytes", "legendFormat": "estimated bytes", "range": true }
+        { "refId": "A", "expr": "workflow_hub_candidate_bytes{service_name=\"workflow-hub\"}", "legendFormat": "{{service_instance_id}}", "range": true }
       ],
       "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] }
     },
@@ -2101,9 +1708,9 @@
       "title": "Candidate credit capacity fallback rate",
       "description": "Rate of candidate acquisitions that could not reserve one bounded credit and used the existing owner-fenced claim fallback.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 165, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 125, "w": 12, "h": 8 },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(workflow_hub_candidate_capacity_fallbacks_total[5m]))", "legendFormat": "fallbacks/s", "range": true }
+        {"refId": "A", "expr": "sum(rate(workflow_hub_candidate_capacity_fallbacks_total[5m])) or 0 * count(workflow_hub_candidate_entries{service_name=\"workflow-hub\"})", "legendFormat": "fallbacks/s", "range": true}
       ],
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] }
     },

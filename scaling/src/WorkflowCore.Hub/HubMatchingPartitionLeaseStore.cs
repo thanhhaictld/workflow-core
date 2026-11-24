@@ -115,32 +115,75 @@ public sealed class HubMatchingPartitionLeaseStore(HubTaskStore tasks)
     }
 
     public async Task<HubMatchingPartitionLease?> ReadAsync(
-        string hub, int partition, CancellationToken ct)
+        string hub, int partition, CancellationToken ct, bool activeOnly = false)
     {
         await using var cmd = Source.CreateCommand("""
             SELECT hub_id,matching_partition,owner_id,owner_url,epoch,lease_until
             FROM wfc_scale.hub_matching_partition_owner
             WHERE hub_id=@hub AND matching_partition=@partition
+              AND (NOT @active_only OR lease_until>clock_timestamp())
             """);
         cmd.Parameters.AddWithValue("hub", hub);
         cmd.Parameters.AddWithValue("partition", partition);
+        cmd.Parameters.AddWithValue("active_only", activeOnly);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? Read(reader) : null;
     }
 
     public async Task<IReadOnlyList<HubMatchingPartitionLease>> ListAsync(
-        string hub, CancellationToken ct)
+        string hub, CancellationToken ct, bool activeOnly = false)
     {
         await using var cmd = Source.CreateCommand("""
             SELECT hub_id,matching_partition,owner_id,owner_url,epoch,lease_until
             FROM wfc_scale.hub_matching_partition_owner
-            WHERE hub_id=@hub ORDER BY matching_partition
+            WHERE hub_id=@hub AND (NOT @active_only OR lease_until>clock_timestamp())
+            ORDER BY matching_partition
             """);
         cmd.Parameters.AddWithValue("hub", hub);
+        cmd.Parameters.AddWithValue("active_only", activeOnly);
         var leases = new List<HubMatchingPartitionLease>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) leases.Add(Read(reader));
         return leases;
+    }
+
+    internal async Task<bool> IsPushGrantRetiredAsync(HubPushGrantRecovery recovery,
+        bool admissionStopped, CancellationToken ct)
+    {
+        var grant = recovery.Grant;
+        await using var db = await Source.OpenConnectionAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        // Drain transactions that acquired the owner fence, including when a
+        // caller lost the result of COMMIT. Read leases in a fresh snapshot
+        // after acquiring the lock. An expired generation cannot renew.
+        await using var fence = new NpgsqlCommand("""
+            WITH locked_owner AS MATERIALIZED (
+                SELECT owner_id, epoch, lease_until
+                FROM wfc_scale.hub_matching_partition_owner
+                WHERE hub_id=@hub AND matching_partition=@partition
+                FOR UPDATE
+            )
+            SELECT NOT EXISTS (
+                SELECT 1 FROM locked_owner
+                WHERE owner_id=@owner AND epoch=@epoch AND lease_until>clock_timestamp()
+            )
+            """, db, tx);
+        fence.Parameters.AddWithValue("hub", grant.HubId);
+        fence.Parameters.AddWithValue("partition", grant.Partition);
+        fence.Parameters.AddWithValue("owner", recovery.Session.OwnerId);
+        fence.Parameters.AddWithValue("epoch", grant.OwnerEpoch);
+        if (await fence.ExecuteScalarAsync(ct) is not true && !admissionStopped) return false;
+        await using var leases = new NpgsqlCommand("""
+            WITH locked_leases AS MATERIALIZED (
+                SELECT lease_until FROM wfc_scale.hub_task
+                WHERE hub_id=@hub AND state=1 AND owner=@worker
+                FOR UPDATE
+            )
+            SELECT NOT EXISTS (SELECT 1 FROM locked_leases WHERE lease_until>clock_timestamp())
+            """, db, tx);
+        leases.Parameters.AddWithValue("hub", grant.HubId);
+        leases.Parameters.AddWithValue("worker", recovery.LeaseOwner);
+        return await leases.ExecuteScalarAsync(ct) is true;
     }
 
     public async Task<bool> RenewAsync(

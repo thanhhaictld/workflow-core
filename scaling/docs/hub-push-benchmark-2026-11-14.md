@@ -1,5 +1,7 @@
 # Hub push comparison, 14 November 2026
 
+> Historical reference. Reproduction commands apply to the revision measured below. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 This is a single local experiment, not a production capacity claim. The same
 native onboarding v3 workload, one Hub, PostgreSQL database, 100 virtual users,
 and claim-admission configuration were used for the final four measurements.

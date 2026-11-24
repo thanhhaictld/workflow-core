@@ -575,13 +575,21 @@ public sealed class HubTaskStore : IAsyncDisposable
             request.Capabilities.Count is < 1 or > 128 || request.Workflows?.Count > 128 ||
             request.Lease < TimeSpan.FromSeconds(10) || request.Lease > TimeSpan.FromMinutes(5))
             throw new ArgumentException("Invalid candidate batch claim parameters");
-        if (!await _claimGate.WaitAsync(0,ct)) return new(HubCandidateClaimStatus.AdmissionDeferred,[]);
+        var strategyTag = new KeyValuePair<string, object?>("claim_strategy", "candidate");
+        if (!await _claimGate.WaitAsync(0, ct))
+        {
+            HubTelemetry.ClaimAdmissionDeferred.Add(1, strategyTag);
+            return new(HubCandidateClaimStatus.AdmissionDeferred, []);
+        }
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "error";
+        HubTelemetry.ClaimAdmissionActive.Add(1, strategyTag);
         try
         {
             await using var db = await _dataSource.OpenConnectionAsync(ct);
             await using var tx = await db.BeginTransactionAsync(ct);
             if (!await HubMatchingPartitionLeaseStore.LockOwnerForAdmissionAsync(db,tx,request.Owner,request.PartitionCount,ct))
-                return new(HubCandidateClaimStatus.OwnerLost,[]);
+                return Finish(HubCandidateClaimStatus.OwnerLost, "owner_lost", []);
             var claimed = new List<(HubLeasedTask Lease, bool HasStep)>();
             await using (var cmd = new NpgsqlCommand(CandidateBatchAdmissionSql,db,tx))
             {
@@ -602,7 +610,7 @@ public sealed class HubTaskStore : IAsyncDisposable
                     claimed.Add((task,workflow.HasValue && !rows.IsDBNull(10)));
                 }
             }
-            if (claimed.Count == 0) return new(HubCandidateClaimStatus.Unavailable,[]);
+            if (claimed.Count == 0) return Finish(HubCandidateClaimStatus.Unavailable, "empty", []);
             var stepIds=claimed.Where(x => x.HasStep).Select(x => x.Lease.Id).ToArray();
             if (stepIds.Length != 0)
             {
@@ -629,13 +637,28 @@ public sealed class HubTaskStore : IAsyncDisposable
             }
             if (testHooks?.BeforeOwnerRecheck is not null) await testHooks.BeforeOwnerRecheck(ct);
             try { await CheckClaimOwnerAsync(db,tx,request.HubId,request.Partition,new(request.Owner.OwnerId,request.Owner.Epoch),false,ct); }
-            catch (InvalidOperationException) { return new(HubCandidateClaimStatus.OwnerLost,[]); }
+            catch (InvalidOperationException) { return Finish(HubCandidateClaimStatus.OwnerLost, "owner_lost", []); }
             var leases=claimed.Select(x=>x.Lease).ToArray();
             try { if (testHooks?.Commit is not null) await testHooks.Commit(tx,ct); else await tx.CommitAsync(ct); }
-            catch (Exception) { return new(HubCandidateClaimStatus.CommitOutcomeUnknown,leases); }
-            return new(HubCandidateClaimStatus.Leased,leases);
+            catch (Exception) { return Finish(HubCandidateClaimStatus.CommitOutcomeUnknown, "commit_unknown", leases); }
+            foreach (var lease in leases)
+                HubTelemetry.TasksClaimed.Add(1, HubTelemetry.HubTag(lease.HubId), HubTelemetry.ActivityTag(lease.TaskType));
+            return Finish(HubCandidateClaimStatus.Leased, "claimed", leases);
         }
-        finally { _claimGate.Release(); }
+        finally
+        {
+            _claimGate.Release();
+            var seconds = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            HubTelemetry.ClaimAdmissionActive.Add(-1, strategyTag);
+            HubTelemetry.CandidateAdmissionLatency.Record(seconds);
+            HubTelemetry.ClaimDuration.Record(seconds, strategyTag, new KeyValuePair<string, object?>("outcome", outcome));
+        }
+
+        HubCandidateBatchResult Finish(HubCandidateClaimStatus status, string measureOutcome, HubLeasedTask[] leases)
+        {
+            outcome = measureOutcome;
+            return new(status, leases);
+        }
     }
 
     private static async Task<HubLeasedTask?> ClaimPullCandidateAsync(
@@ -990,9 +1013,12 @@ public sealed class HubTaskStore : IAsyncDisposable
     {
         if (lease <= TimeSpan.Zero || lease > TimeSpan.FromMinutes(5)) return false;
         await using var command = _dataSource.CreateCommand("""
-            UPDATE wfc_scale.hub_task SET lease_until = now() + @lease, updated_at=now()
-            WHERE id=@id AND owner=@owner AND epoch=@epoch
-              AND state=1 AND lease_until>now()
+            WITH locked_lease AS MATERIALIZED (
+                SELECT id, lease_until FROM wfc_scale.hub_task
+                WHERE id=@id AND owner=@owner AND epoch=@epoch AND state=1 FOR UPDATE
+            )
+            UPDATE wfc_scale.hub_task t SET lease_until=clock_timestamp()+@lease, updated_at=clock_timestamp()
+            FROM locked_lease l WHERE t.id=l.id AND l.lease_until>clock_timestamp()
             """);
         command.Parameters.AddWithValue("id", id);
         command.Parameters.AddWithValue("owner", worker);

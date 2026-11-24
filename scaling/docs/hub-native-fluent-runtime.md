@@ -45,8 +45,8 @@ native steps.
 
 One activity registration supplies publication, worker capability, property
 contract, and Hub resource policy. Hub enforces resource limits across hosts.
-Each host bounds its workflow and activity lanes independently. A waiting workflow
-releases workflow worker capacity.
+Each processor configures separate total workflow and activity slots. A waiting
+workflow releases its workflow slot.
 
 Input properties stay at the payload's top level for resource admission. Typed
 values also travel in an adapter envelope so boxed numbers, DTOs, arrays, and
@@ -106,6 +106,11 @@ transport attempts. Sleep and retry deadlines use durable Hub timers.
 
 Suspension retains dispatch intent and inbox results. Claims pause until resume.
 Pointer cancellation fences outstanding activity leases and releases permits.
+Native processors send the dispatch keys removed in an iteration as `obsoleteDispatches`.
+The Hub uses consumed activity inbox entries to exclude finished dispatches and revokes
+all remaining queued or leased keys and closes their attempts in the snapshot commit.
+An empty batch skips cancellation SQL. Commits without the batch use `activeDispatches`
+for full reconciliation, and the processor continues sending that list to support older Hubs.
 Complete or terminated workflows retire outstanding tasks and timers.
 
 Workers renew leases and cancel execution on renewal failure or local lease
@@ -127,13 +132,12 @@ migrations 023 and 025–027. Run 031 with autocommit, outside a transaction blo
 see [task index cleanup](current-runtime.md#task-index-cleanup). Migration 012 adds
 native state, inbox/subscription/event tables, dispatch identities, and history
 fields. It preserves existing rows and the inline and remote sequential modes.
-Deploy the updated Hub code before starting native hosts or submitting native runs.
+Enable `WFC_HUB_PUSH_ENABLED=true` on the Hub and native hosts. Configure matching and reachable owner URLs as described in [current runtime](current-runtime.md#standard-development-deployment).
 Older Gateway binaries do not understand native task completion and inbox delivery.
 
 The onboarding sample publishes native **v3 and v4** workflow definitions and
-runs both lanes in `WorkflowCore.Provisioner.Host`. Compose no longer deploys the
-standalone sequential Processor. Sequential adapters remain in the library for
-explicit compatibility deployments, but the sample does not publish or claim v1.
+runs workflow and activity tasks in `WorkflowCore.Provisioner.Host`. The library
+also provides the v1 sequential adapters for explicit compatibility deployments.
 
 Workflow definitions and step bodies live in the separate
 `WorkflowCore.Provisioner.Workflows` assembly. Keep operational policy and worker

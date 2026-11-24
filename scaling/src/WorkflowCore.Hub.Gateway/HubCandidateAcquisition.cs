@@ -57,6 +57,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
     private Task? _reconciliationTask;
     private int _nextAdmissionPartition;
     private readonly Func<HubMatchingPartitionLease, CancellationToken, Task>? _beforeAdmission;
+    private readonly HubCandidateClaimTestHooks? _admissionTestHooks;
     private readonly ConcurrentDictionary<(Guid Id,long Epoch),Retained> _retained = new();
     private readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
         { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
@@ -69,9 +70,11 @@ public sealed class HubCandidateAcquisition : BackgroundService
     internal HubCandidateAcquisition(HubTaskStore tasks, HubMatchingOwnership ownership,
         HubReadinessBroadcaster readiness, ILogger<HubCandidateAcquisition> logger,
         HubCandidateCoordinatorOptions? options, bool? backpressure,
-        Func<HubMatchingPartitionLease, CancellationToken, Task>? beforeAdmission = null)
+        Func<HubMatchingPartitionLease, CancellationToken, Task>? beforeAdmission = null,
+        HubCandidateClaimTestHooks? admissionTestHooks = null)
     {
         _beforeAdmission = beforeAdmission;
+        _admissionTestHooks = admissionTestHooks;
         _backpressure = backpressure ?? _backpressure;
         var configuredConcurrency = Environment.GetEnvironmentVariable("WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY");
         var concurrencySetting = "WFC_HUB_CANDIDATE_ADMISSION_CONCURRENCY";
@@ -101,7 +104,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
             ownership.PartitionAcquired += Acquired;
             ownership.PartitionLost += Lost;
             readiness.CandidateRescanRequested += Hint;
-            readiness.CandidateTaskChanged += TaskChanged;
             readiness.CandidateRecoveryRequired += RecoveryRequired;
         }
     }
@@ -122,13 +124,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 _registry.Notify(hub,owner.Partition,owner.Epoch,bucket: taskPartition is null ? null : taskPartition.Value % 64);
         _wake.Writer.TryWrite(true);
     }
-    private void TaskChanged(string hub, Guid taskId, int taskPartition, string? type, int version)
-    {
-        foreach (var owner in _registry.ActiveOwners())
-            if (owner.HubId == hub && taskPartition % _ownership.PartitionCount == owner.Partition)
-                _registry.NotifyTask(hub, owner.Partition, owner.Epoch, taskId);
-        _wake.Writer.TryWrite(true);
-    }
     private void RecoveryRequired()
     {
         foreach (var owner in _registry.ActiveOwners())
@@ -147,13 +142,16 @@ public sealed class HubCandidateAcquisition : BackgroundService
     }
     internal string[] AllocatedDemandWorkers() => _demands.Values.Select(x => x.Request.WorkerId).Distinct().ToArray();
 
-    public async Task<IReadOnlyList<HubLeasedTask>> AcquireAsync(HubClaimRequest request, CancellationToken ct)
+    public async Task<IReadOnlyList<HubLeasedTask>> AcquireAsync(HubClaimRequest request, CancellationToken ct,
+        HubMatchingPartitionLease? expectedOwner = null)
     {
         if (!Enabled || request.Hubs.Length!=1 || request.MatchingPartition is null || request.MatchingPartitionCount!=_ownership.PartitionCount)
             throw new InvalidOperationException("Candidate matching is unavailable for this topology");
         var hub=request.Hubs[0]; var partition=request.MatchingPartition.Value;
         var owner=_registry.ActiveOwners().FirstOrDefault(x=>x.HubId==hub && x.Partition==partition);
-        if(owner is null) throw new InvalidOperationException("Matching generation is unavailable");
+        if (owner is null || expectedOwner is not null &&
+            (owner.OwnerId != expectedOwner.OwnerId || owner.Epoch != expectedOwner.Epoch))
+            throw new InvalidOperationException("Matching generation is unavailable");
         var demand=new Demand(request);
         LinkedListNode<(Demand Demand, HubMatchingPartitionLease Owner)>? waiting = null;
         try
@@ -342,6 +340,14 @@ public sealed class HubCandidateAcquisition : BackgroundService
         }
     }
 
+    // A dead SSE session cannot consume speculative, unleased matching credits.
+    // Keep all credits associated with committed/uncertain leases fenced.
+    internal void CancelUncommittedSessionCredits(Guid sessionId)
+    {
+        _registry.CancelUncommittedSessionCredits(sessionId);
+        _wake.Writer.TryWrite(true);
+    }
+
     // Completion/failure acknowledgement is authoritative lease retirement.
     // It can safely release candidate memory before the original lease deadline.
     internal void ReleaseCompletedLease(Guid id,long epoch)
@@ -431,7 +437,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
         if (active.Count == 0) return;
         var first = active[0].Reservations[0]; var firstRequest = active[0].Demand.Request;
         HubCandidateBatchResult result;
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             var items = active.SelectMany(x => x.Reservations.Select(r => new HubCandidateBatchItem(
@@ -443,7 +448,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
                     System.Diagnostics.Stopwatch.GetElapsedTime(demand.CreatedAt).TotalSeconds);
             result = await _tasks.ClaimCandidateBatchAsync(new(items, firstRequest.WorkerId, first.Owner.HubId,
                 first.Owner.Partition, first.PartitionCount, firstRequest.Capabilities, firstRequest.Workflows,
-                first.Owner, TimeSpan.FromSeconds(45)), ct);
+                first.Owner, TimeSpan.FromSeconds(45)), ct, _admissionTestHooks);
         }
         catch (Exception error)
         {
@@ -454,7 +459,6 @@ public sealed class HubCandidateAcquisition : BackgroundService
             }
             return;
         }
-        finally { HubTelemetry.CandidateAdmissionLatency.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds); }
         var leases = result.Leases.ToDictionary(x => x.Id);
         if (result.Status == HubCandidateClaimStatus.Leased) HubTelemetry.CandidateLeased.Add(result.Leases.Count);
         var completed = new List<(Demand Demand, List<HubLeasedTask> Leases)>();
@@ -514,7 +518,7 @@ public sealed class HubCandidateAcquisition : BackgroundService
                 reservations.Select(r => new HubCandidateBatchItem(r.Candidate.Id, r.Candidate.Epoch)).ToArray(),
                 request.WorkerId, first.Owner.HubId, first.Owner.Partition, first.PartitionCount,
                 request.Capabilities, request.Workflows, first.Owner, TimeSpan.FromSeconds(45));
-            var result = await _tasks.ClaimCandidateBatchAsync(claim, ct);
+            var result = await _tasks.ClaimCandidateBatchAsync(claim, ct, _admissionTestHooks);
             status = result.Status;
             leases = result.Leases;
         }

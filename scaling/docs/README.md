@@ -4,7 +4,9 @@
 
 **[Hub-native architecture: partition candidate matching + fenced SSE push](current-runtime.md)** is the canonical description of the current distributed runtime, its configuration, failure recovery and tests. PostgreSQL is the sole lease authority; in-memory matching is advisory.
 
-This is one selected architecture, not a menu of recommended polling/streaming alternatives. Adaptive HTTP claims and historical stream adapters remain implementation-level compatibility and emergency rollback paths. The development preset uses two Hub replicas, matching partitions and SSE push.
+Native processors share independent activity and workflow slot budgets across
+matching shards. Each reachable owner gets one SSE connection per processor.
+The development preset uses two Hub replicas.
 
 ## Build and operate the Hub runtime
 

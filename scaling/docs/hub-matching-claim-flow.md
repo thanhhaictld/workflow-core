@@ -165,8 +165,7 @@ currently pass it. Task lease fencing remains separate. See
  Ordinary SSE       ---> readiness hint ---> worker issues a claim
    (hint only; it does not itself grant a task lease)
 
- Opt-in task SSE    ---> distributor uses worker credits and matching/claim
-   (pushes committed leases; session/credit and delivery rules still apply)
+ Push sessions      ---> Hub matches session credits and sends committed leases
 
  Owner crash / loss ---> owner lease expires or is released ---> another Hub
                         acquires shard ---> waiter reconnect + recovery scan.
@@ -177,7 +176,7 @@ currently pass it. Task lease fencing remains separate. See
 Completion and execution are at least once under uncertain delivery; activity
 side effects need idempotency or reconciliation. Workflow and task leases are
 not equivalent to a matching-owner lease. See
-[sse-task-distributor.md](sse-task-distributor.md) and
+[push sessions](current-runtime.md#sse-sessions-and-capacity) and
 [hub-matching-multi-partition.md](hub-matching-multi-partition.md).
 
 ## Proposed experiment: cache candidate IDs in Hub memory

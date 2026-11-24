@@ -31,8 +31,8 @@ public static class HubGatewayEndpoints
         services.AddSingleton<HubCandidateAcquisition>();
         services.AddHostedService(sp => sp.GetRequiredService<HubCandidateAcquisition>());
         services.AddSingleton<HubTaskMatcher>();
-        services.AddSingleton<HubSseTaskDistributor>();
         services.AddSingleton<HubPushSessions>();
+        services.AddSingleton<HubMultiplexedPush>();
         // Generic infrastructure only: all business metadata is published
         // by independent processor/provisioner hosts through authenticated REST.
         // The empty in-memory registries retain the pre-existing inline-chain
@@ -334,9 +334,11 @@ public static class HubGatewayEndpoints
             return task is null ? Results.NotFound() : Results.Ok(task);
         });
 
-        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions,
+        routes.MapMultiplexedPush();
+        routes.MapGet("/workers/transport-diagnostics", (HubPushSessions sessions, HubMultiplexedPush multiplexed,
             HubCandidateAcquisition candidates, HubReadinessBroadcaster readiness) =>
-            Results.Ok(new { pushConnected = sessions.ConnectedCount, readinessConnected = readiness.ConnectedCount,
+            Results.Ok(new { pushConnected = sessions.ConnectedCount + multiplexed.ConnectedCount,
+                readinessConnected = readiness.ConnectedCount,
                 candidateEnabled = candidates.Enabled, candidateCredits = candidates.CandidateCredits,
                 candidateReservations = candidates.CandidateReservations,
                 candidateUncertain = candidates.CandidateUncertain,
@@ -344,8 +346,10 @@ public static class HubGatewayEndpoints
                 candidateAdmissionsActive = candidates.AdmissionActive,
                 pullClaims = Interlocked.Read(ref _pullClaims), pullEmptyClaims = Interlocked.Read(ref _pullEmptyClaims),
                 pullFailedClaims = Interlocked.Read(ref _pullFailedClaims),
-                pushClaims = sessions.Claims, pushEmptyClaims = sessions.EmptyClaims,
-                pushDeliveries = sessions.Deliveries, pushEndedSessions = sessions.EndedSessions }));
+                pushClaims = sessions.Claims + multiplexed.Claims,
+                pushEmptyClaims = sessions.EmptyClaims + multiplexed.EmptyClaims,
+                pushDeliveries = sessions.Deliveries + multiplexed.Deliveries,
+                pushEndedSessions = sessions.EndedSessions + multiplexed.EndedSessions }));
 
         routes.MapPost("/workers/push-sessions", async (HubPushRegistration registration,
             HubPushSessions sessions, CancellationToken ct) =>
@@ -392,6 +396,9 @@ public static class HubGatewayEndpoints
             var session = sessions.Find(id);
             if (session is null) { context.Response.StatusCode = 404; return; }
             if (!sessions.Connect(session)) { context.Response.StatusCode = 409; return; }
+            var connectedAt = Stopwatch.GetTimestamp();
+            var firstDispatch = true;
+            HubTelemetry.SseTaskSessions.Add(1);
             try
             {
                 context.Response.ContentType = "text/event-stream";
@@ -429,8 +436,17 @@ public static class HubGatewayEndpoints
                 var keepAlive = KeepAlive();
                 try
                 {
-                    await sessions.RunAsync(session, (assignment, token) => WriteFrame(
-                        "event: task.assigned\ndata: " + JsonSerializer.Serialize(assignment) + "\n\n", token), streamStop.Token);
+                    await sessions.RunAsync(session, async (assignment, token) =>
+                    {
+                        await WriteFrame("event: task.assigned\ndata: " + JsonSerializer.Serialize(assignment) + "\n\n", token);
+                        HubTelemetry.SseTasksDispatched.Add(1);
+                        if (firstDispatch)
+                        {
+                            firstDispatch = false;
+                            HubTelemetry.SseSessionFirstDispatch.Record(
+                                Stopwatch.GetElapsedTime(connectedAt).TotalSeconds);
+                        }
+                    }, streamStop.Token);
                 }
                 finally
                 {
@@ -438,108 +454,10 @@ public static class HubGatewayEndpoints
                     await keepAlive;
                 }
             }
-            finally { sessions.Close(session); }
-        });
-
-        // Temporal-inspired demand-driven task matching. An incoming request
-        // is routed to the active per-Hub owner, which parks the worker in memory
-        // and only claims PostgreSQL tasks when demand and readiness intersect.
-        routes.MapPost("/workers/tasks:poll", async (
-            HttpContext context, HubClaimRequest request,
-            HubMatchingOwnership ownership, HubTaskMatcher matcher, CancellationToken ct) =>
-        {
-            if (!ownership.Enabled) return Results.NotFound();
-            // Multi-hub capability sets continue using the original claim API
-            // until explicit fan-out to multiple matching owners is implemented.
-            if (request.Hubs is not { Length: 1 } ||
-                request.Capabilities is not { Length: > 0 and <= 128 } ||
-                request.MaxTasks is < 1 or > 32 ||
-                string.IsNullOrWhiteSpace(request.WorkerId) || request.WorkerId.Length > 128 ||
-                string.IsNullOrWhiteSpace(request.Hubs[0]) || request.Hubs[0].Length > 80 ||
-                request.Capabilities.Any(c => c.HubId != request.Hubs[0] ||
-                    string.IsNullOrWhiteSpace(c.TaskType) || c.TaskType.Length > 80 ||
-                    c.Version < 1))
-                return Results.BadRequest(new { error = "Matching poll needs one Hub and valid capabilities" });
-            if (ownership.CandidateTopology && ownership.PartitionCount == 1 && request.MatchingPartitionCount is null && request.MatchingPartition is null)
-                request = request with { MatchingPartition = 0, MatchingPartitionCount = 1 };
-            if (!ownership.Sharded &&
-                (request.MatchingPartitionCount is > 1 || request.MatchingPartition is > 0))
-                return Results.Conflict(new { error = "Matching partition topology mismatch" });
-            if (ownership.Sharded &&
-                (request.MatchingPartitionCount != ownership.PartitionCount ||
-                 request.MatchingPartition is null ||
-                 request.MatchingPartition < 0 ||
-                 request.MatchingPartition >= ownership.PartitionCount))
-                return Results.Conflict(new { error = "Matching partition topology mismatch" });
-            try
+            finally
             {
-                if (ownership.Sharded)
-                {
-                    var hub = request.Hubs[0];
-                    var partition = request.MatchingPartition!.Value;
-                    var forwarded = context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded");
-                    var current = await ownership.ResolvePartitionAsync(hub, partition, ct);
-                    if (current is null)
-                    {
-                        // Unowned/expired partition: prefer a deterministic owner
-                        // so healthy replicas share the matching workload.
-                        if (!forwarded)
-                        {
-                            try
-                            {
-                                var routed = await ownership.ForwardToAsync(
-                                    ownership.PreferredUrl(partition), request,
-                                    context.Request.Headers.Authorization.ToString(), ct);
-                                if (routed is not null) return Results.Ok(routed);
-                            }
-                            catch (HttpRequestException) { /* preferred peer unavailable */ }
-                            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
-                        }
-                        // Owner failed: elect locally using PostgreSQL's fenced
-                        // UPSERT. Concurrent replicas cannot both win.
-                        current = await ownership.AcquirePartitionAsync(hub, partition, ct);
-                    }
-                    if (!ownership.IsLocal(current))
-                    {
-                        if (forwarded) return Results.StatusCode(503);
-                        var leases = await ownership.ForwardToAsync(current.OwnerUrl,
-                            request, context.Request.Headers.Authorization.ToString(), ct);
-                        return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
-                    }
-                    // Valid local lease was observed in ResolvePartitionAsync.
-                    // HubTaskMatcher still verifies DB ownership immediately
-                    // before claiming, including after a long-poll wait.
-                    if (!await ownership.StillOwnsPartitionAsync(hub, partition, ct))
-                        return Results.StatusCode(503);
-                    return Results.Ok(await matcher.LongPollAsync(request, ct));
-                }
-
-                var owner = await ownership.ResolveAsync(request.Hubs[0], ct);
-                if (!ownership.IsLocal(owner))
-                {
-                    // One forwarding hop only. An owner transition is retried
-                    // by the worker through the load-balanced Gateway.
-                    if (context.Request.Headers.ContainsKey("X-Wfc-Matching-Forwarded"))
-                        return Results.StatusCode(503);
-                    var leases = await ownership.ForwardAsync(owner, request,
-                        context.Request.Headers.Authorization.ToString(), ct);
-                    return leases is null ? Results.StatusCode(503) : Results.Ok(leases);
-                }
-                if (!await ownership.StillOwnsAsync(request.Hubs[0], ct))
-                    return Results.StatusCode(503);
-                return Results.Ok(await matcher.LongPollAsync(request, ct));
-            }
-            catch (InvalidOperationException)
-            {
-                return Results.StatusCode(503);
-            }
-            catch (HttpRequestException)
-            {
-                return Results.StatusCode(503);
-            }
-            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return Results.StatusCode(503);
+                HubTelemetry.SseTaskSessions.Add(-1);
+                sessions.Close(session);
             }
         });
 
@@ -715,7 +633,6 @@ public static class HubGatewayEndpoints
 
         // Opt-in worker SSE task distribution; existing events and long-poll
         // endpoints are preserved for backward compatibility and rollback.
-        routes.MapSseTaskStreaming();
         return app;
     }
 

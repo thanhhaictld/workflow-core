@@ -164,6 +164,7 @@ def start_hubs(tag):
             'ASPNETCORE_URLS': 'http://0.0.0.0:5100',
             'WFC_PG': 'Host=pg;Database=workflow;Username=workflow;Password=owner_lab_only;Maximum Pool Size=12',
             'WFC_HUB_AUTH_TOKEN': TOKEN, 'WFC_HUB_MATCHING_ENABLED': 'true',
+            'WFC_HUB_PUSH_ENABLED': 'true',
             'WFC_HUB_MATCHING_PARTITIONS': 4, 'WFC_HUB_MATCHING_NODE_ID': node,
             'WFC_HUB_MATCHING_ADVERTISE_URL': f'http://{service}:5100',
             'WFC_HUB_MATCHING_PEERS': 'http://hub:5100,http://hub-2:5100',
@@ -306,24 +307,36 @@ def experiment(label, victim, busy, seconds, fault='kill'):
             stop.wait(max(0, 1 - (time.monotonic() - before)))
     thread = threading.Thread(target=sample)
     thread.start()
-    # Independent zero-credit subscriptions expose per-shard stream liveness,
-    # session generation and reconnects without consuming or executing tasks.
+    # Open zero-credit push sessions to observe per-shard stream liveness.
     def observe(shard):
-        body = {'claim': {'workerId': f'lab-observer-{shard}',
-            'hubs': ['policy-benchmark'], 'capabilities': [{'hubId': 'policy-benchmark',
-                'taskType': '__native_workflow__', 'version': 1}], 'maxTasks': 1,
-            'matchingPartition': shard, 'matchingPartitionCount': 4},
-            'capacity': 1, 'initialCredits': 0}
+        path = '/api/hub/workers/push-sessions'
+        headers = {'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'}
+        body = json.dumps({'workerId': f'lab-observer-{shard}', 'hubId': 'policy-benchmark',
+            'partition': shard, 'partitionCount': 4, 'capabilities': [{'hubId': 'policy-benchmark',
+                'taskType': '__native_workflow__', 'version': 1}],
+            'workflows': [{'hubId': 'policy-benchmark', 'definitionId': 'policy-unordered', 'version': 1}],
+            'maxCredits': 1}).encode()
+        owner_ports = {f'http://{service}:5100': PORTS[service] for service in ('hub', 'hub-2')}
         while not stop.is_set():
-            req = urllib.request.Request(f'http://127.0.0.1:{PORTS["lb"]}/api/hub/workers/tasks:stream',
-                data=json.dumps(body).encode(), headers={'Authorization': 'Bearer ' + TOKEN,
-                'Content-Type': 'application/json'})
             try:
-                with urllib.request.urlopen(req, timeout=4) as response:
+                def register(port):
+                    req = urllib.request.Request(f'http://127.0.0.1:{port}{path}', data=body, headers=headers)
+                    with urllib.request.urlopen(req, timeout=4) as response:
+                        return json.load(response)
+                try:
+                    session = register(PORTS['lb'])
+                except urllib.error.HTTPError as e:
+                    if e.code != 409:
+                        raise
+                    with e:
+                        session = register(owner_ports[json.load(e)['ownerUrl']])
+                port = owner_ports[session['ownerUrl']]
+                req = urllib.request.Request(
+                    f'http://127.0.0.1:{port}{path}/{session["sessionId"]}/events', headers=headers)
+                with urllib.request.urlopen(req, timeout=12) as response:
                     emit('stream-open', shard=shard, status=response.status)
-                    while not stop.is_set():
-                        line = response.readline()
-                        if not line:
+                    for line in response:
+                        if stop.is_set():
                             break
                         if line.strip():
                             emit('stream-frame', shard=shard, line=line.decode().strip())
@@ -345,7 +358,7 @@ def experiment(label, victim, busy, seconds, fault='kill'):
         if fault != 'database':
             owner = 'hub-a' if victim == 'hub' else 'hub-b'
             count = int(sql("SELECT count(*) FROM wfc_scale.hub_matching_partition_owner "
-                f"WHERE hub_id='policy-benchmark' AND owner_id='{owner}' AND lease_until>clock_timestamp();"))
+                f"WHERE hub_id='policy-benchmark' AND split_part(owner_id, ':', 1)='{owner}' AND lease_until>clock_timestamp();"))
             emit('victim-owned-shards', count=count)
             if count == 0:
                 raise RuntimeError('Invalid fault precondition: victim owns no live shard')

@@ -18,13 +18,17 @@ public sealed class HubRestClient : IDisposable
         Environment.GetEnvironmentVariable("WFC_HUB_ALLOW_INSECURE_HTTP")=="true") { }
 
     public HubRestClient(string url, string token, bool allowInsecureHttp = false)
+        : this(url, token, allowInsecureHttp, allowRedirects: true) { }
+
+    public HubRestClient(string url, string token, bool allowInsecureHttp, bool allowRedirects)
     {
         if(token.Length<24)throw new InvalidOperationException("Hub token must be at least 24 characters");
         if(!Uri.TryCreate(url,UriKind.Absolute,out var endpoint) ||
             !(endpoint.Scheme==Uri.UriSchemeHttps || endpoint.Scheme==Uri.UriSchemeHttp &&
                 (endpoint.IsLoopback || allowInsecureHttp)))
             throw new InvalidOperationException("Remote Hub requires HTTPS outside local development");
-        Http=new HttpClient{BaseAddress=new Uri(url.TrimEnd('/')+"/"),
+        Http=new HttpClient(new HttpClientHandler { AllowAutoRedirect = allowRedirects })
+            {BaseAddress=new Uri(url.TrimEnd('/')+"/"),
             Timeout=TimeSpan.FromSeconds(30)};
         Http.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",token);
     }

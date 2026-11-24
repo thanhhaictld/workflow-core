@@ -1,5 +1,7 @@
 # Capacity-aware matching — worker-side shard reservations (Phase 1)
 
+> Historical reference. Reproduction commands apply to the revision measured below. The current native worker uses [push sessions](current-runtime.md#sse-sessions-and-capacity).
+
 **Branch:** `feat/hub-capacity-aware-matching-from-pr27`  
 **Base:** [PR #27](https://github.com/thanhhaictld/workflow-core/pull/27) at `818ec2183a3e4b72a0ea8b8d76d7b287d6254326`. **The existing PostgreSQL optimization migrations 020–022, including `ix_hub_task_claim_sequence`, are inherited unchanged.**  
 **Status:** Experimental, default OFF; not Microsoft Durable Task-style push.

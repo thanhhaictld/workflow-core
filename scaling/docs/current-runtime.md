@@ -16,7 +16,7 @@
 ```mermaid
 flowchart LR
     API[Clients and monitor] -->|REST| GW[Hub Gateway replicas]
-    PR[Provisioner / processor lanes] -->|register, credits| OWN[Current partition owner]
+    PR[Provisioner / processor] -->|shard grants over REST| OWN[Current partition owners]
     PR <-->|SSE committed lease assignments| OWN
     PR -->|REST heartbeat and fenced results| GW
     GW --> PG[(PostgreSQL)]
@@ -33,9 +33,9 @@ flowchart LR
 The Gateway hosts generic REST management and coordination, **not business
 workflow handlers**. The embedded scheduler is a distinct internal module; it
 persists timers and makes work runnable. A Provisioner or processor process
-registers C# workflow definitions and typed activity handlers, executes
-workflow/activity lanes and commits results through Hub REST. It does not require
-database credentials.
+registers C# workflow definitions and typed activity handlers. It receives
+workflow and activity assignments over one SSE stream per owner and commits
+results through Hub REST. Database credentials stay with Hub infrastructure.
 
 ### Clear ownership boundary
 
@@ -43,7 +43,7 @@ database credentials.
 | --- | --- | --- |
 | PostgreSQL | Task state, owner/lease epoch, attempts, workflow revisions, history | Worker connections |
 | Matching owner `(hub, partition, owner epoch)` | Live demand, advisory candidates, bounded reservations, SSE sessions | Durable task existence or permission to execute |
-| Worker lane | Local execution semaphore, side-effect idempotency, heartbeat progress | Task scheduling or overriding a stale lease |
+| Processor | Independent activity and workflow credit budgets, side-effect idempotency, heartbeat progress | Task scheduling or overriding a stale lease |
 | Scheduler | Making persisted timers and workflow work eligible | Worker matching or delivery |
 
 Every matching owner is itself elected and fenced in PostgreSQL. Partition
@@ -186,30 +186,56 @@ notification contract. If reverting the migration is required, restore the
 
 ## SSE sessions and capacity
 
-- When the per-partition candidate credit limit is reached, the owner
-  records `workflow_hub_candidate_capacity_fallbacks_total` and may use
-  the **owner-fenced SQL claim fallback**. This is pressure relief, not a
-  second recommended architecture. Capacity remains bounded by the same
-  session reservation; do not count fallback attempts as candidate hits.
-- Wake-driven candidate discovery coalesces notifications and scans up to 16
-  bounded turns per activation. Concurrent PostgreSQL claim admission and
-  the ambiguity reaper run independently.
-- The primary routes are `POST /api/hub/workers/push-sessions`,
-  `GET /api/hub/workers/push-sessions/{id}/events`,
-  `PUT /api/hub/workers/push-sessions/{id}/capacity` and
-  `POST /api/hub/workers/push-sessions/{id}/revoke`.
-- Sessions are ephemeral and bound to one matching owner generation and one
-  matching partition. The worker authenticates to the owner URL returned by
-  registration, validated against configured trusted origins.
-- Capacity updates have monotonically increasing sequence numbers and carry
-  active/released delivery IDs. A capacity refresh never recreates credit for
-  an outstanding assignment; the worker's local semaphore is the last guard.
-- A lane rotates its partition membership with a zero-credit revocation
-  barrier, rather than duplicating capacity across owners. Tasks already
-  running continue with REST heartbeats.
-- SSE carries **committed lease assignments**, not an authoritative queue.
-  Notifications, candidate buffers, capacity credits and SSE frames are
-  disposable on owner takeover; committed leases are not.
+A native processor holds one persistent SSE connection to each reachable Hub
+owner that serves its registered namespaces. That stream carries assignments
+from all relevant matching shards on the owner, for both task kinds.
+Processors discover the current owner and epoch per shard, validate the direct
+origin against `WFC_HUB_PUSH_TRUSTED_OWNERS`, and use authenticated REST to offer
+credits. Shard movement within an existing owner's connection requires no new
+stream. Gateway process incarnations have distinct matching owner identities,
+including when they restart with the same configured node name and URL.
+
+The native endpoints are under `/api/hub/workers/multiplexed-push`. The topology
+endpoints discover and elect shard owners. `POST /sessions` registers
+capabilities and independent execution limits, `GET /sessions/{id}/events`
+streams results, and `PUT /sessions/{id}/grants` submits sequenced credit
+grants. `DELETE /sessions/{id}` stops further admission. `POST /retired` checks
+whether a specific uncertain grant can be released. The authenticated
+compatibility claim, readiness and single-shard push routes remain available
+for existing callers. Deploy Gateway support before updating native processors.
+
+The coordinator reserves each credit against one task-kind budget and one
+shard until a grant result accounts for it. A grant requests up to four tasks
+under one captured owner epoch. A successful result returns committed leases
+and releases unused credits. A short, empty result acknowledges that the
+owner stopped trying to admit that grant. Slots stay reserved while assigned
+tasks execute or their completion is uncertain. The coordinator probes idle
+shards in rotation and prioritizes spare credits for shards returning work.
+An idle shard with outstanding demand only holds its probe credit, allowing
+busy shards to use the remaining slots. Activity and workflow capacity stay
+independent, including across namespaces.
+
+PostgreSQL admits tasks under the matching-owner fence and commits before the
+Gateway writes the SSE frame. REST heartbeats and results use the independent
+task epoch and the grant's lease owner. Sequenced grants prevent repeated
+admission, and the processor processes a result only once for the matching
+session and grant. Candidate credit pressure may use the same owner-fenced
+SQL fallback.
+
+Set `WFC_HUB_PUSH_ENABLED=true` on native processors and Hub replicas.
+Every worker incarnation starts with a fresh ephemeral processor identity and
+registers its execution slots on new Hub SSE sessions. **Workers are stateless
+across process restart and pod rescheduling**: no credit journal, persistent
+volume, or prior identity is required. In-flight grants and running assignments
+are accounted for in memory only during that live worker incarnation.
+
+When a worker disappears, the Hub closes its old SSE session and cancels
+uncommitted matching credits. PostgreSQL task leases already committed against
+that session remain fenced until completion or expiry. A replacement can offer
+fresh capacity immediately, but cannot reclaim tasks with an unexpired lease.
+A worker that remains alive after a transient SSE disconnect retains its
+in-memory grants and reconciles uncertain outcomes via the Hub's `/retired`
+endpoint. This does not grant exactly-once external side-effect semantics.
 
 ## Failover and delivery uncertainty
 
@@ -217,10 +243,10 @@ notification contract. If reverting the migration is required, restore the
 | --- | --- |
 | Owner lost before claim | New owner re-reads durable candidates and receives fresh worker credits |
 | Owner lost after commit, before SSE send | Lease survives; no replay is assumed; expiry and fenced reclaim recover task |
-| SSE stream disconnect | Worker drains local running tasks and immediately tries old-session revocation (204/404), or verifies changed/expired owner epoch; only then reuses credits |
-| Neither revocation nor ownership proof available | Continue waiting with bounded network probes; never infer safe credit reuse from a timeout |
-| Commit result ambiguous | Keep the candidate reservation/credit quarantined until its exact epoch is no longer live |
-| Worker stops or misses heartbeat | Lease expires; a new worker may claim with a later epoch; stale heartbeat/result is rejected |
+| SSE stream disconnect | Running tasks keep their slots and can finish over REST. For unaccounted grants, the processor closes the old session and waits for proof of retirement |
+| Old Gateway unreachable | A reachable Gateway waits for a changed or expired PostgreSQL owner epoch and checks the grant's durable task leases |
+| Commit result ambiguous | The grant holds its credits. Retirement waits behind any admission transaction that holds the owner lock and checks for live task leases |
+| Processor restarts or misses heartbeat | New incarnation registers with no prior worker state. Old uncommitted credits are cancelled by the Hub; expired committed leases remain eligible for fenced reclaim under a later task epoch |
 | Notification dropped | Cursor-based bounded reconciliation restores discovery |
 | Database unavailable | No in-memory-only task admission or result commit is permitted |
 
@@ -272,11 +298,10 @@ tenant isolation require separate security review.
 The authenticated `GET /api/hub/workers/transport-diagnostics` reports
 `candidateEnabled`, `candidateCredits`, `candidateReservations`,
 `candidateUncertain`, `candidateBuffered`, `candidateAdmissionsActive`,
-connected push sessions and claim/delivery counters. An idle SSE session may
-reserve **up to four pending candidate credits per acquisition turn**. A
-waiting credit is not a committed lease; confirmed grants should promptly
-retire matching credits, while outstanding SSE deliveries remain charged to
-their worker session. Failover tests verify bounded credits after completion.
+connected push sessions and claim/delivery counters. A processor can offer
+credits to multiple shards on one connected session. Compare connected
+sessions to reachable owners and candidate credit counts to offered execution
+capacity. Failover tests verify bounded credits and sessions after completion.
 
 Track workflow/task backlog, schedule-to-start p95/p99, actual lease
 expiries, attempt exhaustion, owner epoch changes, admission wait, active PostgreSQL connections and activity completion p95/p99. Avoid
@@ -425,13 +450,11 @@ The failover suite runs **before-claim**, **after-claim/pre-send**, and
 owner takeover, candidate mode active on both Hubs, reconnected SSE sessions,
 bounded reconnect latency, eventual completion, partition routing, side-effect
 observations, stale heartbeat rejection and matching-credit conservation.
-Tests and local benchmark outcomes must be recorded before production rollout.
+The PostgreSQL suite also covers ambiguous admission and processor accounting.
 
 The [14 November SSE benchmark](hub-push-benchmark-2026-11-14.md) did
 **not** enable the candidate-matching feature flag: its 4,000-lane result
 is evidence about the SSE transport, not a combined candidate+push p95 claim.
-The feature should be benchmarked against the existing baseline at 8, 16,
-128, 1,000 and 4,000 logical lanes, and with multiple Hub replicas.
 
 ## Other code paths and historical work
 
@@ -446,6 +469,6 @@ background consumers against the same workflow state.
 For implementation details see [native workflow contracts](hub-native-fluent-runtime.md),
 [task store](../src/WorkflowCore.Hub/HubTaskStore.cs),
 [matcher](../src/WorkflowCore.Hub.Gateway/HubCandidateAcquisition.cs),
-[push sessions](../src/WorkflowCore.Hub.Gateway/HubPushSessions.cs),
-[worker lanes](../src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs)
+[multiplexed push](../src/WorkflowCore.Hub.Gateway/HubMultiplexedPush.cs),
+[processor credits](../src/WorkflowCore.RemoteExecution/HubPushProcessor.cs)
 and the [documentation index](README.md).
