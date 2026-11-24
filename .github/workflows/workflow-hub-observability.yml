@@ -26,7 +26,6 @@ jobs:
       ENVFILE: scaling/observability/.env.example
       WFC_HUB_PUSH_ENABLED: 'true'
       WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
-      WFC_HUB_TASK_SSE_PUSH: 'false'
     steps:
       - uses: actions/checkout@v4
       - name: Validate OTEL dashboards and primary topology
