@@ -157,7 +157,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # GITHUB_TOKEN has no workflows scope. Keep the workflow subtree
+          # identical to the existing PR head in this merge commit; changes
+          # needed there are applied afterward with the authorized connector.
+          git restore --source=HEAD --staged --worktree .github/workflows
           git add -A
           test -z "$(git diff --name-only --diff-filter=U)"
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
           git commit -m "Merge master into PR41 candidate discovery branch"
           git push origin HEAD:refs/heads/thanhhaictld/hub-memory-candidates-luna
