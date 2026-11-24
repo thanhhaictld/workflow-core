@@ -1,0 +1,37 @@
+name: PR41 one-time master merge inspection
+on:
+  push:
+    branches:
+      - 'thanhhaictld/hub-memory-candidates-luna'
+    paths:
+      - '.github/workflows/pr41-merge-master-once.yml'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check unassisted merge with master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin master
+          set +e
+          git merge --no-commit --no-ff origin/master
+          merge_rc=$?
+          set -e
+          echo "Merge exit code: $merge_rc"
+          echo "Unmerged paths:"
+          git diff --name-only --diff-filter=U
+          echo "Unmerged count: $(git diff --name-only --diff-filter=U | wc -l)"
+          git status --short | head -120
+          if [ "$merge_rc" -ne 0 ]; then
+            echo "::warning::Manual conflict resolution required before merging master into PR41."
+            exit 1
+          fi
+          echo "Clean merge possible."
