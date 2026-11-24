@@ -139,6 +139,7 @@ jobs:
           from pathlib import Path
           from subprocess import check_output
           for path in [
+              'scaling/src/WorkflowCore.Hub.Gateway/HubCandidateAcquisition.cs',
               'scaling/src/WorkflowCore.Hub.Gateway/PostgresHubNotificationListener.cs',
               'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubPostgresNotificationTests.cs',
               'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubNotificationOutboxTests.cs',
@@ -148,6 +149,8 @@ jobs:
           PY
       - name: Build merged scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release --nologo
+      - name: Test multiplexed push recovery before full suite
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubMultiplexedPushTests.AmbiguousCommitAndDisconnectHoldCreditAcrossOwnerIncarnationUntilLeaseExpires"
       - name: Test merged scaling suite
         run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo
       - name: Commit and push verified merge to PR41 branch
