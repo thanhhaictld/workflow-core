@@ -114,6 +114,29 @@ jobs:
           end_master = master.index(end_marker,start_master)
           path.write_text(merged[:start_merged] + master[start_master:end_master] + merged[end_merged:])
           PY
+      - name: Reconcile gateway and worker architectural replacement
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from subprocess import check_output
+          def show(ref,path):
+              return check_output(['git','show',ref+':'+path], text=True)
+          workers = 'scaling/src/WorkflowCore.RemoteExecution/HubRuntimeWorkers.cs'
+          # The master worker implementation is now multiplexed push rather
+          # than the PR's removed SSE credit coordination abstractions.
+          Path(workers).write_text(show('origin/master',workers))
+          gateway = 'scaling/src/WorkflowCore.Hub.Gateway/HubGatewayEndpoints.cs'
+          current = show('origin/master',gateway)
+          original = show('HEAD',gateway)
+          start = original.index('        // Temporal-inspired demand-driven task matching.')
+          end = original.index('        routes.MapGet("/matching/owner/{hub}"',start)
+          poll_endpoint = original[start:end]
+          marker = '        routes.MapGet("/matching/owner/{hub}"'
+          assert marker in current
+          assert '/workers/tasks:poll' not in current
+          Path(gateway).write_text(current.replace(marker,poll_endpoint+marker,1))
+          PY
       - name: Build merged scaling solution
         run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release --nologo
       - name: Test merged scaling suite
