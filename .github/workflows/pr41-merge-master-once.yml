@@ -1,4 +1,4 @@
-name: PR41 one-time master merge inspection
+name: PR41 one-time master merge validation
 on:
   push:
     branches:
@@ -6,15 +6,20 @@ on:
     paths:
       - '.github/workflows/pr41-merge-master-once.yml'
 permissions:
-  contents: read
+  contents: write
 jobs:
-  inspect:
+  merge-and-validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check unassisted merge with master
+          persist-credentials: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Merge master, preserving PR41 changes in textual conflict hunks
         shell: bash
         run: |
           set -euo pipefail
@@ -22,16 +27,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --no-tags origin master
           set +e
-          git merge --no-commit --no-ff origin/master
+          git merge --no-commit --no-ff -X ours origin/master
           merge_rc=$?
           set -e
-          echo "Merge exit code: $merge_rc"
-          echo "Unmerged paths:"
+          echo "Initial merge status: $merge_rc"
+          # master replaced the legacy SSE distributor with multiplexed push;
+          # retain the deletion rather than resurrect removed implementations.
+          for path in \
+            scaling/src/WorkflowCore.Hub.Gateway/HubSseTaskDistributor.cs \
+            scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubSseOwnerRoutingTests.cs; do
+            if test -n "$(git ls-files -u -- "$path")"; then
+              git rm -f -- "$path"
+            fi
+          done
+          echo "Remaining unresolved paths:"
           git diff --name-only --diff-filter=U
-          echo "Unmerged count: $(git diff --name-only --diff-filter=U | wc -l)"
-          git status --short | head -120
-          if [ "$merge_rc" -ne 0 ]; then
-            echo "::warning::Manual conflict resolution required before merging master into PR41."
-            exit 1
-          fi
-          echo "Clean merge possible."
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --check
+          git diff --cached --stat | tail -25
+      - name: Build merged scaling solution
+        run: dotnet build scaling/WorkflowCore.Scaling.slnx -c Release --nologo
+      - name: Test merged scaling suite
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo
+      - name: Commit and push verified merge to PR41 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git commit -m "Merge master into PR41 candidate discovery branch"
+          git push origin HEAD:refs/heads/thanhhaictld/hub-memory-candidates-luna
