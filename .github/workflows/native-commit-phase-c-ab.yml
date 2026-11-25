@@ -1,0 +1,134 @@
+name: Native Commit Phase C - Bulk Activity Scheduling A/B
+on:
+  pull_request:
+    branches: ['opt/native-commit-b-bulk-event-state']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-commit-c-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      WFC_TEST_PG: Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only
+      PGPASSWORD: workflow_dev_only
+      BENCH_PHASE: 'C'
+      BENCH_COUNT: '128'
+      BENCH_CONCURRENCY: '8'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Apply exact runtime PostgreSQL schema
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/014_hub_work_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/015_explicit_activity_ordering.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/016_hub_matching_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/020_hub_reconciliation_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/021_hub_active_task_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/022_hub_claim_index_selectivity.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/024_hub_native_reconcile_tasks.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/028_hub_claim_shard4_ready.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/029_hub_partition_candidate_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/036_hub_lightweight_shard_signals.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/037_hub_bound_expired_candidate_pages.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
+      - name: Build native commit benchmark and integration tests
+        run: |
+          dotnet build scaling/benchmarks/native-commit-phases/NativeCommitPhases.csproj -c Release --nologo
+          dotnet build scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --nologo
+      - name: Verify native activity execution with batching OFF
+        env:
+          WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL: 'true'
+          WFC_HUB_NATIVE_BULK_EVENT_SQL: 'true'
+          WFC_HUB_NATIVE_BULK_ACTIVITIES: 'false'
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+      - name: Verify native activity execution with batching ON
+        env:
+          WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL: 'true'
+          WFC_HUB_NATIVE_BULK_EVENT_SQL: 'true'
+          WFC_HUB_NATIVE_BULK_ACTIVITIES: 'true'
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+      - name: Benchmark native activity task and event inserts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          pg_container="$(docker ps -q --filter ancestor=postgres:17 | head -n 1)"
+          test -n "$pg_container"
+          export WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL=true WFC_HUB_NATIVE_BULK_EVENT_SQL=true
+          export BENCH_PG_CONTAINER="$pg_container"
+          for item in off1 on1 on2 off2; do
+            case "$item" in on*) export WFC_HUB_NATIVE_BULK_ACTIVITIES=true BENCH_MODE=on;; off*) export WFC_HUB_NATIVE_BULK_ACTIVITIES=false BENCH_MODE=off;; esac
+            export BENCH_REPORT="results/${item}.json"
+            dotnet run --no-build -c Release --project scaling/benchmarks/native-commit-phases/NativeCommitPhases.csproj | tee "results/${item}.log"
+          done
+      - name: Summarize benchmark
+        run: |
+          python3 - <<'PY'
+          import json, statistics, os
+          from pathlib import Path
+          a=[json.loads(Path("results/"+x+".json").read_text()) for x in ("off1","off2")]
+          b=[json.loads(Path("results/"+x+".json").read_text()) for x in ("on1","on2")]
+          assert all(x["completed"]==128 for x in a+b)
+          fields=["throughputPerSecond","commitP95Ms","commitP99Ms","pgCpuMsPerWorkflow",
+                  "walBytesPerWorkflow","pgObservedCommits","pgBlockHits","pgIoReads","pgIoWrites",
+                  "pgDiskReadBytes","pgDiskWriteBytes"]
+          lines=["# Native commit phase C — OFF/ON/ON/OFF","",
+                 "128 independent native workflow commits per trial; 8 parallel callers; same runner.","",
+                 "| Metric | OFF | ON | Change |","|---|---:|---:|---:|"]
+          for key in fields:
+            values=[x.get(key) for x in a+b]
+            if any(v is None for v in values):continue
+            off=statistics.mean(x[key] for x in a)
+            on=statistics.mean(x[key] for x in b)
+            lines.append(f"| {key} | {off:,.3f} | {on:,.3f} | {(on/off-1)*100:+.1f}% |" if off else f"| {key} | 0 | {on:,.3f} | n/a |")
+          lines+=["","Caveat: PostgreSQL workload microbenchmark, not end-to-end workflow scheduling. Validate p95/p99 and rerun before promotion."]
+          text="\n".join(lines)+"\n"
+          Path("results/summary.md").write_text(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:f.write(text)
+          print(text)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-commit-phase-c
+          path: results/
+          retention-days: 14
