@@ -19,6 +19,13 @@ if(count is < 32 or > 10000 || concurrency is < 1 or > 64 || batchSize is < 2 or
 var pgContainer = Environment.GetEnvironmentVariable("BENCH_POSTGRES_CONTAINER");
 var completion = JsonSerializer.SerializeToElement(new { result = "completed", version = 1 });
 var rounds = new[] { "single", "batch", "batch", "single" };
+string[] MetricNames = [
+    "xact_commit","xact_rollback","blks_read","blks_hit",
+    "tup_inserted","tup_updated","blk_read_time_ms","blk_write_time_ms",
+    "wal_bytes","wal_records","wal_write","wal_sync","wal_write_time_ms",
+    "wal_sync_time_ms","io_reads","io_writes","io_extends",
+    "io_fsyncs","io_hits","io_read_time_ms","io_write_time_ms"
+];
 var results = new List<object>();
 await using var tasks = new HubTaskStore(connection,Math.Max(20,concurrency+4));
 var store = new HubNativeWorkflowStore(tasks,new HubDefinitionStore(tasks));
@@ -192,4 +199,77 @@ async Task<(long Completed,long Attempts,long Inbox,long History,long Wakes)> Ve
     if(!await r.ReadAsync())throw new InvalidOperationException("Missing verification row");
     return(r.GetInt64(0),r.GetInt64(1),r.GetInt64(2),r.GetInt64(3),r.GetInt64(4));
 }
-var __unused=0;
+
+async Task<double[]> PgSnapshot()
+{
+    await using var db=new NpgsqlConnection(connection);
+    await db.OpenAsync();
+    await using(var clear=new NpgsqlCommand("SELECT pg_stat_clear_snapshot()",db))
+        await clear.ExecuteNonQueryAsync();
+    await using var cmd=new NpgsqlCommand("""
+        SELECT
+          d.xact_commit, d.xact_rollback, d.blks_read, d.blks_hit,
+          d.tup_inserted, d.tup_updated, d.blk_read_time, d.blk_write_time,
+          (SELECT wal_bytes FROM pg_stat_wal),
+          (SELECT wal_records FROM pg_stat_wal),
+          (SELECT wal_write FROM pg_stat_wal),
+          (SELECT wal_sync FROM pg_stat_wal),
+          (SELECT wal_write_time FROM pg_stat_wal),
+          (SELECT wal_sync_time FROM pg_stat_wal),
+          (SELECT COALESCE(sum(reads),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(writes),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(extends),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(fsyncs),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(hits),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(read_time),0) FROM pg_stat_io),
+          (SELECT COALESCE(sum(write_time),0) FROM pg_stat_io)
+        FROM pg_stat_database d WHERE d.datname=current_database()
+        """,db);
+    await using var r=await cmd.ExecuteReaderAsync();
+    if(!await r.ReadAsync())throw new InvalidOperationException("Missing pg_stat_database");
+    return Enumerable.Range(0,MetricNames.Length)
+        .Select(i=>r.IsDBNull(i)?0d:Convert.ToDouble(r.GetValue(i),CultureInfo.InvariantCulture)).ToArray();
+}
+static async Task<(long CpuUsec,long ReadBytes,long WriteBytes)?> ContainerSnapshot(string? container)
+{
+    if(string.IsNullOrWhiteSpace(container))return null;
+    try
+    {
+        async Task<string> DockerCat(string path)
+        {
+            using var process=new Process();
+            process.StartInfo=new ProcessStartInfo("docker") {
+                RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false
+            };
+            process.StartInfo.ArgumentList.Add("exec");
+            process.StartInfo.ArgumentList.Add(container);
+            process.StartInfo.ArgumentList.Add("cat");
+            process.StartInfo.ArgumentList.Add(path);
+            if(!process.Start())throw new InvalidOperationException("docker process failed to start");
+            var output=process.StandardOutput.ReadToEndAsync();
+            var errors=process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            if(process.ExitCode!=0)throw new InvalidOperationException(await errors);
+            return await output;
+        }
+        var cpu=await DockerCat("/sys/fs/cgroup/cpu.stat");
+        var io=await DockerCat("/sys/fs/cgroup/io.stat");
+        var usec=cpu.Split('\n',StringSplitOptions.RemoveEmptyEntries)
+            .Where(s=>s.StartsWith("usage_usec ",StringComparison.Ordinal))
+            .Select(s=>long.Parse(s.Split(' ',StringSplitOptions.RemoveEmptyEntries)[1],CultureInfo.InvariantCulture))
+            .Single();
+        long reads=0,writes=0;
+        foreach(var line in io.Split('\n',StringSplitOptions.RemoveEmptyEntries))
+            foreach(var token in line.Split(' ',StringSplitOptions.RemoveEmptyEntries))
+            {
+                if(token.StartsWith("rbytes="))reads+=long.Parse(token["rbytes=".Length..],CultureInfo.InvariantCulture);
+                if(token.StartsWith("wbytes="))writes+=long.Parse(token["wbytes=".Length..],CultureInfo.InvariantCulture);
+            }
+        return(usec,reads,writes);
+    }
+    catch(Exception e)
+    {
+        Console.Error.WriteLine("PostgreSQL container cgroup sampling unavailable: "+e.Message);
+        return null;
+    }
+}
