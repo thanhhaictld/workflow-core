@@ -130,7 +130,7 @@ async Task Run(string mode,int itemCount,int size,bool measured)
         requestLatencyP95Ms=Percentile(ordered,.95),
         requestLatencyP99Ms=Percentile(ordered,.99),
         transactionsPerTask=Math.Round(dbDelta["xact_commit"]/itemCount,4),
-        expectedCompletionCommits=mode=="single"?itemCount:(int)Math.Ceiling(itemCount/(double)size),
+        expectedExplicitCommits=mode=="single"?itemCount:(int)Math.Ceiling(itemCount/(double)size),
         walBytesPerTask=Math.Round(dbDelta["wal_bytes"]/itemCount,2),
         pgCpuSeconds,
         pgCpuMsPerTask=pgCpuSeconds.HasValue?Math.Round(pgCpuSeconds.Value*1000/itemCount,3):(double?)null,
