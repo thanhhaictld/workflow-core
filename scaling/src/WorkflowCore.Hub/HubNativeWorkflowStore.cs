@@ -6,6 +6,9 @@ namespace WorkflowCore.Hub;
 
 /// <summary>Opaque native snapshots plus a durable inbox. Lock order: event lane,
 /// workflow, task. Inbox delivery never changes the snapshot revision.</summary>
+/// <summary>A native activity result to persist with its authoritative task fencing epoch.</summary>
+public sealed record HubNativeCompletion(Guid TaskId, string WorkerId, long Epoch, JsonElement Result);
+
 public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStore definitions)
 {
     private NpgsqlDataSource Source => tasks.DataSource;
@@ -556,6 +559,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
     }
 
+    // The synchronous API retains its previous transaction boundary and replay behavior.
     public async Task<bool> CompleteActivityAsync(Guid task,string worker,long epoch,JsonElement result,CancellationToken ct)
     {
         if(result.GetRawText().Length>65536)throw new ArgumentException("Native result exceeds limit");
@@ -568,12 +572,92 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             tags:new System.Diagnostics.ActivityTagsCollection {
                 { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(connStarted).TotalSeconds }}));
         await using var tx=await db.BeginTransactionAsync(ct);
+        var outcome=await CompleteActivityInTransactionAsync(db,tx,task,worker,epoch,result,ct,span);
+        if(!outcome.Accepted)return false;
+        if(!outcome.NewlyCommitted)return true;
+        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+        await tx.CommitAsync(ct);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
+        RecordActivityCompleted(outcome.Hub!);
+        return true;
+    }
+
+    /// <summary>
+    /// Optional bounded experiment: complete independent native activities in one
+    /// PostgreSQL transaction. No background queue or speculative ACK. All items
+    /// are committed together; a database failure rolls back the entire batch.
+    /// Every task still checks its owner/epoch and writes the same durable history.
+    /// The result order matches the input. Reject duplicates and sort by workflow
+    /// before taking locks to prevent batch/batch lock-order inversions.
+    /// </summary>
+    public async Task<IReadOnlyList<bool>> CompleteActivitiesBatchAsync(
+        IReadOnlyList<HubNativeCompletion> completions,CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(completions);
+        if(completions.Count==0)return Array.Empty<bool>();
+        if(completions.Count>32)throw new ArgumentOutOfRangeException(nameof(completions),"Batch limit is 32");
+        if(completions.Select(x=>x.TaskId).Distinct().Count()!=completions.Count)
+            throw new ArgumentException("Duplicate task ID in completion batch",nameof(completions));
+        foreach(var item in completions)
+            if(item.Result.GetRawText().Length>65536)
+                throw new ArgumentException("Native result exceeds limit",nameof(completions));
+
+        using var span=HubTelemetry.Traces.StartActivity("hub.activity.complete.batch.transaction");
+        span?.SetTag("batch.size",completions.Count);
+        await using var db=await Source.OpenConnectionAsync(ct);
+        // Resolve workflow IDs outside the transaction. Lock order within the
+        // transaction is workflow then task, identical to the single-item path.
+        var workflowIds=new Dictionary<Guid,Guid>();
+        await using(var order=new NpgsqlCommand("""
+            SELECT id,workflow_id FROM wfc_scale.hub_task WHERE id=ANY(@tasks) AND workflow_id IS NOT NULL
+            """,db))
+        {
+            order.Parameters.AddWithValue("tasks",completions.Select(x=>x.TaskId).ToArray());
+            await using var reader=await order.ExecuteReaderAsync(ct);
+            while(await reader.ReadAsync(ct))
+                workflowIds.Add(reader.GetGuid(0),reader.GetGuid(1));
+        }
+        var indices=Enumerable.Range(0,completions.Count)
+            .OrderBy(i=>workflowIds.TryGetValue(completions[i].TaskId,out var id)?id:Guid.Empty)
+            .ThenBy(i=>completions[i].TaskId).ToArray();
+        var accepted=new bool[completions.Count];
+        var newlyCompleted=new List<string>(completions.Count);
+        await using var tx=await db.BeginTransactionAsync(ct);
+        foreach(var index in indices)
+        {
+            var item=completions[index];
+            var outcome=await CompleteActivityInTransactionAsync(db,tx,item.TaskId,
+                item.WorkerId,item.Epoch,item.Result,ct,null);
+            accepted[index]=outcome.Accepted;
+            if(outcome.NewlyCommitted)newlyCompleted.Add(outcome.Hub!);
+        }
+        await tx.CommitAsync(ct);
+        foreach(var hub in newlyCompleted)RecordActivityCompleted(hub);
+        span?.SetTag("batch.completed",newlyCompleted.Count);
+        return accepted;
+    }
+
+    private static void RecordActivityCompleted(string hub)
+    {
+        HubTelemetry.ActivitiesCompleted.Add(1);
+        HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
+    }
+
+    // Caller owns the transaction. This is the exact fenced completion path
+    // shared by single-commit and batch-commit execution; only COMMIT grouping
+    // differs. Returning Accepted=true/NewlyCommitted=false is an exact replay.
+    private static async Task<(bool Accepted,bool NewlyCommitted,string? Hub)> CompleteActivityInTransactionAsync(
+        NpgsqlConnection db,NpgsqlTransaction tx,Guid task,string worker,long epoch,
+        JsonElement result,CancellationToken ct,System.Diagnostics.Activity? span)
+    {
         var lockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         Guid id;string hub,status,pointer,dispatch;int partition,step;
         await using(var cmd=Command(db,tx,LockActivityWorkflowSql,("task",task)))
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
-            if(!await r.ReadAsync(ct))return false;
+            if(!await r.ReadAsync(ct))return (false,false,null);
             id=r.GetGuid(0);hub=r.GetString(1);partition=r.GetInt32(2);status=r.GetString(3);
             pointer=r.GetString(4);dispatch=r.GetString(5);step=r.GetInt32(6);
         }
@@ -585,14 +669,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=@task FOR UPDATE
             """,("task",task)))
         {
-            await using var r=await cmd.ExecuteReaderAsync(ct);await r.ReadAsync(ct);
+            await using var r=await cmd.ExecuteReaderAsync(ct);
+            if(!await r.ReadAsync(ct))return (false,false,hub);
             if(r.GetInt16(0)==2 && !r.IsDBNull(1) && r.GetString(1)==worker && r.GetInt64(2)==epoch)
-                return !r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result);
+                return (!r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result),false,hub);
         }
-        if(status is "Complete" or "Terminated")return false;
+        if(status is "Complete" or "Terminated")return (false,false,hub);
         await using(var cmd=Command(db,tx,CompleteTaskSql,
             ("result",result.GetRawText()),("task",task),("owner",worker),("epoch",epoch)))
-            if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
+            if(await cmd.ExecuteNonQueryAsync(ct)!=1)return (false,false,hub);
         await Execute(db,tx,"""
             UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()
             WHERE task_id=@task AND epoch=@epoch AND finished_at IS NULL
@@ -604,14 +689,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__","ActivityResultReceived",
             JsonSerializer.Serialize(new{executionPointerId=pointer,dispatchKey=dispatch}),ct);
         await WakeAsync(db,tx,id,hub,partition,ct);
-        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
-        await tx.CommitAsync(ct);
-        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
-            tags:new System.Diagnostics.ActivityTagsCollection {
-                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
-        HubTelemetry.ActivitiesCompleted.Add(1);
-        HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
-        return true;
+        return (true,true,hub);
     }
 
     private static async Task RetireAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,CancellationToken ct)
