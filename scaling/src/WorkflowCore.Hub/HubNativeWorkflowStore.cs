@@ -37,6 +37,13 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    // P3 experiment: set-based task and ActivityScheduled history inserts.
+    // The activity registration, dispatch-key uniqueness and fenced transaction
+    // remain authoritative. OFF preserves the legacy per-activity statements.
+    private static readonly bool BulkActivitySql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_BULK_ACTIVITIES"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
     // P2 experiment: batch inbox consumption and subscription INSERT statements.
     // OFF leaves the original exact-validation and write behavior intact.
     private static readonly bool BulkSubscriptionSql =
@@ -368,28 +375,31 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         if(request.Status is "Runnable" or "Suspended")
         {
-            foreach(var activity in request.Activities)
+            if(BulkActivitySql)
+                await ScheduleActivitiesBulkAsync(db,tx,definitions,request.Activities,id,hub,
+                    partition,existingDispatchKeys,routes,ct);
+            else
             {
-                if (!existingDispatchKeys.Add(activity.DispatchKey)) continue;
-                var key = (activity.ActivityType, activity.Version);
-                if (!routes.TryGetValue(key, out var route))
+                foreach(var activity in request.Activities)
                 {
-                    route = await definitions.ResolveAsync(hub, activity.ActivityType, activity.Version, ct, db, tx)
-                        ?? throw new KeyNotFoundException("Unregistered native activity");
-                    routes.Add(key, route);
+                    if (!existingDispatchKeys.Add(activity.DispatchKey)) continue;
+                    var key = (activity.ActivityType, activity.Version);
+                    if (!routes.TryGetValue(key, out var route))
+                    {
+                        route = await definitions.ResolveAsync(hub, activity.ActivityType, activity.Version, ct, db, tx)
+                            ?? throw new KeyNotFoundException("Unregistered native activity");
+                        routes.Add(key, route);
+                    }
+                    if (partition >= route.PartitionCount)
+                        throw new InvalidOperationException("Activity partition mismatch");
+                    var task=Guid.NewGuid();
+                    await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
+                        activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
+                        activity.StepId,activity.NotBefore);
+                    await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
+                        JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
                 }
-                if (partition >= route.PartitionCount)
-                    throw new InvalidOperationException("Activity partition mismatch");
-                var task=Guid.NewGuid();
-                await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
-                    activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
-                    activity.StepId,activity.NotBefore);
-                await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
-                    JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
             }
-            // Only newly registered subscriptions can match an external event.
-            // Existing subscriptions were replaced above; if the new list is
-            // empty there are no candidate event pointers to match.
             if (!SkipEmptySubscriptionSql || request.Subscriptions.Length > 0)
                 await MatchEvents(db,tx,id,hub,ct);
         }
@@ -480,6 +490,75 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         if(nextStatus=="Complete")HubTelemetry.WorkflowsCompleted.Add(1,HubTelemetry.HubTag(hub));
         if(nextStatus=="Terminated")HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
         return new(new(id,revision+1,nextStatus,false),hub);
+    }
+
+
+    // In a parallel workflow the old implementation generated two SQL commands
+    // for every dispatch: one task INSERT and one ActivityScheduled event INSERT.
+    // This path sends two set-based statements per chunk, in the SAME fenced
+    // workflow transaction. Identities and journal payloads are constructed
+    // before either INSERT so neither table has to infer another table's order.
+    private static async Task ScheduleActivitiesBulkAsync(
+        NpgsqlConnection db,NpgsqlTransaction tx,HubDefinitionStore definitions,
+        HubNativeDispatch[] activities,Guid workflow,string hub,int partition,
+        HashSet<string> existingDispatchKeys,
+        Dictionary<(string Activity,int Version),HubTaskRoute> routes,
+        CancellationToken ct)
+    {
+        var rows=new List<object>();
+        foreach(var activity in activities)
+        {
+            if(!existingDispatchKeys.Add(activity.DispatchKey))continue;
+            var key=(activity.ActivityType,activity.Version);
+            if(!routes.TryGetValue(key,out var route))
+            {
+                route=await definitions.ResolveAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
+                    ??throw new KeyNotFoundException("Unregistered native activity");
+                routes.Add(key,route);
+            }
+            if(partition>=route.PartitionCount)
+                throw new InvalidOperationException("Activity partition mismatch");
+            rows.Add(new {
+                task_id=Guid.NewGuid(),
+                task_type=route.TaskType,
+                task_version=route.Version,
+                pointer=activity.PointerId,
+                dispatch=activity.DispatchKey,
+                step=activity.StepId,
+                payload=activity.Input,
+                due=activity.NotBefore?.ToUniversalTime(),
+                activity_type=activity.ActivityType,
+                journal=new {executionPointerId=activity.PointerId,activity.DispatchKey}
+            });
+        }
+        // Keep statement size bounded even when a workflow schedules thousands
+        // of branches. Each chunk persists the tasks before its history records.
+        const int chunkSize=128;
+        for(var start=0;start<rows.Count;start+=chunkSize)
+        {
+            var data=JsonSerializer.Serialize(rows.Skip(start).Take(chunkSize));
+            await Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_task
+                  (id,hub_id,partition_id,task_type,task_version,workflow_id,
+                   workflow_step,payload,execution_pointer_id,dispatch_key,
+                   native_step_id,due_at,admission)
+                SELECT (e.item->>'task_id')::uuid,@hub,@partition,
+                   e.item->>'task_type',(e.item->>'task_version')::integer,@id,
+                   NULL,e.item->'payload',e.item->>'pointer',e.item->>'dispatch',
+                   (e.item->>'step')::integer,
+                   COALESCE((e.item->>'due')::timestamptz,now()),1
+                FROM jsonb_array_elements(@data::jsonb) WITH ORDINALITY AS e(item,ord)
+                ORDER BY e.ord
+                """,ct,("id",workflow),("hub",hub),("partition",partition),("data",data));
+            await Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_workflow_event
+                  (workflow_id,step_index,task_id,activity_type,event_type,payload)
+                SELECT @id,(e.item->>'step')::integer,(e.item->>'task_id')::uuid,
+                   e.item->>'activity_type','ActivityScheduled',e.item->'journal'
+                FROM jsonb_array_elements(@data::jsonb) WITH ORDINALITY AS e(item,ord)
+                ORDER BY e.ord
+                """,ct,("id",workflow),("data",data));
+        }
     }
 
     internal static async Task WakeAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,int partition,CancellationToken ct)
