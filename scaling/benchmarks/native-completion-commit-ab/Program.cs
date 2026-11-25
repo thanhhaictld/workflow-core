@@ -27,10 +27,7 @@ string[] MetricNames = [
     "io_fsyncs","io_hits","io_read_time_ms","io_write_time_ms"
 ];
 var results = new List<object>();
-await using var tasks = new HubTaskStore(connection,Math.Max(20,concurrency+4));
-var store = new HubNativeWorkflowStore(tasks,new HubDefinitionStore(tasks));
-
-// Warm both paths and Npgsql pooling before collecting PostgreSQL statistics.
+// Warm the prepared SQL paths before collecting PostgreSQL statistics.
 await Run("single",16,0, false);
 await Run("batch",16,0, false);
 foreach(var mode in rounds)
@@ -58,39 +55,50 @@ async Task Run(string mode,int itemCount,int size,bool measured)
     if(taskIds.Length!=itemCount)throw new InvalidOperationException($"Expected {itemCount} seeded tasks, got {taskIds.Length}");
     await Task.Delay(1100); // stats collector flush before the measured window
     var before=await PgSnapshot();
-    var cpuBefore=await ContainerSnapshot(pgContainer);
     var errors = new ConcurrentQueue<string>();
     var durations = new ConcurrentBag<double>();
     var successful = 0;
-    var stopwatch = Stopwatch.StartNew();
-    var groups=taskIds.Chunk(mode=="single"?1:Math.Max(2,size)).ToArray();
-    await Parallel.ForEachAsync(groups,new ParallelOptions {MaxDegreeOfParallelism=concurrency},
-        async (chunk,ct) =>
-        {
-            var started=Stopwatch.GetTimestamp();
-            try
+    var stopwatch = new Stopwatch();
+    (long CpuUsec,long ReadBytes,long WriteBytes)? cpuBefore;
+    (long CpuUsec,long ReadBytes,long WriteBytes)? cpuAfter;
+    // Deliberately dispose the Npgsql pool before reading cumulative PG stats.
+    // Otherwise the pool retains client backends whose stats are flushed into a
+    // *later* trial (producing impossible commits-per-task and WAL deltas).
+    await using (var tasks = new HubTaskStore(connection,Math.Max(20,concurrency+4)))
+    {
+        var store = new HubNativeWorkflowStore(tasks,new HubDefinitionStore(tasks));
+        var groups=taskIds.Chunk(mode=="single"?1:Math.Max(2,size)).ToArray();
+        cpuBefore=await ContainerSnapshot(pgContainer);
+        stopwatch.Start();
+        await Parallel.ForEachAsync(groups,new ParallelOptions {MaxDegreeOfParallelism=concurrency},
+            async (chunk,ct) =>
             {
-                if(mode=="single")
+                var started=Stopwatch.GetTimestamp();
+                try
                 {
-                    if(!await store.CompleteActivityAsync(chunk[0],"bench-worker",1,completion,ct))
-                        throw new InvalidOperationException("Single completion rejected a valid lease");
+                    if(mode=="single")
+                    {
+                        if(!await store.CompleteActivityAsync(chunk[0],"bench-worker",1,completion,ct))
+                            throw new InvalidOperationException("Single completion rejected a valid lease");
+                    }
+                    else
+                    {
+                        var entries=chunk.Select(id=>new HubNativeCompletion(id,"bench-worker",1,completion)).ToArray();
+                        var accepted=await store.CompleteActivitiesBatchAsync(entries,ct);
+                        if(accepted.Count!=chunk.Length||accepted.Any(ok=>!ok))
+                            throw new InvalidOperationException("Batch completion rejected a valid lease");
+                    }
+                    Interlocked.Add(ref successful,chunk.Length);
+                    var ms=Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    for(var i=0;i<chunk.Length;i++)durations.Add(ms);
                 }
-                else
-                {
-                    var entries=chunk.Select(id=>new HubNativeCompletion(id,"bench-worker",1,completion)).ToArray();
-                    var accepted=await store.CompleteActivitiesBatchAsync(entries,ct);
-                    if(accepted.Count!=chunk.Length||accepted.Any(ok=>!ok))
-                        throw new InvalidOperationException("Batch completion rejected a valid lease");
-                }
-                Interlocked.Add(ref successful,chunk.Length);
-                var ms=Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                for(var i=0;i<chunk.Length;i++)durations.Add(ms);
-            }
-            catch(Exception ex){errors.Enqueue(ex.ToString());}
-        });
-    stopwatch.Stop();
-    var cpuAfter=await ContainerSnapshot(pgContainer);
-    await Task.Delay(1150);
+                catch(Exception ex){errors.Enqueue(ex.ToString());}
+            });
+        stopwatch.Stop();
+        cpuAfter=await ContainerSnapshot(pgContainer);
+    }
+    // Allow the closed PostgreSQL backends to publish stats before sampling.
+    await Task.Delay(1500);
     var after=await PgSnapshot();
     var verified=await Verify(hub);
     if(errors.TryPeek(out var first))throw new InvalidOperationException(mode+" failed: "+first);
@@ -121,6 +129,7 @@ async Task Run(string mode,int itemCount,int size,bool measured)
         requestLatencyP95Ms=Percentile(ordered,.95),
         requestLatencyP99Ms=Percentile(ordered,.99),
         transactionsPerTask=Math.Round(dbDelta["xact_commit"]/itemCount,4),
+        expectedCompletionCommits=mode=="single"?itemCount:(int)Math.Ceiling(itemCount/(double)size),
         walBytesPerTask=Math.Round(dbDelta["wal_bytes"]/itemCount,2),
         pgCpuSeconds,
         pgCpuMsPerTask=pgCpuSeconds.HasValue?Math.Round(pgCpuSeconds.Value*1000/itemCount,3):(double?)null,
