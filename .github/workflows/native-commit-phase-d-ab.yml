@@ -80,14 +80,14 @@ jobs:
           WFC_HUB_NATIVE_BULK_EVENT_SQL: 'true'
           WFC_HUB_NATIVE_BULK_ACTIVITIES: 'true'
           WFC_HUB_NATIVE_COMPACT_RECEIPT: 'false'
-        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests|FullyQualifiedName~HubNativeInboxBatchTests|FullyQualifiedName~HubNativeCompactReceiptTests"
       - name: Verify compact receipt replay
         env:
           WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL: 'true'
           WFC_HUB_NATIVE_BULK_EVENT_SQL: 'true'
           WFC_HUB_NATIVE_BULK_ACTIVITIES: 'true'
           WFC_HUB_NATIVE_COMPACT_RECEIPT: 'true'
-        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests|FullyQualifiedName~HubNativeInboxBatchTests|FullyQualifiedName~HubNativeCompactReceiptTests"
       - name: Benchmark 96 KiB native snapshots and 64 history records with compact receipt
         shell: bash
         run: |
