@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
@@ -6,6 +8,9 @@ namespace WorkflowCore.Hub;
 
 /// <summary>Opaque native snapshots plus a durable inbox. Lock order: event lane,
 /// workflow, task. Inbox delivery never changes the snapshot revision.</summary>
+/// <summary>A native activity result to persist with its authoritative task fencing epoch.</summary>
+public sealed record HubNativeCompletion(Guid TaskId, string WorkerId, long Epoch, JsonElement Result);
+
 public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStore definitions)
 {
     private NpgsqlDataSource Source => tasks.DataSource;
@@ -34,6 +39,34 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    // P4 experiment: hash-based compact retry receipts instead of persisting
+    // the full commit request again in hub_task.result_json.
+    // Both v1 and v2 receipts are always readable during rolling deployments.
+    private static readonly bool CompactReceiptEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_COMPACT_RECEIPT"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
+    private static string HashCommit(string canonical) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+
+    // P3 experiment: set-based task and ActivityScheduled history inserts.
+    // The activity registration, dispatch-key uniqueness and fenced transaction
+    // remain authoritative. OFF preserves the legacy per-activity statements.
+    private static readonly bool BulkActivitySql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_BULK_ACTIVITIES"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
+    // P2 experiment: batch inbox consumption and subscription INSERT statements.
+    // OFF leaves the original exact-validation and write behavior intact.
+    private static readonly bool BulkSubscriptionSql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_BULK_EVENT_SQL"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
+    // P1 experiment: do not execute subscription DELETE/MATCH on commits that
+    // cannot have subscriptions. OFF preserves the original SQL path.
+    private static readonly bool SkipEmptySubscriptionSql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL"),
+            "true", StringComparison.OrdinalIgnoreCase);
     private const int HistoryBatchChunkSize = 256;
     // A/B experiment: move history JSON serialization before opening the fenced DB transaction.
     // The actual history INSERTs remain atomic with snapshot, inbox, dispatch and task ACK.
@@ -161,6 +194,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         // on both Hub versions so another replica can acknowledge a lost response.
         var receiptRequest = request.ObsoleteDispatches is null ? request : request with { ObsoleteDispatches = null };
         var canonical = JsonSerializer.Serialize(receiptRequest);
+        // Compute the digest outside the row-locked transaction when enabled.
+        // Disabled replicas can still verify v2 receipts on exact replay.
+        var canonicalHash = CompactReceiptEnabled ? HashCommit(canonical) : null;
         // CPU-only preparation is safe before the transaction: the request is already
         // validated and no database state is read. All writes are still fenced.
         string[]? preparedHistory = null;
@@ -229,7 +265,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                r.GetString(2)==request.WorkerId && !r.IsDBNull(5))
             {
                 var stored=Json(r.GetString(5));
-                if(stored.TryGetProperty("commit",out var previous) && JsonElement.DeepEquals(previous,Json(canonical)))
+                var exactLegacy = stored.TryGetProperty("commit",out var previous) &&
+                    JsonElement.DeepEquals(previous,Json(canonical));
+                var exactCompact = !exactLegacy &&
+                    stored.TryGetProperty("receiptVersion",out var version) &&
+                    version.ValueKind==JsonValueKind.Number && version.GetInt32()==2 &&
+                    stored.TryGetProperty("commitHash",out var hash) &&
+                    hash.ValueKind==JsonValueKind.String &&
+                    string.Equals(hash.GetString(),canonicalHash??HashCommit(canonical),
+                        StringComparison.Ordinal);
+                if(exactLegacy || exactCompact)
                 {
                     return new(new(id,stored.GetProperty("revision").GetInt64(),
                         stored.GetProperty("status").GetString()!,true),hub);
@@ -257,25 +302,73 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         var obsoleteDispatches = request.ObsoleteDispatches is { Length: > 0 } removed
             ? new HashSet<string>(removed, StringComparer.Ordinal) : null;
-        foreach(var consumed in request.ConsumedInbox.Distinct())
+        if (BulkSubscriptionSql)
         {
-            await using var cmd=Command(db,tx,"""
-                UPDATE wfc_scale.hub_native_inbox SET consumed=true
-                WHERE id=@message AND workflow_id=@id AND NOT consumed
-                RETURNING CASE WHEN kind='Activity' THEN source_key END
-                """,("message",consumed),("id",id));
-            var sourceKey = await cmd.ExecuteScalarAsync(ct);
-            if (sourceKey is null) throw new ArgumentException("Unknown or already consumed inbox message");
-            // Activity inbox entries are written after completion or terminal failure.
-            if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
+            var distinctIds=request.ConsumedInbox.Distinct().ToArray();
+            if(distinctIds.Length>0)
+            {
+                var returned=new HashSet<long>();
+                await using var batch=Command(db,tx,"""
+                    UPDATE wfc_scale.hub_native_inbox SET consumed=true
+                    WHERE workflow_id=@id AND id=ANY(@message_ids) AND NOT consumed
+                    RETURNING id, CASE WHEN kind='Activity' THEN source_key END
+                    """,("id",id),("message_ids",distinctIds));
+                await using var rows=await batch.ExecuteReaderAsync(ct);
+                while(await rows.ReadAsync(ct))
+                {
+                    returned.Add(rows.GetInt64(0));
+                    if(!rows.IsDBNull(1))
+                        obsoleteDispatches?.Remove(rows.GetString(1));
+                }
+                // Preserve per-message exactness and atomic rollback on a
+                // stale/duplicate/already-consumed/unknown inbox message.
+                if(returned.Count!=distinctIds.Length)
+                    throw new ArgumentException("Unknown or already consumed inbox message");
+            }
         }
-        await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
-        foreach(var subscription in request.Subscriptions)
+        else
+        {
+            foreach(var consumed in request.ConsumedInbox.Distinct())
+            {
+                await using var cmd=Command(db,tx,"""
+                    UPDATE wfc_scale.hub_native_inbox SET consumed=true
+                    WHERE id=@message AND workflow_id=@id AND NOT consumed
+                    RETURNING CASE WHEN kind='Activity' THEN source_key END
+                    """,("message",consumed),("id",id));
+                var sourceKey = await cmd.ExecuteScalarAsync(ct);
+                if (sourceKey is null) throw new ArgumentException("Unknown or already consumed inbox message");
+                if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
+            }
+        }
+        if (!SkipEmptySubscriptionSql || hasExistingSubscriptions)
+            await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
+        if(BulkSubscriptionSql && request.Subscriptions.Length>0)
+        {
+            // A single typed set-based INSERT, still protected by the same Hub
+            // event lane + workflow row + fenced task transaction.
+            var bulkSubscriptions=JsonSerializer.Serialize(request.Subscriptions.Select(subscription=>new {
+                pointer_id=subscription.PointerId,
+                event_name=subscription.EventName,
+                event_key=subscription.EventKey,
+                as_of=subscription.AsOf.ToUniversalTime()
+            }));
             await Execute(db,tx,"""
-                INSERT INTO wfc_scale.hub_native_subscription(workflow_id,pointer_id,event_name,event_key,as_of)
-                VALUES(@id,@pointer,@name,@key,@asof)
-                """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
-                ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
+                INSERT INTO wfc_scale.hub_native_subscription
+                    (workflow_id,pointer_id,event_name,event_key,as_of)
+                SELECT @id,s.pointer_id,s.event_name,s.event_key,s.as_of
+                FROM jsonb_to_recordset(@subscriptions::jsonb) AS s(
+                    pointer_id text,event_name text,event_key text,as_of timestamptz)
+                """,ct,("id",id),("subscriptions",bulkSubscriptions));
+        }
+        else
+        {
+            foreach(var subscription in request.Subscriptions)
+                await Execute(db,tx,"""
+                    INSERT INTO wfc_scale.hub_native_subscription(workflow_id,pointer_id,event_name,event_key,as_of)
+                    VALUES(@id,@pointer,@name,@key,@asof)
+                    """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
+                    ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
+        }
         if (obsoleteDispatches is { Count: > 0 })
         {
             // Keep separate statements in one round trip. Closing attempts needs a
@@ -306,26 +399,33 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         if(request.Status is "Runnable" or "Suspended")
         {
-            foreach(var activity in request.Activities)
+            if(BulkActivitySql)
+                await ScheduleActivitiesBulkAsync(db,tx,definitions,request.Activities,id,hub,
+                    partition,existingDispatchKeys,routes,ct);
+            else
             {
-                if (!existingDispatchKeys.Add(activity.DispatchKey)) continue;
-                var key = (activity.ActivityType, activity.Version);
-                if (!routes.TryGetValue(key, out var route))
+                foreach(var activity in request.Activities)
                 {
-                    route = await definitions.ResolveAsync(hub, activity.ActivityType, activity.Version, ct, db, tx)
-                        ?? throw new KeyNotFoundException("Unregistered native activity");
-                    routes.Add(key, route);
+                    if (!existingDispatchKeys.Add(activity.DispatchKey)) continue;
+                    var key = (activity.ActivityType, activity.Version);
+                    if (!routes.TryGetValue(key, out var route))
+                    {
+                        route = await definitions.ResolveAsync(hub, activity.ActivityType, activity.Version, ct, db, tx)
+                            ?? throw new KeyNotFoundException("Unregistered native activity");
+                        routes.Add(key, route);
+                    }
+                    if (partition >= route.PartitionCount)
+                        throw new InvalidOperationException("Activity partition mismatch");
+                    var task=Guid.NewGuid();
+                    await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
+                        activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
+                        activity.StepId,activity.NotBefore);
+                    await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
+                        JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
                 }
-                if (partition >= route.PartitionCount)
-                    throw new InvalidOperationException("Activity partition mismatch");
-                var task=Guid.NewGuid();
-                await HubRemoteWorkflowStore.InsertActivityAsync(db,tx,task,id,hub,partition,null,route,
-                    activity.Input.GetRawText(),ct,activity.PointerId,activity.DispatchKey,
-                    activity.StepId,activity.NotBefore);
-                await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
-                    JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
             }
-            await MatchEvents(db,tx,id,hub,ct);
+            if (!SkipEmptySubscriptionSql || request.Subscriptions.Length > 0)
+                await MatchEvents(db,tx,id,hub,ct);
         }
         await Execute(db,tx,"""
             WITH cancelled AS (
@@ -396,8 +496,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             """,ct,("snapshot",request.Snapshot.GetRawText()),("status",nextStatus),
             ("state",(short)(nextStatus=="Complete"?2:nextStatus=="Terminated"?3:1)),("id",id),
             ("waiting",nextStatus is "Runnable" or "Suspended" && !request.Runnable));
+        // Keep revision and status for lost-response retries. v2 stores a
+        // SHA-256 of the same canonical request previously embedded as JSON.
+        // The full snapshot/history remain in authoritative workflow tables.
+        var receiptJson = CompactReceiptEnabled
+            ? JsonSerializer.Serialize(new {receiptVersion=2,commitHash=canonicalHash,
+                revision=revision+1,status=nextStatus})
+            : JsonSerializer.Serialize(new {commit=receiptRequest,revision=revision+1,status=nextStatus});
         await using(var ack=Command(db,tx,CompleteTaskSql,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
-            ("result",JsonSerializer.Serialize(new{commit=receiptRequest,revision=revision+1,status=nextStatus}))))
+            ("result",receiptJson)))
             if(await ack.ExecuteNonQueryAsync(ct)!=1)return null;
         if(nextStatus=="Runnable")
         {
@@ -414,6 +521,75 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         if(nextStatus=="Complete")HubTelemetry.WorkflowsCompleted.Add(1,HubTelemetry.HubTag(hub));
         if(nextStatus=="Terminated")HubTelemetry.WorkflowsFailed.Add(1,HubTelemetry.HubTag(hub));
         return new(new(id,revision+1,nextStatus,false),hub);
+    }
+
+
+    // In a parallel workflow the old implementation generated two SQL commands
+    // for every dispatch: one task INSERT and one ActivityScheduled event INSERT.
+    // This path sends two set-based statements per chunk, in the SAME fenced
+    // workflow transaction. Identities and journal payloads are constructed
+    // before either INSERT so neither table has to infer another table's order.
+    private static async Task ScheduleActivitiesBulkAsync(
+        NpgsqlConnection db,NpgsqlTransaction tx,HubDefinitionStore definitions,
+        HubNativeDispatch[] activities,Guid workflow,string hub,int partition,
+        HashSet<string> existingDispatchKeys,
+        Dictionary<(string Activity,int Version),HubTaskRoute> routes,
+        CancellationToken ct)
+    {
+        var rows=new List<object>();
+        foreach(var activity in activities)
+        {
+            if(!existingDispatchKeys.Add(activity.DispatchKey))continue;
+            var key=(activity.ActivityType,activity.Version);
+            if(!routes.TryGetValue(key,out var route))
+            {
+                route=await definitions.ResolveAsync(hub,activity.ActivityType,activity.Version,ct,db,tx)
+                    ??throw new KeyNotFoundException("Unregistered native activity");
+                routes.Add(key,route);
+            }
+            if(partition>=route.PartitionCount)
+                throw new InvalidOperationException("Activity partition mismatch");
+            rows.Add(new {
+                task_id=Guid.NewGuid(),
+                task_type=route.TaskType,
+                task_version=route.Version,
+                pointer=activity.PointerId,
+                dispatch=activity.DispatchKey,
+                step=activity.StepId,
+                payload=activity.Input,
+                due=activity.NotBefore?.ToUniversalTime(),
+                activity_type=activity.ActivityType,
+                journal=new {executionPointerId=activity.PointerId,activity.DispatchKey}
+            });
+        }
+        // Keep statement size bounded even when a workflow schedules thousands
+        // of branches. Each chunk persists the tasks before its history records.
+        const int chunkSize=128;
+        for(var start=0;start<rows.Count;start+=chunkSize)
+        {
+            var data=JsonSerializer.Serialize(rows.Skip(start).Take(chunkSize));
+            await Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_task
+                  (id,hub_id,partition_id,task_type,task_version,workflow_id,
+                   workflow_step,payload,execution_pointer_id,dispatch_key,
+                   native_step_id,due_at,admission)
+                SELECT (e.item->>'task_id')::uuid,@hub,@partition,
+                   e.item->>'task_type',(e.item->>'task_version')::integer,@id,
+                   NULL,e.item->'payload',e.item->>'pointer',e.item->>'dispatch',
+                   (e.item->>'step')::integer,
+                   COALESCE((e.item->>'due')::timestamptz,now()),1
+                FROM jsonb_array_elements(@data::jsonb) WITH ORDINALITY AS e(item,ord)
+                ORDER BY e.ord
+                """,ct,("id",workflow),("hub",hub),("partition",partition),("data",data));
+            await Execute(db,tx,"""
+                INSERT INTO wfc_scale.hub_workflow_event
+                  (workflow_id,step_index,task_id,activity_type,event_type,payload)
+                SELECT @id,(e.item->>'step')::integer,(e.item->>'task_id')::uuid,
+                   e.item->>'activity_type','ActivityScheduled',e.item->'journal'
+                FROM jsonb_array_elements(@data::jsonb) WITH ORDINALITY AS e(item,ord)
+                ORDER BY e.ord
+                """,ct,("id",workflow),("data",data));
+        }
     }
 
     internal static async Task WakeAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,string hub,int partition,CancellationToken ct)
@@ -556,6 +732,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
     }
 
+    // The synchronous API retains its previous transaction boundary and replay behavior.
     public async Task<bool> CompleteActivityAsync(Guid task,string worker,long epoch,JsonElement result,CancellationToken ct)
     {
         if(result.GetRawText().Length>65536)throw new ArgumentException("Native result exceeds limit");
@@ -568,12 +745,92 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             tags:new System.Diagnostics.ActivityTagsCollection {
                 { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(connStarted).TotalSeconds }}));
         await using var tx=await db.BeginTransactionAsync(ct);
+        var outcome=await CompleteActivityInTransactionAsync(db,tx,task,worker,epoch,result,ct,span);
+        if(!outcome.Accepted)return false;
+        if(!outcome.NewlyCommitted)return true;
+        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+        await tx.CommitAsync(ct);
+        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
+            tags:new System.Diagnostics.ActivityTagsCollection {
+                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
+        RecordActivityCompleted(outcome.Hub!);
+        return true;
+    }
+
+    /// <summary>
+    /// Optional bounded experiment: complete independent native activities in one
+    /// PostgreSQL transaction. No background queue or speculative ACK. All items
+    /// are committed together; a database failure rolls back the entire batch.
+    /// Every task still checks its owner/epoch and writes the same durable history.
+    /// The result order matches the input. Reject duplicates and sort by workflow
+    /// before taking locks to prevent batch/batch lock-order inversions.
+    /// </summary>
+    public async Task<IReadOnlyList<bool>> CompleteActivitiesBatchAsync(
+        IReadOnlyList<HubNativeCompletion> completions,CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(completions);
+        if(completions.Count==0)return Array.Empty<bool>();
+        if(completions.Count>32)throw new ArgumentOutOfRangeException(nameof(completions),"Batch limit is 32");
+        if(completions.Select(x=>x.TaskId).Distinct().Count()!=completions.Count)
+            throw new ArgumentException("Duplicate task ID in completion batch",nameof(completions));
+        foreach(var item in completions)
+            if(item.Result.GetRawText().Length>65536)
+                throw new ArgumentException("Native result exceeds limit",nameof(completions));
+
+        using var span=HubTelemetry.Traces.StartActivity("hub.activity.complete.batch.transaction");
+        span?.SetTag("batch.size",completions.Count);
+        await using var db=await Source.OpenConnectionAsync(ct);
+        await using var tx=await db.BeginTransactionAsync(ct);
+        // Resolve workflow IDs before acquiring row locks, but inside the
+        // same transaction so this lookup does not add an implicit commit.
+        var workflowIds=new Dictionary<Guid,Guid>();
+        await using(var order=new NpgsqlCommand("""
+            SELECT id,workflow_id FROM wfc_scale.hub_task WHERE id=ANY(@tasks) AND workflow_id IS NOT NULL
+            """,db,tx))
+        {
+            order.Parameters.AddWithValue("tasks",completions.Select(x=>x.TaskId).ToArray());
+            await using var reader=await order.ExecuteReaderAsync(ct);
+            while(await reader.ReadAsync(ct))
+                workflowIds.Add(reader.GetGuid(0),reader.GetGuid(1));
+        }
+        var indices=Enumerable.Range(0,completions.Count)
+            .OrderBy(i=>workflowIds.TryGetValue(completions[i].TaskId,out var id)?id:Guid.Empty)
+            .ThenBy(i=>completions[i].TaskId).ToArray();
+        var accepted=new bool[completions.Count];
+        var newlyCompleted=new List<string>(completions.Count);
+        foreach(var index in indices)
+        {
+            var item=completions[index];
+            var outcome=await CompleteActivityInTransactionAsync(db,tx,item.TaskId,
+                item.WorkerId,item.Epoch,item.Result,ct,null);
+            accepted[index]=outcome.Accepted;
+            if(outcome.NewlyCommitted)newlyCompleted.Add(outcome.Hub!);
+        }
+        await tx.CommitAsync(ct);
+        foreach(var hub in newlyCompleted)RecordActivityCompleted(hub);
+        span?.SetTag("batch.completed",newlyCompleted.Count);
+        return accepted;
+    }
+
+    private static void RecordActivityCompleted(string hub)
+    {
+        HubTelemetry.ActivitiesCompleted.Add(1);
+        HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
+    }
+
+    // Caller owns the transaction. This is the exact fenced completion path
+    // shared by single-commit and batch-commit execution; only COMMIT grouping
+    // differs. Returning Accepted=true/NewlyCommitted=false is an exact replay.
+    private static async Task<(bool Accepted,bool NewlyCommitted,string? Hub)> CompleteActivityInTransactionAsync(
+        NpgsqlConnection db,NpgsqlTransaction tx,Guid task,string worker,long epoch,
+        JsonElement result,CancellationToken ct,System.Diagnostics.Activity? span)
+    {
         var lockStarted=System.Diagnostics.Stopwatch.GetTimestamp();
         Guid id;string hub,status,pointer,dispatch;int partition,step;
         await using(var cmd=Command(db,tx,LockActivityWorkflowSql,("task",task)))
         {
             await using var r=await cmd.ExecuteReaderAsync(ct);
-            if(!await r.ReadAsync(ct))return false;
+            if(!await r.ReadAsync(ct))return (false,false,null);
             id=r.GetGuid(0);hub=r.GetString(1);partition=r.GetInt32(2);status=r.GetString(3);
             pointer=r.GetString(4);dispatch=r.GetString(5);step=r.GetInt32(6);
         }
@@ -585,14 +842,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             SELECT state,last_owner,epoch,result_json::text FROM wfc_scale.hub_task WHERE id=@task FOR UPDATE
             """,("task",task)))
         {
-            await using var r=await cmd.ExecuteReaderAsync(ct);await r.ReadAsync(ct);
+            await using var r=await cmd.ExecuteReaderAsync(ct);
+            if(!await r.ReadAsync(ct))return (false,false,hub);
             if(r.GetInt16(0)==2 && !r.IsDBNull(1) && r.GetString(1)==worker && r.GetInt64(2)==epoch)
-                return !r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result);
+                return (!r.IsDBNull(3) && JsonElement.DeepEquals(Json(r.GetString(3)),result),false,hub);
         }
-        if(status is "Complete" or "Terminated")return false;
+        if(status is "Complete" or "Terminated")return (false,false,hub);
         await using(var cmd=Command(db,tx,CompleteTaskSql,
             ("result",result.GetRawText()),("task",task),("owner",worker),("epoch",epoch)))
-            if(await cmd.ExecuteNonQueryAsync(ct)!=1)return false;
+            if(await cmd.ExecuteNonQueryAsync(ct)!=1)return (false,false,hub);
         await Execute(db,tx,"""
             UPDATE wfc_scale.hub_task_attempt SET outcome='Completed',finished_at=clock_timestamp()
             WHERE task_id=@task AND epoch=@epoch AND finished_at IS NULL
@@ -604,14 +862,7 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         await HubRemoteWorkflowStore.JournalAsync(db,tx,id,step,task,"__native_activity__","ActivityResultReceived",
             JsonSerializer.Serialize(new{executionPointerId=pointer,dispatchKey=dispatch}),ct);
         await WakeAsync(db,tx,id,hub,partition,ct);
-        var commitStarted=System.Diagnostics.Stopwatch.GetTimestamp();
-        await tx.CommitAsync(ct);
-        span?.AddEvent(new System.Diagnostics.ActivityEvent("db.completion.committed",
-            tags:new System.Diagnostics.ActivityTagsCollection {
-                { "elapsed.seconds", System.Diagnostics.Stopwatch.GetElapsedTime(commitStarted).TotalSeconds }}));
-        HubTelemetry.ActivitiesCompleted.Add(1);
-        HubTelemetry.TasksCompleted.Add(1,HubTelemetry.HubTag(hub));
-        return true;
+        return (true,true,hub);
     }
 
     private static async Task RetireAsync(NpgsqlConnection db,NpgsqlTransaction tx,Guid id,CancellationToken ct)
