@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Globalization;
 using System.Text.Json;
 using Npgsql;
@@ -21,8 +22,14 @@ if(phase is not ("A" or "B" or "C" or "D") || mode is not ("on" or "off") ||
     throw new ArgumentException("Invalid benchmark inputs");
 var prefix="native-opt-"+phase.ToLowerInvariant()+"-"+Guid.NewGuid().ToString("N")+"-";
 const int SubscriptionCount=12, InboxCount=8, ActivityCount=16, HistoryCount=64;
-var historyPayload=JsonSerializer.SerializeToElement(new { sample=new string('h',1024) });
-var bigSnapshot=JsonSerializer.SerializeToElement(new { snapshot=new string('s',96*1024) });
+// Repeatable length but low compression: otherwise TOAST makes the full
+// request receipt look artificially cheap when payloads are repetitive.
+var historyPayloads=Enumerable.Range(0,HistoryCount)
+    .Select(_=>JsonSerializer.SerializeToElement(new {
+        sample=Convert.ToBase64String(RandomNumberGenerator.GetBytes(512))}))
+    .ToArray();
+var bigSnapshot=JsonSerializer.SerializeToElement(new {
+    snapshot=Convert.ToBase64String(RandomNumberGenerator.GetBytes(80*1024))});
 var smallSnapshot=JsonSerializer.SerializeToElement(new { tick=1 });
 var empty=JsonSerializer.SerializeToElement(new {});
 var fixtures=await Seed();
@@ -51,7 +58,7 @@ await using(var tasks=new HubTaskStore(connection,Math.Max(20,concurrency+4)))
                     :[];
                 HubNativeHistory[] history=phase=="D"
                     ?Enumerable.Range(0,HistoryCount).Select(i=>
-                        new HubNativeHistory("StepCompleted","history-"+i,0,null,[],1,historyPayload)).ToArray()
+                        new HubNativeHistory("StepCompleted","history-"+i,0,null,[],1,historyPayloads[i])).ToArray()
                     :[];
                 var request=new HubNativeCommit(1,"bench-worker",1,0,item.Task,
                     phase=="D"?bigSnapshot:smallSnapshot,"Runnable",false,null,item.Inbox,
@@ -70,6 +77,7 @@ var cpuAfter=await ContainerStats();
 await Task.Delay(1800);
 var after=await PgStats();
 var verified=await Verify();
+var averageReceiptBytes=await ReceiptStorageBytes();
 if(errors.TryPeek(out var first))throw new InvalidOperationException("Native commit error: "+first);
 if(success!=count||verified.Completed!=count||verified.Scheduled!=(phase=="C"?count*ActivityCount:0)
     ||verified.History!=(phase=="D"?count*HistoryCount:0)
@@ -96,6 +104,7 @@ var report=new {
     pgIoFsync=after.IoFsync-before.IoFsync,
     pgDiskReadBytes=cpuBefore.HasValue&&cpuAfter.HasValue?cpuAfter.Value.ReadBytes-cpuBefore.Value.ReadBytes:(long?)null,
     pgDiskWriteBytes=cpuBefore.HasValue&&cpuAfter.HasValue?cpuAfter.Value.WriteBytes-cpuBefore.Value.WriteBytes:(long?)null,
+    averageReceiptBytes=Math.Round(averageReceiptBytes,2),
     verified
 };
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
@@ -225,6 +234,22 @@ async Task<(long Completed,long Scheduled,long History,long Consumed,long Subscr
     if(!await r.ReadAsync())throw new InvalidOperationException("Missing counts");
     return(r.GetInt64(0),r.GetInt64(1),r.GetInt64(2),r.GetInt64(3),r.GetInt64(4));
 }
+
+async Task<double> ReceiptStorageBytes()
+{
+    await using var db=new NpgsqlConnection(unpooled);
+    await db.OpenAsync();
+    await using var cmd=new NpgsqlCommand("""
+        SELECT COALESCE(avg(pg_column_size(t.result_json)),0)::double precision
+        FROM wfc_scale.hub_task t
+        WHERE t.hub_id LIKE @pattern AND t.task_type='__native_workflow__'
+          AND t.state=2
+        """,db);
+    cmd.Parameters.AddWithValue("pattern",prefix+"%");
+    return (double)(await cmd.ExecuteScalarAsync()
+        ??throw new InvalidOperationException("Missing receipt storage measurement"));
+}
+
 async Task<(double WalBytes,double Commits,double Hits,double Reads,double IoReads,double IoWrites,double IoFsync)> PgStats()
 {
     await using var db=new NpgsqlConnection(unpooled);
