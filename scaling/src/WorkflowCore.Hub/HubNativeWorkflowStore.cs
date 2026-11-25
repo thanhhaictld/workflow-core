@@ -37,6 +37,12 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    // P2 experiment: batch inbox consumption and subscription INSERT statements.
+    // OFF leaves the original exact-validation and write behavior intact.
+    private static readonly bool BulkSubscriptionSql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_BULK_EVENT_SQL"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
     // P1 experiment: do not execute subscription DELETE/MATCH on commits that
     // cannot have subscriptions. OFF preserves the original SQL path.
     private static readonly bool SkipEmptySubscriptionSql =
@@ -265,27 +271,73 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         }
         var obsoleteDispatches = request.ObsoleteDispatches is { Length: > 0 } removed
             ? new HashSet<string>(removed, StringComparer.Ordinal) : null;
-        foreach(var consumed in request.ConsumedInbox.Distinct())
+        if (BulkSubscriptionSql)
         {
-            await using var cmd=Command(db,tx,"""
-                UPDATE wfc_scale.hub_native_inbox SET consumed=true
-                WHERE id=@message AND workflow_id=@id AND NOT consumed
-                RETURNING CASE WHEN kind='Activity' THEN source_key END
-                """,("message",consumed),("id",id));
-            var sourceKey = await cmd.ExecuteScalarAsync(ct);
-            if (sourceKey is null) throw new ArgumentException("Unknown or already consumed inbox message");
-            // Activity inbox entries are written after completion or terminal failure.
-            if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
+            var distinctIds=request.ConsumedInbox.Distinct().ToArray();
+            if(distinctIds.Length>0)
+            {
+                var returned=new HashSet<long>();
+                await using var batch=Command(db,tx,"""
+                    UPDATE wfc_scale.hub_native_inbox SET consumed=true
+                    WHERE workflow_id=@id AND id=ANY(@message_ids) AND NOT consumed
+                    RETURNING id, CASE WHEN kind='Activity' THEN source_key END
+                    """,("id",id),("message_ids",distinctIds));
+                await using var rows=await batch.ExecuteReaderAsync(ct);
+                while(await rows.ReadAsync(ct))
+                {
+                    returned.Add(rows.GetInt64(0));
+                    if(!rows.IsDBNull(1))
+                        obsoleteDispatches?.Remove(rows.GetString(1));
+                }
+                // Preserve per-message exactness and atomic rollback on a
+                // stale/duplicate/already-consumed/unknown inbox message.
+                if(returned.Count!=distinctIds.Length)
+                    throw new ArgumentException("Unknown or already consumed inbox message");
+            }
         }
-        // A commit with no old subscriptions does not need a DELETE.
+        else
+        {
+            foreach(var consumed in request.ConsumedInbox.Distinct())
+            {
+                await using var cmd=Command(db,tx,"""
+                    UPDATE wfc_scale.hub_native_inbox SET consumed=true
+                    WHERE id=@message AND workflow_id=@id AND NOT consumed
+                    RETURNING CASE WHEN kind='Activity' THEN source_key END
+                    """,("message",consumed),("id",id));
+                var sourceKey = await cmd.ExecuteScalarAsync(ct);
+                if (sourceKey is null) throw new ArgumentException("Unknown or already consumed inbox message");
+                if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
+            }
+        }
         if (!SkipEmptySubscriptionSql || hasExistingSubscriptions)
             await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
-        foreach(var subscription in request.Subscriptions)
+        if(BulkSubscriptionSql && request.Subscriptions.Length>0)
+        {
+            // A single typed set-based INSERT, still protected by the same Hub
+            // event lane + workflow row + fenced task transaction.
+            var bulkSubscriptions=JsonSerializer.Serialize(request.Subscriptions.Select(subscription=>new {
+                pointer_id=subscription.PointerId,
+                event_name=subscription.EventName,
+                event_key=subscription.EventKey,
+                as_of=subscription.AsOf.ToUniversalTime()
+            }));
             await Execute(db,tx,"""
-                INSERT INTO wfc_scale.hub_native_subscription(workflow_id,pointer_id,event_name,event_key,as_of)
-                VALUES(@id,@pointer,@name,@key,@asof)
-                """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
-                ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
+                INSERT INTO wfc_scale.hub_native_subscription
+                    (workflow_id,pointer_id,event_name,event_key,as_of)
+                SELECT @id,s.pointer_id,s.event_name,s.event_key,s.as_of
+                FROM jsonb_to_recordset(@subscriptions::jsonb) AS s(
+                    pointer_id text,event_name text,event_key text,as_of timestamptz)
+                """,ct,("id",id),("subscriptions",bulkSubscriptions));
+        }
+        else
+        {
+            foreach(var subscription in request.Subscriptions)
+                await Execute(db,tx,"""
+                    INSERT INTO wfc_scale.hub_native_subscription(workflow_id,pointer_id,event_name,event_key,as_of)
+                    VALUES(@id,@pointer,@name,@key,@asof)
+                    """,ct,("id",id),("pointer",subscription.PointerId),("name",subscription.EventName),
+                    ("key",subscription.EventKey),("asof",subscription.AsOf.ToUniversalTime()));
+        }
         if (obsoleteDispatches is { Count: > 0 })
         {
             // Keep separate statements in one round trip. Closing attempts needs a
