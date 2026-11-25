@@ -10,6 +10,7 @@ using WorkflowCore.Hub;
 // workflow, one fenced activity lease, and its attempt row.
 var connection = Environment.GetEnvironmentVariable("WFC_TEST_PG")
     ?? throw new InvalidOperationException("Set WFC_TEST_PG");
+var unpooledConnection = new NpgsqlConnectionStringBuilder(connection) { Pooling = false }.ConnectionString;
 var count = int.TryParse(Environment.GetEnvironmentVariable("BENCH_COUNT"),out var c) ? c : 600;
 var concurrency = int.TryParse(Environment.GetEnvironmentVariable("BENCH_CONCURRENCY"),out var p) ? p : 8;
 var batchSize = int.TryParse(Environment.GetEnvironmentVariable("BENCH_BATCH_SIZE"),out var b) ? b : 16;
@@ -145,7 +146,7 @@ static double Percentile(double[] values,double p) => values.Length==0?0:Math.Ro
 
 async Task Seed(string hub,int n)
 {
-    await using var db=new NpgsqlConnection(connection);
+    await using var db=new NpgsqlConnection(unpooledConnection);
     await db.OpenAsync();
     await using var cmd=new NpgsqlCommand("""
         WITH created_workflows AS (
@@ -176,7 +177,7 @@ async Task Seed(string hub,int n)
 }
 async Task<Guid[]> GetTasks(string hub)
 {
-    await using var db=new NpgsqlConnection(connection);
+    await using var db=new NpgsqlConnection(unpooledConnection);
     await db.OpenAsync();
     await using var cmd=new NpgsqlCommand("""
         SELECT id FROM wfc_scale.hub_task
@@ -190,7 +191,7 @@ async Task<Guid[]> GetTasks(string hub)
 }
 async Task<(long Completed,long Attempts,long Inbox,long History,long Wakes)> Verify(string hub)
 {
-    await using var db=new NpgsqlConnection(connection);
+    await using var db=new NpgsqlConnection(unpooledConnection);
     await db.OpenAsync();
     await using var cmd=new NpgsqlCommand("""
         SELECT
@@ -211,7 +212,7 @@ async Task<(long Completed,long Attempts,long Inbox,long History,long Wakes)> Ve
 
 async Task<double[]> PgSnapshot()
 {
-    await using var db=new NpgsqlConnection(connection);
+    await using var db=new NpgsqlConnection(unpooledConnection);
     await db.OpenAsync();
     await using(var clear=new NpgsqlCommand("SELECT pg_stat_clear_snapshot()",db))
         await clear.ExecuteNonQueryAsync();
