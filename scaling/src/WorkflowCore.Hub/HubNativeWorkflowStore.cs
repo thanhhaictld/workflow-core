@@ -37,6 +37,11 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    // P1 experiment: do not execute subscription DELETE/MATCH on commits that
+    // cannot have subscriptions. OFF preserves the original SQL path.
+    private static readonly bool SkipEmptySubscriptionSql =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL"),
+            "true", StringComparison.OrdinalIgnoreCase);
     private const int HistoryBatchChunkSize = 256;
     // A/B experiment: move history JSON serialization before opening the fenced DB transaction.
     // The actual history INSERTs remain atomic with snapshot, inbox, dispatch and task ACK.
@@ -272,7 +277,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             // Activity inbox entries are written after completion or terminal failure.
             if (sourceKey is string dispatchKey) obsoleteDispatches?.Remove(dispatchKey);
         }
-        await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
+        // A commit with no old subscriptions does not need a DELETE.
+        if (!SkipEmptySubscriptionSql || hasExistingSubscriptions)
+            await Execute(db,tx,"DELETE FROM wfc_scale.hub_native_subscription WHERE workflow_id=@id",ct,("id",id));
         foreach(var subscription in request.Subscriptions)
             await Execute(db,tx,"""
                 INSERT INTO wfc_scale.hub_native_subscription(workflow_id,pointer_id,event_name,event_key,as_of)
@@ -328,7 +335,11 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                 await HubRemoteWorkflowStore.JournalAsync(db,tx,id,activity.StepId,task,activity.ActivityType,"ActivityScheduled",
                     JsonSerializer.Serialize(new{executionPointerId=activity.PointerId,activity.DispatchKey}),ct);
             }
-            await MatchEvents(db,tx,id,hub,ct);
+            // Only newly registered subscriptions can match an external event.
+            // Existing subscriptions were replaced above; if the new list is
+            // empty there are no candidate event pointers to match.
+            if (!SkipEmptySubscriptionSql || request.Subscriptions.Length > 0)
+                await MatchEvents(db,tx,id,hub,ct);
         }
         await Execute(db,tx,"""
             WITH cancelled AS (
