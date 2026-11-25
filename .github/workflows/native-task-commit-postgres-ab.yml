@@ -117,6 +117,13 @@ jobs:
           assert len(a)==len(b)==2
           assert all(x["completed"]==r["countPerArm"] for x in a+b)
           assert all(x["pgCpuSeconds"] is not None for x in a+b)
+          # PostgreSQL counters must fall within a bounded tolerance of the
+          # expected actual COMMIT statements; reject delayed/shifted stats.
+          for sample in a+b:
+            expected=sample["expectedCompletionCommits"]
+            observed=sample["pgStatsDelta"]["xact_commit"]
+            assert abs(observed-expected)<=max(20,expected*.15), (
+              "PG xact_commit attribution is invalid",sample["mode"],expected,observed)
           fields=[
             ("tasksPerSecond","Task throughput","tasks/s"),
             ("requestLatencyP95Ms","Completion ACK p95","ms"),
@@ -126,14 +133,27 @@ jobs:
             ("walBytesPerTask","WAL bytes per task","bytes/task"),
             ("pgDiskReadBytes","PostgreSQL cgroup read","bytes"),
             ("pgDiskWriteBytes","PostgreSQL cgroup write","bytes"),
+            ("pgStatsDelta.io_reads","pg_stat_io read operations","count"),
+            ("pgStatsDelta.io_writes","pg_stat_io write operations","count"),
+            ("pgStatsDelta.io_fsyncs","pg_stat_io fsync operations","count"),
+            ("pgStatsDelta.io_hits","pg_stat_io cache hits","count"),
+            ("pgStatsDelta.io_read_time_ms","pg_stat_io read time","ms"),
+            ("pgStatsDelta.io_write_time_ms","pg_stat_io write time","ms"),
+            ("pgStatsDelta.wal_sync","pg_stat_wal fsyncs","count"),
+            ("pgStatsDelta.wal_sync_time_ms","pg_stat_wal fsync time","ms"),
+            ("pgStatsDelta.blks_hit","pg_stat_database buffer hits","count"),
           ]
           lines=["# Native task completion A/B (same runner, ABBA)", "",
             "600 independent fenced native tasks per arm, 8 concurrent callers, 16 items/transaction for batch.",
             "The original SQL statements, attempt/inbox/history/wake and fencing are shared by both modes.", "",
             "| Metric | Single commit | Batch commit | Change |", "|---|---:|---:|---:|"]
+          def extract(sample,key):
+            value=sample
+            for part in key.split("."):value=value[part]
+            return float(value)
           for key,label,unit in fields:
-            single=statistics.mean(float(x[key]) for x in a)
-            batch=statistics.mean(float(x[key]) for x in b)
+            single=statistics.mean(extract(x,key) for x in a)
+            batch=statistics.mean(extract(x,key) for x in b)
             change="n/a" if single==0 else f"{(batch/single-1)*100:+.1f}%"
             lines.append(f"| {label} ({unit}) | {single:,.3f} | {batch:,.3f} | {change} |")
           lines+=["", "Per-run PostgreSQL pg_stat_database, pg_stat_wal, pg_stat_io deltas and cgroup CPU/disk appear in the JSON artifact.",
