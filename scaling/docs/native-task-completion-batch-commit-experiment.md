@@ -18,7 +18,7 @@ The same runner executes a paired, reversed sequence `single → batch → batch
 - **Physical I/O:** PostgreSQL container cgroup `io.stat` rbytes/wbytes delta.
 - **PostgreSQL buffer I/O:** `pg_stat_io` read/write/extend/fsync/hit counts and timings.
 - **WAL:** `pg_stat_wal` bytes, records, writes/syncs and times.
-- **Transactions / logical reads:** `pg_stat_database` commits, rollbacks, blocks read/hit, rows inserted/updated and I/O time. `track_io_timing` and `track_wal_io_timing` are enabled in the job.
+- **Transactions / logical reads:** explicit task-completion COMMIT calls are counted by the harness (600 for single, ceil(600/16)=38 for batch). Separately, `pg_stat_database.xact_commit` includes implicit Npgsql session-reset/check-out transactions as well as explicit commits; observed values are expected to be higher. Database blocks read/hit, rows inserted/updated and I/O times are also captured. `track_io_timing` and `track_wal_io_timing` are enabled in the job.
 
 All raw deltas, CPU, I/O and aggregate results are archived in `native-completion-commit-ab.json`; the GitHub step summary includes paired averages and percentage changes. No arbitrary performance gain threshold is used as a correctness gate.
 
