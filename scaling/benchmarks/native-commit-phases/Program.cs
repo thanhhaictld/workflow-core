@@ -72,6 +72,7 @@ var after=await PgStats();
 var verified=await Verify();
 if(errors.TryPeek(out var first))throw new InvalidOperationException("Native commit error: "+first);
 if(success!=count||verified.Completed!=count||verified.Scheduled!=(phase=="C"?count*ActivityCount:0)
+    ||verified.ScheduledEvents!=(phase=="C"?count*ActivityCount:0)
     ||verified.History!=(phase=="D"?count*HistoryCount:0)
     ||verified.Consumed!=(phase=="B"?count*InboxCount:0)
     ||verified.Subscriptions!=(phase=="B"?count*SubscriptionCount:0))
@@ -96,7 +97,14 @@ var report=new {
     pgIoFsync=after.IoFsync-before.IoFsync,
     pgDiskReadBytes=cpuBefore.HasValue&&cpuAfter.HasValue?cpuAfter.Value.ReadBytes-cpuBefore.Value.ReadBytes:(long?)null,
     pgDiskWriteBytes=cpuBefore.HasValue&&cpuAfter.HasValue?cpuAfter.Value.WriteBytes-cpuBefore.Value.WriteBytes:(long?)null,
-    verified
+    verified=new {
+        completed=verified.Completed,
+        scheduledTasks=verified.Scheduled,
+        scheduledHistoryEvents=verified.ScheduledEvents,
+        history=verified.History,
+        consumedInbox=verified.Consumed,
+        subscriptions=verified.Subscriptions
+    }
 };
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
 await File.WriteAllTextAsync(target,JsonSerializer.Serialize(report,new JsonSerializerOptions{WriteIndented=true}));
@@ -190,8 +198,8 @@ async Task<List<(Guid Workflow,Guid Task,string Hub,long[] Inbox)>> Seed()
     {
         await using var registration=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
-              (hub_id,activity_type,version,partitions)
-            SELECT hub_id,'bench-activity',1,1 FROM wfc_scale.hub_workflow
+              (hub_id,activity_type,version,partitions,hub_concurrency,activity_concurrency)
+            SELECT hub_id,'bench-activity',1,1,1,1 FROM wfc_scale.hub_workflow
             WHERE hub_id LIKE @pattern
             """,db);
         registration.Parameters.AddWithValue("pattern",prefix+"%");
@@ -200,7 +208,7 @@ async Task<List<(Guid Workflow,Guid Task,string Hub,long[] Inbox)>> Seed()
     if(fixtures.Count!=count)throw new InvalidOperationException("Fixture count mismatch");
     return fixtures;
 }
-async Task<(long Completed,long Scheduled,long History,long Consumed,long Subscriptions)> Verify()
+async Task<(long Completed,long Scheduled,long ScheduledEvents,long History,long Consumed,long Subscriptions)> Verify()
 {
     await using var db=new NpgsqlConnection(unpooled);
     await db.OpenAsync();
@@ -210,6 +218,9 @@ async Task<(long Completed,long Scheduled,long History,long Consumed,long Subscr
            WHERE hub_id LIKE @pattern AND task_type='__native_workflow__' AND state=2),
         (SELECT count(*) FROM wfc_scale.hub_task
            WHERE hub_id LIKE @pattern AND task_type='bench-activity' AND state=0),
+        (SELECT count(*) FROM wfc_scale.hub_workflow_event e
+           JOIN wfc_scale.hub_workflow w ON w.id=e.workflow_id
+           WHERE w.hub_id LIKE @pattern AND e.event_type='ActivityScheduled'),
         (SELECT count(*) FROM wfc_scale.hub_workflow_event e
            JOIN wfc_scale.hub_workflow w ON w.id=e.workflow_id
            WHERE w.hub_id LIKE @pattern AND e.event_type='StepCompleted'),
@@ -223,7 +234,8 @@ async Task<(long Completed,long Scheduled,long History,long Consumed,long Subscr
     cmd.Parameters.AddWithValue("pattern",prefix+"%");
     await using var r=await cmd.ExecuteReaderAsync();
     if(!await r.ReadAsync())throw new InvalidOperationException("Missing counts");
-    return(r.GetInt64(0),r.GetInt64(1),r.GetInt64(2),r.GetInt64(3),r.GetInt64(4));
+    return(r.GetInt64(0),r.GetInt64(1),r.GetInt64(2),r.GetInt64(3),
+        r.GetInt64(4),r.GetInt64(5));
 }
 async Task<(double WalBytes,double Commits,double Hits,double Reads,double IoReads,double IoWrites,double IoFsync)> PgStats()
 {
