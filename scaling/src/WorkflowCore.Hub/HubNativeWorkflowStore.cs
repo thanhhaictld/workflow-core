@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
@@ -37,6 +39,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
     private static readonly bool BatchHistoryEnabled =
         !string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED"), "false", StringComparison.OrdinalIgnoreCase)
         && Environment.GetEnvironmentVariable("WFC_HUB_BATCH_HISTORY_ENABLED") != "0";
+    // P4 experiment: hash-based compact retry receipts instead of persisting
+    // the full commit request again in hub_task.result_json.
+    // Both v1 and v2 receipts are always readable during rolling deployments.
+    private static readonly bool CompactReceiptEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("WFC_HUB_NATIVE_COMPACT_RECEIPT"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
+    private static string HashCommit(string canonical) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+
     // P3 experiment: set-based task and ActivityScheduled history inserts.
     // The activity registration, dispatch-key uniqueness and fenced transaction
     // remain authoritative. OFF preserves the legacy per-activity statements.
@@ -182,6 +194,9 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         // on both Hub versions so another replica can acknowledge a lost response.
         var receiptRequest = request.ObsoleteDispatches is null ? request : request with { ObsoleteDispatches = null };
         var canonical = JsonSerializer.Serialize(receiptRequest);
+        // Compute the digest outside the row-locked transaction when enabled.
+        // Disabled replicas can still verify v2 receipts on exact replay.
+        var canonicalHash = CompactReceiptEnabled ? HashCommit(canonical) : null;
         // CPU-only preparation is safe before the transaction: the request is already
         // validated and no database state is read. All writes are still fenced.
         string[]? preparedHistory = null;
@@ -250,7 +265,16 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
                r.GetString(2)==request.WorkerId && !r.IsDBNull(5))
             {
                 var stored=Json(r.GetString(5));
-                if(stored.TryGetProperty("commit",out var previous) && JsonElement.DeepEquals(previous,Json(canonical)))
+                var exactLegacy = stored.TryGetProperty("commit",out var previous) &&
+                    JsonElement.DeepEquals(previous,Json(canonical));
+                var exactCompact = !exactLegacy &&
+                    stored.TryGetProperty("receiptVersion",out var version) &&
+                    version.ValueKind==JsonValueKind.Number && version.GetInt32()==2 &&
+                    stored.TryGetProperty("commitHash",out var hash) &&
+                    hash.ValueKind==JsonValueKind.String &&
+                    string.Equals(hash.GetString(),canonicalHash??HashCommit(canonical),
+                        StringComparison.Ordinal);
+                if(exactLegacy || exactCompact)
                 {
                     return new(new(id,stored.GetProperty("revision").GetInt64(),
                         stored.GetProperty("status").GetString()!,true),hub);
@@ -472,8 +496,15 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             """,ct,("snapshot",request.Snapshot.GetRawText()),("status",nextStatus),
             ("state",(short)(nextStatus=="Complete"?2:nextStatus=="Terminated"?3:1)),("id",id),
             ("waiting",nextStatus is "Runnable" or "Suspended" && !request.Runnable));
+        // Keep revision and status for lost-response retries. v2 stores a
+        // SHA-256 of the same canonical request previously embedded as JSON.
+        // The full snapshot/history remain in authoritative workflow tables.
+        var receiptJson = CompactReceiptEnabled
+            ? JsonSerializer.Serialize(new {receiptVersion=2,commitHash=canonicalHash,
+                revision=revision+1,status=nextStatus})
+            : JsonSerializer.Serialize(new {commit=receiptRequest,revision=revision+1,status=nextStatus});
         await using(var ack=Command(db,tx,CompleteTaskSql,("task",request.TaskId),("owner",request.WorkerId),("epoch",request.Epoch),
-            ("result",JsonSerializer.Serialize(new{commit=receiptRequest,revision=revision+1,status=nextStatus}))))
+            ("result",receiptJson)))
             if(await ack.ExecuteNonQueryAsync(ct)!=1)return null;
         if(nextStatus=="Runnable")
         {
