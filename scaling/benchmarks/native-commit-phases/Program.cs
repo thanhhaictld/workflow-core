@@ -199,8 +199,8 @@ async Task<List<(Guid Workflow,Guid Task,string Hub,long[] Inbox)>> Seed()
     {
         await using var registration=new NpgsqlCommand("""
             INSERT INTO wfc_scale.hub_activity_registration
-              (hub_id,activity_type,version,partitions)
-            SELECT hub_id,'bench-activity',1,1 FROM wfc_scale.hub_workflow
+              (hub_id,activity_type,version,partitions,hub_concurrency,activity_concurrency)
+            SELECT hub_id,'bench-activity',1,1,1,1 FROM wfc_scale.hub_workflow
             WHERE hub_id LIKE @pattern
             """,db);
         registration.Parameters.AddWithValue("pattern",prefix+"%");
