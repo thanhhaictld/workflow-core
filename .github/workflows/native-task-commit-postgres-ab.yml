@@ -83,37 +83,6 @@ jobs:
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/014_hub_work_ready_notifications.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/015_explicit_activity_ordering.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/016_hub_matching_ownership.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/020_hub_reconciliation_indexes.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/021_hub_active_task_indexes.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/022_hub_claim_index_selectivity.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/024_hub_native_reconcile_tasks.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/028_hub_claim_shard4_ready.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/029_hub_partition_candidate_indexes.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/036_hub_lightweight_shard_signals.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/037_hub_bound_expired_candidate_pages.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
-          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
       - name: Enable PostgreSQL I/O and WAL timing
         run: |
           psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET track_io_timing = 'on'"
