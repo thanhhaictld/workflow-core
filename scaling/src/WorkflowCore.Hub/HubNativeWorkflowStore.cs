@@ -607,12 +607,13 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
         using var span=HubTelemetry.Traces.StartActivity("hub.activity.complete.batch.transaction");
         span?.SetTag("batch.size",completions.Count);
         await using var db=await Source.OpenConnectionAsync(ct);
-        // Resolve workflow IDs outside the transaction. Lock order within the
-        // transaction is workflow then task, identical to the single-item path.
+        await using var tx=await db.BeginTransactionAsync(ct);
+        // Resolve workflow IDs before acquiring row locks, but inside the
+        // same transaction so this lookup does not add an implicit commit.
         var workflowIds=new Dictionary<Guid,Guid>();
         await using(var order=new NpgsqlCommand("""
             SELECT id,workflow_id FROM wfc_scale.hub_task WHERE id=ANY(@tasks) AND workflow_id IS NOT NULL
-            """,db))
+            """,db,tx))
         {
             order.Parameters.AddWithValue("tasks",completions.Select(x=>x.TaskId).ToArray());
             await using var reader=await order.ExecuteReaderAsync(ct);
@@ -624,7 +625,6 @@ public sealed class HubNativeWorkflowStore(HubTaskStore tasks, HubDefinitionStor
             .ThenBy(i=>completions[i].TaskId).ToArray();
         var accepted=new bool[completions.Count];
         var newlyCompleted=new List<string>(completions.Count);
-        await using var tx=await db.BeginTransactionAsync(ct);
         foreach(var index in indices)
         {
             var item=completions[index];
