@@ -78,12 +78,12 @@ jobs:
         env:
           WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL: 'true'
           WFC_HUB_NATIVE_BULK_EVENT_SQL: 'false'
-        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests|FullyQualifiedName~HubNativeInboxBatchTests"
       - name: Verify native event integration with bulk ON
         env:
           WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL: 'true'
           WFC_HUB_NATIVE_BULK_EVENT_SQL: 'true'
-        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests"
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeRuntimeTests|FullyQualifiedName~HubNativeInboxBatchTests"
       - name: Benchmark batched native inbox and subscription writes
         shell: bash
         run: |
