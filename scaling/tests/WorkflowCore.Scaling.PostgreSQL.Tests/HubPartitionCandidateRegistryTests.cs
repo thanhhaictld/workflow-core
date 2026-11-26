@@ -17,11 +17,15 @@ public sealed class HubPartitionCandidateRegistryTests
         public readonly Dictionary<(string, int, HubCandidateStream), List<HubTaskCandidate>> Data = new();
         public readonly List<(string Hub,int Bucket,HubCandidateStream Stream,long? Cursor)> Calls = [];
         public int Active, MaxActive, Captures;
+        public bool AlwaysFailHydration;
+        public bool HasExpiredCandidates = true;
+        public int HydrationCalls;
         public TaskCompletionSource? Entered, Release, PageEntered, PageRelease;
-        public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct)
+        public TaskCompletionSource? HydrationEntered, HydrationRelease;
+        public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct)
         {
             Captures++; var current = Interlocked.Increment(ref Active); MaxActive = Math.Max(MaxActive,current);
-            try { if (Entered is not null) { Entered.TrySetResult(); await Release!.Task.WaitAsync(ct); } return new(10000,new DateTime(2030,1,1,0,0,0,DateTimeKind.Utc)); }
+            try { if (Entered is not null) { Entered.TrySetResult(); await Release!.Task.WaitAsync(ct); } return new(10000,new DateTime(2030,1,1,0,0,0,DateTimeKind.Utc),HasExpiredCandidates); }
             finally { Interlocked.Decrement(ref Active); }
         }
         public async Task<HubCandidatePage> ReadPageAsync(string hub,int bucket,HubCandidateStream stream,HubCandidateHorizon horizon,HubCandidateCursor? cursor,int pageSize,int byteLimit,CancellationToken ct)
@@ -31,6 +35,20 @@ public sealed class HubPartitionCandidateRegistryTests
             var all = Data.GetValueOrDefault((hub,bucket,stream),[]).Where(x => x.Sequence > (cursor?.Sequence ?? 0) && x.Sequence <= horizon.UpperSequence).OrderBy(x => x.Sequence).Take(pageSize).ToArray();
             var last = all.LastOrDefault();
             return new HubCandidatePage(all,last is null ? cursor : new(last.Sequence,stream == HubCandidateStream.Ready ? null : last.Deadline),all.Length < pageSize,all.Length*160);
+        }
+        public async Task<HubCandidateHydrationPage> HydrateAsync(string hub,int matchingPartition,int partitionCount,
+            IReadOnlyList<Guid> ids,int byteLimit,CancellationToken ct)
+        {
+            Interlocked.Increment(ref HydrationCalls);
+            if (AlwaysFailHydration) throw new InvalidOperationException("synthetic hydration failure");
+            if (HydrationEntered is not null)
+            {
+                HydrationEntered.TrySetResult();
+                await HydrationRelease!.Task.WaitAsync(ct);
+            }
+            var items = Data.Values.SelectMany(x => x).Where(x => ids.Contains(x.Id) && x.HubId == hub &&
+                x.PartitionId % partitionCount == matchingPartition).DistinctBy(x => x.Id).ToArray();
+            return new HubCandidateHydrationPage(items,0,items.Length*160);
         }
         public void Add(string hub, int bucket, HubCandidateStream stream, params HubTaskCandidate[] items)
         { if (!Data.TryGetValue((hub,bucket,stream),out var list)) Data[(hub,bucket,stream)] = list = []; list.AddRange(items); }
@@ -72,6 +90,111 @@ public sealed class HubPartitionCandidateRegistryTests
         await Pump(registry, clock, 10);
         Assert.Equal(captures, source.Captures);
         Assert.Equal(reads, source.Calls.Count);
+    }
+
+    [Fact]
+    public async Task ExactHintHydratesByIdAndRetainsSameIdHintArrivingDuringHydration()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-hint";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        source.HydrationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.HydrationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.AddCredit(hub, 0, 1, Credit("worker", hub)));
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        var firstHydration = registry.RunOneTurnAsync(clock.Now, default);
+        await source.HydrationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        source.HydrationRelease.SetResult();
+        await firstHydration;
+        Assert.Equal(0, source.Captures);
+        Assert.Empty(source.Calls);
+        Assert.Equal(1, source.HydrationCalls);
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(2, source.HydrationCalls);
+        Assert.Equal(candidate.Id, registry.TakeReservation(hub, 0, 1)!.Candidate.Id);
+    }
+
+    [Fact]
+    public async Task ExactHintForNoLongerEligibleTaskRemovesOnlyUnreservedCandidate()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-terminal";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(1, registry.Snapshot().Entries);
+        source.Data[(hub, 0, HubCandidateStream.ReadyDue)].Clear();
+        Assert.True(registry.NotifyTask(hub, 0, 1, candidate.Id));
+        await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.Equal(0, registry.Snapshot().Entries);
+    }
+
+    [Fact]
+    public async Task RepeatedHydrationFailuresYieldToIndexedRecoveryAndLaterExactWork()
+    {
+        var clock = new Clock(); var source = new Discovery { AlwaysFailHydration = true }; var hub = "exact-fail-fairness";
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        var first = Candidate(hub, 1);
+        Assert.True(registry.NotifyTask(hub, 0, 1, first.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.RunOneTurnAsync(clock.Now, default));
+        await registry.RunOneTurnAsync(clock.Now, default); // a failed hydration yields to horizon capture
+        await registry.RunOneTurnAsync(clock.Now, default); // indexed page
+        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.RunOneTurnAsync(clock.Now, default));
+        await registry.RunOneTurnAsync(clock.Now, default); // another failure cannot block forward recovery
+        Assert.Equal(1, source.Captures);
+        Assert.NotEmpty(source.Calls);
+
+        // Reset the retry budget on every recovery page, so exact work keeps
+        // receiving bounded service during a long paged sweep.
+        source.AlwaysFailHydration = false;
+        var second = Candidate(hub, 2); source.Add(hub, 0, HubCandidateStream.ReadyDue, second);
+        Assert.True(registry.NotifyTask(hub, 0, 1, second.Id));
+        for (var i = 0; i < 24; i++) await registry.RunOneTurnAsync(clock.Now, default);
+        Assert.True(source.HydrationCalls > 2);
+        Assert.True(source.Calls.Count > 1);
+    }
+
+
+    [Fact]
+    public async Task ExactHintFloodIsBoundedAndFallsBackToIndexedRecovery()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-flood";
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub), 64);
+        var accepted = 0;
+        for (var i = 0; i < 20; i++)
+            if (registry.NotifyTask(hub, 0, 1, Guid.NewGuid())) accepted++;
+        Assert.Equal(4, accepted);
+        Assert.True(registry.Snapshot().Bytes <= Options().ProcessBytes);
+        await Pump(registry, clock, 20);
+        Assert.True(source.HydrationCalls <= 8);
+        Assert.True(source.Captures > 0);
+    }
+
+    [Fact]
+    public async Task OwnerGenerationLossDuringHydrationCannotPopulateReplacement()
+    {
+        var clock = new Clock(); var source = new Discovery(); var hub = "exact-takeover";
+        var candidate = Candidate(hub, 1); source.Add(hub, 0, HubCandidateStream.ReadyDue, candidate);
+        source.HydrationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.HydrationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
+        registry.StartGeneration(Owner(hub, epoch: 1), 64);
+        registry.NotifyTask(hub, 0, 1, candidate.Id);
+        var hydration = registry.RunOneTurnAsync(clock.Now, default);
+        await source.HydrationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        source.Data.Clear();
+        registry.StartGeneration(Owner(hub, epoch: 2), 64);
+        await hydration;
+        source.HydrationEntered = null;
+        source.HydrationRelease!.SetResult();
+        await Pump(registry, clock, 3);
+        Assert.Equal(0, registry.Snapshot().Entries);
+        Assert.True(source.Captures > 0);
     }
 
     [Fact]
@@ -236,91 +359,6 @@ public sealed class HubPartitionCandidateRegistryTests
 
 
     [Fact]
-    public async Task ClosingWorkerSessionRemovesUnleasedCreditsWithoutAffectingOtherSessions()
-    {
-        var clock = new Clock(); var source = new Discovery(); const string hub = "worker-session-close";
-        var oldSession = Guid.NewGuid(); var liveSession = Guid.NewGuid();
-        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
-        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
-        registry.StartGeneration(Owner(hub), 64);
-        Assert.True(registry.AddCredit(hub, 0, 1,
-            Credit("old-dispatched", hub) with { WorkerId = $"push:{oldSession:N}:1" }));
-        await Pump(registry, clock, 3);
-        var dispatched = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
-        Assert.True(registry.AddCredit(hub, 0, 1,
-            Credit("old-idle", hub) with { WorkerId = $"push:{oldSession:N}:2" }));
-        Assert.True(registry.AddCredit(hub, 0, 1,
-            Credit("other-processor", hub) with { WorkerId = $"push:{liveSession:N}:1" }));
-
-        registry.CancelUncommittedSessionCredits(oldSession);
-        Assert.Equal(2, registry.Snapshot().Credits);
-        Assert.False(registry.CancelCredit("old-idle"));
-        registry.Complete(dispatched.Id, HubCandidateResolution.Unavailable, clock.Now);
-        Assert.Equal(1, registry.Snapshot().Credits);
-        Assert.True(registry.CancelCredit("other-processor"));
-        Assert.Equal(0, registry.Snapshot().Credits);
-    }
-
-    [Fact]
-    public async Task CancelWhileAdmissionDispatchedReleasesCreditOnlyAfterAuthoritativeNoLease()
-    {
-        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-dispatched";
-        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
-        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
-        registry.StartGeneration(Owner(hub), 64);
-        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
-        await Pump(registry, clock, 3);
-        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
-        Assert.False(registry.CancelCredit("crashed-worker"));
-        Assert.Equal(1, registry.Snapshot().Credits);
-        Assert.Equal(1, registry.Snapshot().Reservations);
-
-        registry.Complete(reservation.Id, HubCandidateResolution.Unavailable, clock.Now);
-        Assert.Equal(0, registry.Snapshot().Credits);
-        Assert.Equal(0, registry.Snapshot().Reservations);
-        Assert.False(registry.ReleaseGrantedCredit("crashed-worker"));
-    }
-
-    [Fact]
-    public async Task CancelledUncertainGrantHoldsCreditUntilCommitIsResolved()
-    {
-        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-uncertain";
-        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
-        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
-        registry.StartGeneration(Owner(hub), 64);
-        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
-        await Pump(registry, clock, 3);
-        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
-        Assert.False(registry.CancelCredit("crashed-worker"));
-
-        registry.Complete(reservation.Id, HubCandidateResolution.CommitOutcomeUnknown, clock.Now);
-        Assert.Equal(1, registry.Snapshot().Credits);
-        Assert.Equal(1, registry.Snapshot().Uncertain);
-        registry.ResolveUncertain(reservation.Id, HubCandidateUncertainResolution.AuthoritativeNoCommit, clock.Now);
-        Assert.Equal(0, registry.Snapshot().Credits);
-        Assert.Equal(0, registry.Snapshot().Uncertain);
-    }
-
-    [Fact]
-    public async Task CancelledCommittedLeaseKeepsCreditUntilExplicitRetirement()
-    {
-        var clock = new Clock(); var source = new Discovery(); const string hub = "cancelled-lease";
-        source.Add(hub, 0, HubCandidateStream.ReadyDue, Candidate(hub, 1));
-        using var registry = new HubPartitionCandidateRegistry(source, Options(), clock);
-        registry.StartGeneration(Owner(hub), 64);
-        Assert.True(registry.AddCredit(hub, 0, 1, Credit("crashed-worker", hub)));
-        await Pump(registry, clock, 3);
-        var reservation = Assert.IsType<HubCandidateReservation>(registry.TakeReservation(hub, 0, 1));
-        Assert.False(registry.CancelCredit("crashed-worker"));
-
-        registry.Complete(reservation.Id, HubCandidateResolution.Leased, clock.Now);
-        Assert.Equal(1, registry.Snapshot().Credits);
-        Assert.False(registry.CancelCredit("crashed-worker"));
-        Assert.True(registry.ReleaseGrantedCredit("crashed-worker"));
-        Assert.Equal(0, registry.Snapshot().Credits);
-    }
-
-    [Fact]
     public async Task OwnerCancellationRetainsDispatchedCreditAndCandidateUntilResolution()
     {
         var clock = new Clock(); var source = new Discovery(); var hub = "ownership"; var task = Candidate(hub,1);
@@ -456,6 +494,40 @@ public sealed class HubPartitionCandidateRegistryTests
         await Pump(registry,clock,4); Assert.Equal(captures,source.Captures); Assert.Null(registry.TakeReservation(hub,0,1));
         clock.Advance(TimeSpan.FromSeconds(11)); await Pump(registry,clock,3);
         var reservation = registry.TakeReservation(hub,0,1); Assert.NotNull(reservation); Assert.Equal(task.Id,reservation.Candidate.Id);
+    }
+
+    [Fact]
+    public async Task EmptyExpiryProbeSkipsBucketPagesUntilTheNextRecoverySweep()
+    {
+        var clock = new Clock();
+        var source = new Discovery { HasExpiredCandidates = false };
+        const string hub = "expiry-recovery";
+        var count = 16;
+        var partition = 3;
+        var buckets = new[] { 3, 19, 35, 51 };
+        using var registry = new HubPartitionCandidateRegistry(source, Options() with { RequireDemand = true }, clock);
+        registry.StartGeneration(Owner(hub, partition), count);
+        Assert.True(registry.AddCredit(hub, partition, 1, Credit("worker", hub)));
+
+        await Pump(registry, clock, 1); // Capture the negative result.
+        var expired = Candidate(hub, 1, partition: buckets[^1]);
+        source.Add(hub, buckets[^1], HubCandidateStream.Expired, expired);
+        source.HasExpiredCandidates = true;
+        await Pump(registry, clock, 8);
+
+        Assert.Equal(buckets, source.Calls.Select(c => c.Bucket));
+        Assert.All(source.Calls, c => Assert.Equal(HubCandidateStream.ReadyDue, c.Stream));
+        Assert.Equal(1, registry.Snapshot().CompletedSweeps);
+        Assert.Null(registry.TakeReservation(hub, partition, 1));
+
+        clock.Advance(TimeSpan.FromSeconds(11));
+        await Pump(registry, clock, 12);
+        Assert.Equal(2, source.Captures);
+        Assert.Equal(buckets, source.Calls.Where(c => c.Stream == HubCandidateStream.Expired)
+            .Select(c => c.Bucket).Distinct());
+        var reservation = registry.TakeReservation(hub, partition, 1);
+        Assert.NotNull(reservation);
+        Assert.Equal(expired.Id, reservation.Candidate.Id);
     }
 
     [Fact]

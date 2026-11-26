@@ -5,7 +5,7 @@ namespace WorkflowCore.Scaling.PostgreSQL.Tests;
 public sealed class HubCandidateConfigurationTests
 {
     [Fact]
-    public void StandardPresetsKeepCandidateMatcherEnabledAndRemoveExactTaskIdMode()
+    public void StandardPresetsKeepExistingCandidateMatcherOnAndTaskIdHintsOff()
     {
         var sourceRoot = Environment.GetEnvironmentVariable("WFC_TEST_SOURCE_ROOT");
         var root = new DirectoryInfo(sourceRoot ?? AppContext.BaseDirectory);
@@ -15,7 +15,7 @@ public sealed class HubCandidateConfigurationTests
 
         var makefile = File.ReadAllText(Path.Combine(root!.FullName, "Makefile"));
         Assert.Contains("WFC_HUB_MATCHING_CANDIDATES_ENABLED := true", makefile);
-        Assert.DoesNotContain("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED", makefile);
+        Assert.Contains("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED := false", makefile);
 
         var presets = new[]
         {
@@ -26,7 +26,7 @@ public sealed class HubCandidateConfigurationTests
         {
             var source = File.ReadAllText(Path.Combine(root.FullName, "scaling", "observability", preset));
             Assert.Contains("WFC_HUB_MATCHING_CANDIDATES_ENABLED: \"${WFC_HUB_MATCHING_CANDIDATES_ENABLED:-true}\"", source);
-            Assert.DoesNotContain("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED", source);
+            Assert.Contains("WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED: \"${WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED:-false}\"", source);
         }
     }
 }

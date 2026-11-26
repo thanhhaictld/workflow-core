@@ -74,3 +74,30 @@ For the existing bottleneck evidence and scope limitations see [throughput inves
 **CI integration caveat:** [OTEL Observability Smoke run 42447369037](https://github.com/thanhhaictld/workflow-core/actions/runs/42447369037) failed while waiting for the *removed* legacy monitor service on port 5000. The head inherited a PR #27 change removing the legacy monitor API from Compose; the smoke workflow still asserted its existence. That check runs with capacity fanout OFF and therefore is **not evidence of a feature regression**. Commit `64876e7` updates the smoke test to validate the Hub-only UI and REST proxy. Confirm the replacement CI succeeds before declaring all checks green.
 
 **Next gate:** Re-run the experiment on dedicated Hub/PostgreSQL/processor compute with 4/8/16 worker replicas and repeat each treatment. Monitor resource head handoff latency, ready-to-claim p95/p99, Hub waiter counts, empty SQL claims, PostgreSQL transactions/WAL per completed activity and CPU headroom. If throughput advantage disappears after CPU isolation, keep existing single-poll mode. No gRPC push or durable worker credits are warranted solely from this benchmark.
+
+## Current local mode controls
+
+The old `obs-offboarding-fanout-*` Make targets and benchmark command sequence
+are retired. Capacity fanout remains available behind
+`WFC_HUB_WORKER_CAPACITY_FANOUT=true`; it is independent of the task SSE
+switch, and task SSE takes precedence if both are enabled. The removed
+`WFC_HUB_LONG_POLL_ENABLED` flag selected only the retired single rotating
+long-poll worker mode and is not required for capacity fanout.
+
+To start the retained mode directly with the owner-recovery stack, configure
+`scaling/observability/.env`, then run from the repository root:
+
+```powershell
+make obs-setup
+$env:WFC_HUB_WORKER_CAPACITY_FANOUT='true'
+$env:WFC_HUB_TASK_SSE_PUSH='false'
+$env:WFC_HUB_PUSH_ENABLED='false' # isolate capacity fanout from push sessions
+pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 8
+pwsh -NoProfile -File scripts/owner-recovery.ps1 ps
+pwsh -NoProfile -File scripts/owner-recovery.ps1 logs
+```
+
+The golden `make ups-16` preset leaves both task SSE and capacity fanout off.
+Clear the direct-run overrides and use `make ups-16` to return to that preset.
+
+**Historical benchmark note:** the old fanout target measured the three-step native offboarding workload; it was not the keyed-FIFO benchmark from CI. For a controlled OFF/ON comparison, use the dedicated `workflow-hub-worker-capacity-ab.yml` workflow if it remains available in the current branch.

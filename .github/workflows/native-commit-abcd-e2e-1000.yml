@@ -1,0 +1,151 @@
+name: Native commit A-D E2E 1000 ABBA
+on:
+  pull_request:
+    paths:
+      - 'scaling/observability/compose.native-commit-abcd.yaml'
+      - 'scaling/observability/benchmark/native_commit_abcd_stats.py'
+      - '.github/workflows/native-commit-abcd-e2e-1000.yml'
+      - 'scaling/src/WorkflowCore.Hub/HubNativeWorkflowStore.cs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  workflow-1000-abba:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    env:
+      WFC_HUB_PUSH_ENABLED: 'true'
+      WFC_HUB_MATCHING_CANDIDATES_ENABLED: 'true'
+      WFC_HUB_MATCHING_PARTITIONS: '4'
+      WFC_HUB_CLAIM_ADMISSION_ENABLED: 'true'
+      WFC_HUB_CLAIM_ADMISSION_MODE: 'demand'
+      WFC_HUB_BATCH_UNCONSTRAINED_CLAIMS: 'true'
+      WFC_HUB_BATCH_HISTORY_ENABLED: 'true'
+      WFC_HUB_NATIVE_EVENT_LANE_MODE: 'subscriptions'
+      WFC_HUB_REUSE_SNAPSHOT_CONTRACTS: 'true'
+      WFC_HUB_METRICS_SAMPLER_ENABLED: 'false'
+      WFC_HUB_PREPARE_HISTORY_BEFORE_TRANSACTION: 'false'
+      WFC_HUB_DB_POOL: '12'
+      OFFBOARD_PROCESSOR_WORKERS: '8'
+      POLICY_BENCHMARK_ENABLED: 'false'
+      POLICY_BENCHMARK_ONLY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and build both Hub / processor images
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WFC_OBSERVABILITY_PROJECT="native-abcd-$GITHUB_RUN_ID"
+          mkdir -p scaling/observability/results/native-commit-abcd-e2e
+          chmod 0777 scaling/observability/results scaling/observability/results/native-commit-abcd-e2e
+          dc() {
+            docker compose -f scaling/observability/compose.yaml \
+              -f scaling/observability/compose.matching-ha.yaml \
+              -f scaling/observability/compose.matching-shards.yaml \
+              -f scaling/observability/compose.native-commit-abcd.yaml \
+              --env-file scaling/observability/.env.example "$@"
+          }
+          dc config --quiet
+          (nproc; free -h; docker version) > scaling/observability/results/native-commit-abcd-e2e/runner.txt
+          dc build hub hub-2 processor
+      - name: Compare 1000 completed native workflows per arm
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WFC_OBSERVABILITY_PROJECT="native-abcd-$GITHUB_RUN_ID"
+          OUT=scaling/observability/results/native-commit-abcd-e2e
+          ENVFILE=scaling/observability/.env.example
+          dc() {
+            docker compose -f scaling/observability/compose.yaml \
+              -f scaling/observability/compose.matching-ha.yaml \
+              -f scaling/observability/compose.matching-shards.yaml \
+              -f scaling/observability/compose.native-commit-abcd.yaml \
+              --env-file "$ENVFILE" "$@"
+          }
+          cleanup() { dc --profile offboarding-load --profile offboarding-k6 down --volumes --remove-orphans || true; }
+          trap cleanup EXIT
+          token="$(grep '^WFC_HUB_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)"
+          for stage in off1 on1 on2 off2; do
+            case "$stage" in
+              on*) export WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL=true WFC_HUB_NATIVE_BULK_EVENT_SQL=true WFC_HUB_NATIVE_BULK_ACTIVITIES=true WFC_HUB_NATIVE_COMPACT_RECEIPT=true;;
+              off*) export WFC_HUB_NATIVE_SKIP_EMPTY_SUBS_SQL=false WFC_HUB_NATIVE_BULK_EVENT_SQL=false WFC_HUB_NATIVE_BULK_ACTIVITIES=false WFC_HUB_NATIVE_COMPACT_RECEIPT=false;;
+            esac
+            echo "STAGE $stage optimized=$WFC_HUB_NATIVE_COMPACT_RECEIPT"
+            cleanup
+            dc up -d hub hub-2 hub-lb prometheus
+            for i in {1..90}; do
+              if curl -fsS http://127.0.0.1:5110/health/ready >/dev/null 2>&1; then break; fi
+              sleep 2
+            done
+            curl --fail-with-body -fsS http://127.0.0.1:5110/health/ready
+            dc --profile offboarding-load up -d --no-deps --scale processor=16 processor
+            count="$(dc --profile offboarding-load ps -q processor | wc -l | tr -d ' ')"
+            test "$count" -eq 16
+            for i in {1..90}; do
+              if curl -fsS -H "Authorization: Bearer $token" \
+                http://127.0.0.1:5110/api/hub/definitions | \
+                jq -e 'any(.[]; .hubId=="offboarding" and .definitionId=="tenant-offboarding-fast")' >/dev/null 2>&1; then break; fi
+              sleep 2
+            done
+            curl --fail-with-body -fsS -H "Authorization: Bearer $token" \
+              http://127.0.0.1:5110/api/hub/definitions | \
+              jq -e 'any(.[]; .hubId=="offboarding" and .definitionId=="tenant-offboarding-fast")'
+            warm="abcd-$stage-$GITHUB_RUN_ID-warm"
+            dc --profile offboarding-k6 run --rm --no-deps \
+              -e K6_OFFBOARD_COUNT=40 -e K6_OFFBOARD_VUS=40 \
+              -e K6_OFFBOARD_TIMEOUT_SECONDS=240 -e K6_OFFBOARD_RUN_ID="$warm" \
+              k6-offboarding > "$OUT/$stage-warm.log" 2>&1 || {
+                tail -100 "$OUT/$stage-warm.log"; dc logs --tail=100 hub hub-2 processor; exit 1;
+              }
+            pg_id="$(dc ps -q postgres)"; hub_id="$(dc ps -q hub)"; hub2_id="$(dc ps -q hub-2)"
+            test -n "$pg_id" && test -n "$hub_id" && test -n "$hub2_id"
+            python3 scaling/observability/benchmark/native_commit_abcd_stats.py snapshot \
+              --postgres "$pg_id" --hub "$hub_id" --hub2 "$hub2_id" --output "$OUT/$stage-before.json"
+            run="abcd-$stage-$GITHUB_RUN_ID-measured"
+            dc --profile offboarding-k6 run --rm --no-deps \
+              -e K6_OFFBOARD_COUNT=1000 -e K6_OFFBOARD_VUS=200 \
+              -e K6_OFFBOARD_TIMEOUT_SECONDS=900 -e K6_OFFBOARD_RUN_ID="$run" \
+              k6-offboarding > "$OUT/$stage-k6.log" 2>&1 || {
+                tail -120 "$OUT/$stage-k6.log"; dc logs --tail=120 hub hub-2 processor; exit 1;
+              }
+            python3 scaling/observability/benchmark/native_commit_abcd_stats.py snapshot \
+              --postgres "$pg_id" --hub "$hub_id" --hub2 "$hub2_id" --output "$OUT/$stage-after.json"
+            cp scaling/observability/results/k6-offboarding-summary.json "$OUT/$stage-k6-summary.json"
+            curl --fail-with-body -fsS -H "Authorization: Bearer $token" \
+              "http://127.0.0.1:5110/api/hub/runs/$run/summary" > "$OUT/$stage-summary.json"
+            printf "SELECT json_build_object('workflows',count(*),'completed',count(*) FILTER (WHERE state=2),'historyEvents',(SELECT count(*) FROM wfc_scale.hub_workflow_event e JOIN wfc_scale.hub_workflow x ON x.id=e.workflow_id WHERE x.run_id='%s'),'extraAttempts',(SELECT COALESCE(sum(GREATEST(t.attempts-1,0)),0) FROM wfc_scale.hub_task t JOIN wfc_scale.hub_workflow x ON x.id=t.workflow_id WHERE x.run_id='%s')) FROM wfc_scale.hub_workflow WHERE run_id='%s';\n" "$run" "$run" "$run" | \
+              dc exec -T postgres psql -U workflow -d workflow -At > "$OUT/$stage-audit.json"
+            STAGE="$stage" RUN="$run" MODE="$WFC_HUB_NATIVE_COMPACT_RECEIPT" OUT="$OUT" python3 - <<'PY'
+          import json,os,pathlib
+          from datetime import datetime
+          out=pathlib.Path(os.environ["OUT"]);stage=os.environ["STAGE"]
+          summary=json.loads((out/f"{stage}-summary.json").read_text())
+          audit=json.loads((out/f"{stage}-audit.json").read_text())
+          assert summary["total"]==summary["completed"]==1000 and summary["failed"]==0,summary
+          assert audit["workflows"]==audit["completed"]==1000 and audit["historyEvents"]>0,audit
+          def stamp(v):return datetime.fromisoformat(v.replace("Z","+00:00"))
+          elapsed=(stamp(summary["lastCompletedAt"])-stamp(summary["firstCreatedAt"])).total_seconds()
+          assert elapsed>0
+          row={"stage":stage,"allNativeOptimizations":os.environ["MODE"]=="true",
+               "runId":os.environ["RUN"],"completed":1000,"failed":0,
+               "elapsedSeconds":round(elapsed,4),"throughputWorkflowsPerSec":round(1000/elapsed,4),
+               "workflowP95Ms":summary["p95CompletionMs"],"workflowP99Ms":summary["p99CompletionMs"],
+               "durableHistoryEvents":audit["historyEvents"],"extraTaskAttempts":audit["extraAttempts"]}
+          (out/f"{stage}.json").write_text(json.dumps(row,indent=2)+"\n")
+          print(json.dumps(row,indent=2))
+          PY
+          done
+          python3 scaling/observability/benchmark/native_commit_abcd_stats.py summarize --folder "$OUT"
+          cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload PostgreSQL CPU I/O WAL and workflow latency reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-commit-abcd-e2e-1000
+          path: scaling/observability/results/native-commit-abcd-e2e/
+          retention-days: 14
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs --tail 100 "$(docker ps -q --filter ancestor=postgres:17 | head -n 1)" || true

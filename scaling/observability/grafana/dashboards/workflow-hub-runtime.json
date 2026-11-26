@@ -758,7 +758,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 125,
+        "y": 165,
         "w": 12,
         "h": 8
       },
@@ -1720,7 +1720,7 @@
       "title": "CPU utilization by service instance",
       "description": "X is time; each row is a service.name / service.instance.id pair; block color represents the one-minute average process CPU percentage of the processor count visible to .NET. Select Service name and Service instance ID above to focus one Hub or worker process.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 133, "w": 24, "h": 12 },
+      "gridPos": { "x": 0, "y": 181, "w": 24, "h": 12 },
       "targets": [
         {
           "refId": "A",
@@ -1754,38 +1754,6 @@
         "rowHeight": 0.9,
         "showValue": "never",
         "tooltip": { "mode": "single", "sort": "none" }
-      }
-    },
-    {
-      "id": 45,
-      "type": "timeseries",
-      "title": "OpenTelemetry collector availability",
-      "description": "Prometheus scrape status for the application telemetry collector. A value of zero indicates a scrape failure.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 145,
-        "w": 24,
-        "h": 5
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "up{job=\"workflow-otel-collector\"}",
-          "legendFormat": "{{instance}}",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 1,
-          "decimals": 0
-        },
-        "overrides": []
       }
     }
   ],

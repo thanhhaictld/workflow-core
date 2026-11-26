@@ -95,19 +95,18 @@ for other owner-recovery actions.
 
 The golden preset enables snapshot contract reuse, demand-aware claim admission,
 split batch claim candidates, indexed matching buckets, completion fast paths,
-batched history, the subscription-based native event lane, the scheduler,
-matching candidates, candidate backpressure and cross-worker batching.
-Candidate admission concurrency is 2. The dispatcher outbox setting is
-`WFC_HUB_OUTBOX_ENABLED=true`. Database outbox writes are configured separately.
-The periodic SQL metrics sampler is disabled. OpenTelemetry export stays enabled.
+batched history, the subscription-based native event lane, scheduler,
+adaptive claims, matching candidates, candidate backpressure and cross-worker
+batching. Candidate admission concurrency is 2. The dispatcher outbox setting
+is `WFC_HUB_OUTBOX_ENABLED=true`; database outbox writes are configured
+separately. The periodic SQL metrics sampler, task SSE push, and worker capacity
+fanout are disabled in this preset. OTEL metrics, traces and logs remain enabled.
 
-Native workers use SSE push sessions. The preset sets
-`WFC_HUB_PUSH_ENABLED=true` on the Hub replicas and processors.
-
-`make ups-4` runs four activity/workflow lane pairs per processor, with eight
-slots per lane. Across the four processors this provides 128 activity slots
-and 128 workflow slots. `make ups-8` and `make ups-16` use one lane pair per
-processor.
+The retained task SSE and capacity-fanout modes are independently controlled by
+`WFC_HUB_TASK_SSE_PUSH` and `WFC_HUB_WORKER_CAPACITY_FANOUT`; task SSE takes
+precedence when both are enabled. Neither requires the removed single rotating
+long-poll worker mode. Existing indexes and data are retained; migrations are
+forward-only.
 
 Make exports the golden flags for its short commands, overriding `.env` values;
 explicit Make assignments can override them for a run. `OBS_ENV_FILE` and

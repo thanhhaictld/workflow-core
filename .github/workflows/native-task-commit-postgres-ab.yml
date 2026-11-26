@@ -1,0 +1,173 @@
+name: PostgreSQL Native Task Commit A/B - CPU IO WAL
+on:
+  pull_request:
+    branches: ['thanhhaictld/hub-memory-candidates-luna']
+    paths:
+      - 'scaling/src/WorkflowCore.Hub/HubNativeWorkflowStore.cs'
+      - 'scaling/benchmarks/native-completion-commit-ab/**'
+      - 'scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/HubNativeCompletionBatchTests.cs'
+      - '.github/workflows/native-task-commit-postgres-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-task-commit-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  task-commit-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow_dev_only
+          POSTGRES_DB: workflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      WFC_TEST_PG: Host=localhost;Port=5432;Database=workflow;Username=workflow;Password=workflow_dev_only
+      PGPASSWORD: workflow_dev_only
+      BENCH_COUNT: '600'
+      BENCH_CONCURRENCY: '8'
+      BENCH_BATCH_SIZE: '16'
+      BENCH_REQUIRE_CPU: '1'
+      BENCH_REPORT: results/native-completion-commit-ab.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Apply exact runtime PostgreSQL schema
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/002_distributed_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/003_signal_delivery.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/004_request_dedupe.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/005_execution_history.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/006_definition_versions.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/007_hub_gateway.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/008_hub_workflows.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/009_hub_task_attempts.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/010_hub_remote_scheduler.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/011_hub_monitor_sample.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/012_hub_native_runtime.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/013_activity_policy_revision.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/014_hub_work_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/015_explicit_activity_ordering.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/016_hub_matching_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/017_hub_matching_capability_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/018_hub_matching_partition_ownership.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/019_hub_matching_partition_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/020_hub_reconciliation_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/021_hub_active_task_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/022_hub_claim_index_selectivity.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/024_hub_native_reconcile_tasks.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/028_hub_claim_shard4_ready.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/029_hub_partition_candidate_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/030_hub_notification_outbox.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/031_hub_retire_compatibility_claim_indexes.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/032_hub_candidate_task_id_hints.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/033_hub_business_compatibility.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/034_hub_task_admission.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/035_hub_ready_notifications.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/036_hub_lightweight_shard_signals.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/037_hub_bound_expired_candidate_pages.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/038_hub_bound_ready_due_candidate_pages.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/039_hub_retire_task_operations_index.sql
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -f scaling/sql/040_hub_remove_exact_task_id_hints.sql
+      - name: Enable PostgreSQL I/O and WAL timing
+        run: |
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET track_io_timing = 'on'"
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET track_wal_io_timing = 'on'"
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "SELECT pg_reload_conf()"
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "SHOW track_io_timing"
+          psql -h localhost -U workflow -d workflow -v ON_ERROR_STOP=1 -c "SHOW track_wal_io_timing"
+      - name: Build commit benchmark and tests
+        run: |
+          dotnet build scaling/benchmarks/native-completion-commit-ab/NativeCompletionCommitAb.csproj -c Release --nologo
+          dotnet build scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --nologo
+      - name: Verify single and batched completion fencing / history parity
+        run: dotnet test scaling/tests/WorkflowCore.Scaling.PostgreSQL.Tests/WorkflowCore.Scaling.PostgreSQL.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HubNativeCompletionBatchTests"
+      - name: Identify PostgreSQL-only cgroup for CPU and disk accounting
+        run: |
+          container="$(docker ps -q --filter ancestor=postgres:17 | head -n 1)"
+          test -n "$container"
+          docker exec "$container" cat /sys/fs/cgroup/cpu.stat
+          docker exec "$container" cat /sys/fs/cgroup/io.stat
+          echo "BENCH_POSTGRES_CONTAINER=$container" >> "$GITHUB_ENV"
+      - name: Run paired and reversed A/B commits (single/batch/batch/single)
+        run: |
+          mkdir -p results
+          dotnet run --no-build -c Release --project scaling/benchmarks/native-completion-commit-ab/NativeCompletionCommitAb.csproj | tee results/benchmark.log
+      - name: Summarize reproducible PostgreSQL CPU, I/O, WAL and latency
+        run: |
+          python3 - <<'PY'
+          import json,statistics,os
+          r=json.load(open("results/native-completion-commit-ab.json"))
+          a=[v for v in r["results"] if v["mode"]=="single"]
+          b=[v for v in r["results"] if v["mode"]=="batch"]
+          assert len(a)==len(b)==2
+          assert all(x["completed"]==r["countPerArm"] for x in a+b)
+          assert all(x["pgCpuSeconds"] is not None for x in a+b)
+          # pg_stat_database also counts Npgsql session reset/implicit
+          # transactions (about one extra per completion connection checkout).
+          # Require plausible proportionality, not equality to explicit COMMITs.
+          for sample in a+b:
+            expected=sample["expectedExplicitCommits"]
+            observed=sample["pgStatsDelta"]["xact_commit"]
+            assert expected*.9 <= observed <= expected*3.5+20, (
+              "PG stats attribution is invalid",sample["mode"],expected,observed)
+          fields=[
+            ("tasksPerSecond","Task throughput","tasks/s"),
+            ("requestLatencyP95Ms","Completion ACK p95","ms"),
+            ("requestLatencyP99Ms","Completion ACK p99","ms"),
+            ("expectedExplicitCommits","Explicit completion COMMIT calls","count"),
+            ("transactionsPerTask","Observed PG transactions per task (includes implicit)","tx/task"),
+            ("pgCpuMsPerTask","PostgreSQL CPU per task","ms/task"),
+            ("walBytesPerTask","WAL bytes per task","bytes/task"),
+            ("pgDiskReadBytes","PostgreSQL cgroup read","bytes"),
+            ("pgDiskWriteBytes","PostgreSQL cgroup write","bytes"),
+            ("pgStatsDelta.io_reads","pg_stat_io read operations","count"),
+            ("pgStatsDelta.io_writes","pg_stat_io write operations","count"),
+            ("pgStatsDelta.io_fsyncs","pg_stat_io fsync operations","count"),
+            ("pgStatsDelta.io_hits","pg_stat_io cache hits","count"),
+            ("pgStatsDelta.io_read_time_ms","pg_stat_io read time","ms"),
+            ("pgStatsDelta.io_write_time_ms","pg_stat_io write time","ms"),
+            ("pgStatsDelta.wal_sync","pg_stat_wal fsyncs","count"),
+            ("pgStatsDelta.wal_sync_time_ms","pg_stat_wal fsync time","ms"),
+            ("pgStatsDelta.blks_hit","pg_stat_database buffer hits","count"),
+          ]
+          lines=["# Native task completion A/B (same runner, ABBA)", "",
+            "600 independent fenced native tasks per arm, 8 concurrent callers, 16 items/transaction for batch.",
+            "The original SQL statements, attempt/inbox/history/wake and fencing are shared by both modes.", "",
+            "| Metric | Single commit | Batch commit | Change |", "|---|---:|---:|---:|"]
+          def extract(sample,key):
+            value=sample
+            for part in key.split("."):value=value[part]
+            return float(value)
+          for key,label,unit in fields:
+            single=statistics.mean(extract(x,key) for x in a)
+            batch=statistics.mean(extract(x,key) for x in b)
+            change="n/a" if single==0 else f"{(batch/single-1)*100:+.1f}%"
+            lines.append(f"| {label} ({unit}) | {single:,.3f} | {batch:,.3f} | {change} |")
+          lines+=["", "Per-run PostgreSQL pg_stat_database, pg_stat_wal, pg_stat_io deltas and cgroup CPU/disk appear in the JSON artifact.",
+            "This is a persistence microbenchmark; no workflow scheduling or network queueing. GitHub-hosted runner noise remains."]
+          summary="\n".join(lines)+"\n"
+          open("results/summary.md","w").write(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:f.write(summary)
+          print(summary)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-task-commit-postgres-ab
+          path: results/
+          retention-days: 14

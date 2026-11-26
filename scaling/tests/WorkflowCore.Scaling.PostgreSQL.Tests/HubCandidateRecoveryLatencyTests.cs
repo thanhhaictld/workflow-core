@@ -26,18 +26,21 @@ public sealed class HubCandidateRecoveryLatencyTests
         var database = Environment.GetEnvironmentVariable("WFC_TEST_PG")
             ?? throw new InvalidOperationException("WFC_TEST_PG is required for recovery measurements");
         var arm = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_ARM") ?? "candidate";
+        var taskIdHintsEnabled = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_TASK_ID_HINTS") is "true" or "1" or "True";
         var repetitions = int.TryParse(Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_REPETITIONS"), out var configuredRepetitions)
             ? Math.Clamp(configuredRepetitions, 1, 100) : 2;
         var focus = Environment.GetEnvironmentVariable("WFC_CANDIDATE_RECOVERY_FOCUS");
         var keys = new[] { "WFC_HUB_MATCHING_ENABLED", "WFC_HUB_MATCHING_CANDIDATES_ENABLED",
             "WFC_HUB_MATCHING_NODE_ID", "WFC_HUB_MATCHING_ADVERTISE_URL", "WFC_HUB_MATCHING_PEERS",
-            "WFC_HUB_MATCHING_PARTITIONS", "WFC_HUB_CANDIDATE_BACKPRESSURE", "WFC_HUB_PUSH_ENABLED" };
+            "WFC_HUB_MATCHING_PARTITIONS", "WFC_HUB_CANDIDATE_BACKPRESSURE", "WFC_HUB_PUSH_ENABLED",
+            "WFC_HUB_CANDIDATE_TASK_ID_HINTS_ENABLED" };
         var original = keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
         var observations = new List<Observation>();
         try
         {
             Environment.SetEnvironmentVariable(keys[0], "true");
             Environment.SetEnvironmentVariable(keys[1], "true");
+            Environment.SetEnvironmentVariable(keys[8], taskIdHintsEnabled ? "true" : "false");
             Environment.SetEnvironmentVariable(keys[2], "candidate-recovery-latency");
             Environment.SetEnvironmentVariable(keys[3], "http://localhost:5100");
             Environment.SetEnvironmentVariable(keys[4], "http://localhost:5100");
@@ -98,7 +101,7 @@ public sealed class HubCandidateRecoveryLatencyTests
                 sourceCommitOrLabel = Environment.GetEnvironmentVariable("WFC_EVIDENCE_SOURCE_COMMIT") ?? "uncommitted",
                 testAssemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
                     Path.Combine(AppContext.BaseDirectory, "WorkflowCore.Scaling.PostgreSQL.Tests.dll")))),
-                featureFlags = new { candidateTopologyEnabled = true,
+                featureFlags = new { candidateTopologyEnabled = true, taskIdHintsEnabled,
                     outboxDispatcher = false,
                     listenConsumer = false, pushRecoverySweep = true },
                 repetitions,
@@ -147,6 +150,8 @@ public sealed class HubCandidateRecoveryLatencyTests
             {
                 await db.OpenAsync(ct);
                 await using var tx = await db.BeginTransactionAsync(ct);
+                await using (var enableIds = new NpgsqlCommand("SELECT set_config('wfc.hub_candidate_task_id_hints','on',true)", db, tx))
+                    await enableIds.ExecuteNonQueryAsync(ct);
                 await using (var settings = new NpgsqlCommand("SELECT set_config('wfc.hub_notification_outbox',@outbox,true)", db, tx))
                 {
                     settings.Parameters.AddWithValue("outbox", outbox ? "on" : "off");

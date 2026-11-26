@@ -1,6 +1,6 @@
 # Multi-Hub matching, durable admission, and asynchronous SSE delivery (MVP)
 
-> See [current runtime](current-runtime.md#sse-sessions-and-capacity) for the push-session contract. The diagram captures the original MVP, including a retired transport.
+> **Current implementation:** `feat/hub-parallel-shard-admission-mvp` (PR [#40](https://github.com/thanhhaictld/workflow-core/pull/40)). This document describes the **implemented** runtime, not the historical aspirational design in [hub-push-matching-design.md](hub-push-matching-design.md). The primary and alternative SSE paths must not be conflated.
 
 ![Multi-Hub matching and SSE task admission architecture](diagrams/hub-multi-hub-sse-admission.svg)
 
@@ -14,7 +14,7 @@ No cluster-wide admission mutex is needed for independent tasks. Each owner main
 
 ## Primary push-session path: `WFC_HUB_PUSH_ENABLED`
 
-The native worker uses one push session at a time and rotates across shards and any registered Hub namespaces.
+The worker-side runtime chooses this mode when `PushEnabled` is on and the worker lane covers a single Hub. In this mode the worker's lane uses **one active shard at a time** and rotates shards; it does not open persistent sessions to every shard simultaneously.
 
 ```mermaid
 sequenceDiagram
@@ -56,6 +56,33 @@ The last capacity operation uses the same **`/api/hub/workers/` prefix** as the 
 **Synchronous vs asynchronous:** Admission waits for PostgreSQL to **commit** before any lease is delivered. The Hub then uses asynchronous `WriteAsync`/`FlushAsync` on the SSE response. Within one session, frame writes are awaited and serialized, but different sessions, matching shards, and admitted tasks progress independently. **The Hub does not await the business activity.** The worker executes in its own bounded slot and separately posts heartbeats and a fenced completion. **There is no `POST /workers/push-sessions/{id}/complete` endpoint.**
 
 The Hub's push loop reserves up to **four credits per claim attempt** when available; admission itself can batch more across matching demands. `credit`/session/delivery state lives in memory, while the task lease and history live in PostgreSQL. After a failed send, the committed lease is not released speculatively because the worker may have received the frame.
+
+## Alternative per-shard SSE transport
+
+`WFC_HUB_TASK_SSE_PUSH` selects a **different** experimental protocol when the primary `PushEnabled` branch does not already win:
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant G as Gateway
+    participant O as Shard owner
+    participant P as PostgreSQL
+    W->>G: POST /api/hub/workers/tasks:stream (one per shard)
+    G->>O: Forward unbuffered SSE if non-owner
+    O-->>W: SSE session {sessionId, ownerEpoch}
+    W->>G: POST /api/hub/workers/tasks:credit {sessionId,ownerEpoch,creditId}
+    G->>O: Forward credit if non-owner
+    O->>P: Owner-fenced task claim
+    P-->>O: COMMIT lease or no eligible work
+    alt Task leased
+        O-->>W: SSE task.leased {creditId,task}
+        W->>W: Start independently, then REST heartbeat/result
+    else No work found
+        O-->>W: SSE credit.unused {creditId}
+    end
+```
+
+Unlike the primary push-session path, this protocol maintains a stream per matching shard; the worker's shared credit coordinator distributes **one-shot** credits across streams without double booking any local execution slot. Gateway stream forwarding flushes each received chunk. A dropped stream causes reconnect, not an immediate task reassignment.
 
 ## Owner failover and delivery uncertainty
 

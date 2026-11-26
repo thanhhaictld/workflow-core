@@ -170,9 +170,6 @@ function Apply-DatabaseSchema {
     Write-Host 'Applying 039_hub_retire_task_operations_index.sql...'
     Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
         '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/039_hub_retire_task_operations_index.sql')
-    Write-Host 'Applying 040_hub_remove_exact_task_id_hints.sql...'
-    Invoke-Compose -ComposeArgs @('exec', '-T', 'postgres', 'psql', '-U', $PgUser,
-        '-d', $PgDatabase, '-v', 'ON_ERROR_STOP=1', '-f', '/migrations/040_hub_remove_exact_task_id_hints.sql')
 }
 
 function Install-Monitor {

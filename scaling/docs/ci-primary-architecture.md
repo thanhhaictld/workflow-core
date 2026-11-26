@@ -34,7 +34,9 @@ documents remain in the repository as historical artifacts. We removed the
 **automatic workflow invocations**, not the underlying domain tests.
 
 A change to the supported runtime must preserve candidate matching and
-owner-fenced SSE push sessions. CI checks `candidateEnabled`,
+owner-fenced SSE. The retained task-SSE distributor and capacity-fanout worker
+modes are independently controlled by `WFC_HUB_TASK_SSE_PUSH` and
+`WFC_HUB_WORKER_CAPACITY_FANOUT`; task SSE wins if both are enabled. CI checks `candidateEnabled`,
 actual connected SSE sessions, durable completions and fencing rather than
 searching for legacy startup log messages.
 

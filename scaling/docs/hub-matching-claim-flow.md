@@ -2,9 +2,11 @@
 
 The current runtime is described in [current-runtime.md](current-runtime.md):
 partition-owned candidate matching with fenced SSE delivery. This document
-retains older claim-flow analysis for implementation context. Native workers
-receive leases over push sessions. REST claims and readiness hints serve
-sequential compatibility processors.
+retains older claim-flow analysis for implementation context. The former
+single rotating long-poll worker mode and its `WFC_HUB_LONG_POLL_ENABLED`
+option have been removed. The `/workers/tasks:poll` route and matcher remain
+for the retained SSE distributor, capacity-fanout workers, and fenced pull
+recovery.
 
 Legend: `[MEM]` Hub process memory; `[DB]` PostgreSQL; `[NET]` REST/SSE or
 PostgreSQL notification; `[I/O]` database work, which may hit memory or disk.

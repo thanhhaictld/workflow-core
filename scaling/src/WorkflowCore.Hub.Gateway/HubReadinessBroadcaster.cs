@@ -31,6 +31,7 @@ public sealed class HubReadinessBroadcaster(
     // Optional in-process matching subscriber; SSE remains available for fallback.
     public event Action<string, string?, int, int?>? TaskReady;
     public event Action<string, string?, int, int?>? CandidateRescanRequested;
+    public event Action<string, Guid, int, string?, int>? CandidateTaskChanged;
     public event Action? CandidateRecoveryRequired;
 
     public void Publish(string hub, string? taskType = null, int version = 0, int? taskPartitionId = null)
@@ -88,6 +89,16 @@ public sealed class HubReadinessBroadcaster(
     private void PublishMatchingFallbackHint(string hub, string? type, int version, int? taskPartitionId)
     {
         if (!string.IsNullOrEmpty(hub)) TaskReady?.Invoke(hub, type, version, taskPartitionId);
+    }
+
+    public void PublishCandidateTaskChanged(string hub, Guid taskId, int taskPartitionId,
+        string? type, int version)
+    {
+        if (!string.IsNullOrEmpty(hub))
+        {
+            TaskReady?.Invoke(hub, type, version, taskPartitionId);
+            CandidateTaskChanged?.Invoke(hub, taskId, taskPartitionId, type, version);
+        }
     }
 
     public void PublishCandidateRecoveryRequired() => CandidateRecoveryRequired?.Invoke();

@@ -7,7 +7,7 @@ namespace WorkflowCore.Hub;
 // One stream is one stable bucket and one state. These types are deliberately
 // internal until the generation-scoped coordinator enforces process budgets.
 internal enum HubCandidateStream { Ready, Expired, ReadyDue }
-internal sealed record HubCandidateHorizon(long UpperSequence, DateTime Cutoff);
+internal sealed record HubCandidateHorizon(long UpperSequence, DateTime Cutoff, bool HasExpiredCandidates);
 internal sealed record HubCandidateCursor(long Sequence, DateTime? Deadline = null);
 internal sealed record HubTaskCandidate(Guid Id, long Sequence, string HubId, int PartitionId,
     string TaskType, int Version, Guid? WorkflowId, string? DefinitionId, int? DefinitionVersion,
@@ -20,12 +20,17 @@ internal sealed record HubCandidatePage(IReadOnlyList<HubTaskCandidate> Items,
     HubCandidateCursor? Next, bool EndOfStream, int MetadataBytes,
     IReadOnlyList<HubCandidateOversized>? Oversized = null,
     Exception? WorkflowMetadataError = null);
+internal sealed record HubCandidateHydrationPage(IReadOnlyList<HubTaskCandidate> Items,
+    int Oversized, int MetadataBytes, Exception? WorkflowMetadataError = null,
+    IReadOnlyList<Guid>? OversizedIds = null);
 
 internal interface IHubCandidateDiscovery
 {
-    Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct);
+    Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct);
     Task<HubCandidatePage> ReadPageAsync(string hub, int bucket, HubCandidateStream stream,
         HubCandidateHorizon horizon, HubCandidateCursor? cursor, int pageSize, int byteLimit, CancellationToken ct);
+    Task<HubCandidateHydrationPage> HydrateAsync(string hub, int matchingPartition, int partitionCount,
+        IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct);
 }
 
 internal sealed class HubCandidateReader : IHubCandidateDiscovery
@@ -96,20 +101,48 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         WHERE hub_id=@hub AND id=ANY(@ids)
         """;
 
+    internal const string HydrationSql = """
+        WITH requested AS MATERIALIZED (
+          SELECT unnest(@ids::uuid[]) AS id
+        ), page AS MATERIALIZED (
+          SELECT t.id,t.sequence,t.hub_id,t.partition_id,t.task_type,t.task_version,t.workflow_id,
+                 t.epoch,t.due_at,t.lease_until,t.state
+          FROM requested r JOIN wfc_scale.hub_task t ON t.id=r.id
+          WHERE t.hub_id=@hub AND t.partition_id % @partitionCount=@matchingPartition
+            AND t.admission=1 AND t.attempts<t.max_attempts
+            AND ((t.state=0 AND t.due_at<=clock_timestamp())
+                 OR (t.state=1 AND t.lease_until<clock_timestamp()))
+        )
+        SELECT p.id,p.sequence,CASE WHEN 128+octet_length(p.hub_id)+octet_length(p.task_type)<=@perCandidateByteLimit THEN p.hub_id END,p.partition_id,
+               CASE WHEN 128+octet_length(p.hub_id)+octet_length(p.task_type)<=@perCandidateByteLimit THEN p.task_type END,p.task_version,p.workflow_id,
+               p.epoch,
+               CASE WHEN p.lease_until<clock_timestamp() AND p.state=1 THEN p.lease_until ELSE p.due_at END AS deadline,
+               128+octet_length(p.hub_id)+octet_length(p.task_type)>@perCandidateByteLimit AS oversized
+        FROM page p
+        ORDER BY p.sequence,p.id
+        """;
 
-
-    public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, CancellationToken ct)
+    public async Task<HubCandidateHorizon> CaptureHorizonAsync(string hub, int matchingPartition, int partitionCount, CancellationToken ct)
     {
-        // The global committed maximum is a conservative finite bound for any
-        // hub and uses the existing unique sequence index, without scanning
-        // historical rows belonging to that hub or adding another index.
+        // Both lookups use the same statement snapshot, so any lease visible to
+        // EXISTS is already within the global sequence bound. The statement
+        // timestamp gives the probe and subsequent pages the same cutoff.
         await using var command = tasks.DataSource.CreateCommand("""
-            SELECT COALESCE(max(sequence),0), clock_timestamp()
-            FROM wfc_scale.hub_task
+            SELECT COALESCE((SELECT max(sequence) FROM wfc_scale.hub_task),0),
+                   statement_timestamp(),
+                   EXISTS (
+                       SELECT 1
+                       FROM wfc_scale.hub_task
+                       WHERE hub_id=@hub AND partition_id % @partitionCount=@matchingPartition
+                         AND state=1 AND attempts < max_attempts AND lease_until<statement_timestamp()
+                   )
             """);
+        command.Parameters.AddWithValue("hub", hub);
+        command.Parameters.AddWithValue("matchingPartition", matchingPartition);
+        command.Parameters.AddWithValue("partitionCount", partitionCount);
         await using var reader = await command.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
-        return new(reader.GetInt64(0), reader.GetDateTime(1));
+        return new(reader.GetInt64(0), reader.GetDateTime(1), reader.GetBoolean(2));
     }
 
     // One bounded keyset page returns eligible task identity.
@@ -224,6 +257,110 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
         }
         return new(items, lastProcessed, !interrupted && rows < pageSize, bytes, oversized, workflowMetadataError);
 
+    }
+
+    public async Task<HubCandidateHydrationPage> HydrateAsync(string hub, int matchingPartition,
+        int partitionCount, IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(hub) || matchingPartition < 0 || partitionCount is < 1 or > 64 ||
+            64 % partitionCount != 0 || matchingPartition >= partitionCount || ids.Count is < 1 or > 1024 ||
+            byteLimit is < 256 or > 16 * 1024 * 1024)
+            throw new ArgumentException("Invalid candidate hydration request");
+
+        var requestedIds = ids.Distinct().ToArray();
+        if (requestedIds.Length > byteLimit / 16)
+            throw new ArgumentException("Candidate hydration ID array exceeds its byte budget", nameof(ids));
+        // UUID parameters consume managed memory too; reserve their exact wire
+        // size and split the remaining batch budget into conservative per-row guards.
+        var batchMetadataLimit = HydrationMetadataBudget(byteLimit, requestedIds.Length);
+        var result = await HydrateBatchAsync(requestedIds, batchMetadataLimit);
+        var items = result.Items.ToList();
+        var bytes = result.MetadataBytes;
+        var metadataError = result.WorkflowMetadataError;
+        var pending = result.OversizedIds?.ToArray() ?? [];
+        // The first pass shares a conservative row cap across the full page.
+        // Retry rows that only exceeded that share in successively smaller,
+        // bounded batches, charging each retry to the remaining page budget.
+        var retryBatchSize = Math.Max(1, pending.Length / 2);
+        while (pending.Length > 0 && retryBatchSize > 0)
+        {
+            var nextPending = new List<Guid>();
+            var recovered = 0;
+            for (var offset = 0; offset < pending.Length; offset += retryBatchSize)
+            {
+                var batch = pending.Skip(offset).Take(retryBatchSize).ToArray();
+                var remaining = batchMetadataLimit - bytes;
+                if (remaining < 128) { nextPending.AddRange(batch); continue; }
+                var retried = await HydrateBatchAsync(batch, remaining);
+                items.AddRange(retried.Items);
+                bytes = checked(bytes + retried.MetadataBytes);
+                metadataError ??= retried.WorkflowMetadataError;
+                var oversizedIds = retried.OversizedIds ?? [];
+                nextPending.AddRange(oversizedIds);
+                recovered += batch.Length - oversizedIds.Count;
+            }
+            if (nextPending.Count == 0) { pending = []; break; }
+            if (recovered == 0)
+            {
+                if (retryBatchSize == 1) { pending = nextPending.ToArray(); break; }
+                retryBatchSize = Math.Max(1, retryBatchSize / 2);
+            }
+            pending = nextPending.ToArray();
+        }
+        if (bytes > batchMetadataLimit)
+            throw new InvalidOperationException("Candidate hydration exceeded its combined metadata budget");
+        return new(items, pending.Length, checked((int)bytes), metadataError, pending);
+
+        async Task<HubCandidateHydrationPage> HydrateBatchAsync(Guid[] batchIds, int metadataBudget)
+        {
+            var batchItems = new List<HubTaskCandidate>(batchIds.Length);
+            long batchBytes = 0;
+            var oversizedIds = new List<Guid>();
+            {
+                await using var command = tasks.DataSource.CreateCommand(HydrationSql);
+                command.Parameters.AddWithValue("ids", batchIds);
+                command.Parameters.AddWithValue("hub", hub);
+                command.Parameters.AddWithValue("matchingPartition", matchingPartition);
+                command.Parameters.AddWithValue("partitionCount", partitionCount);
+                command.Parameters.AddWithValue("perCandidateByteLimit", Math.Max(0, metadataBudget / batchIds.Length));
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    if (reader.GetBoolean(9)) { oversizedIds.Add(reader.GetGuid(0)); continue; }
+                    var item = new HubTaskCandidate(reader.GetGuid(0), reader.GetInt64(1), reader.GetString(2),
+                        reader.GetInt32(3), reader.GetString(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetGuid(6),
+                        null, null, reader.GetInt64(7), reader.GetDateTime(8),
+                        WorkflowMetadataComplete: !IsWorkflowTask(reader.GetString(4)),
+                        WorkflowMetadataExpiresAt: IsWorkflowTask(reader.GetString(4))
+                            ? DateTimeOffset.UtcNow + _workflowCacheTtl : default);
+                    var size = 128 + Encoding.UTF8.GetByteCount(item.HubId) + Encoding.UTF8.GetByteCount(item.TaskType);
+                    if (batchBytes + size > metadataBudget)
+                        throw new InvalidOperationException("Candidate hydration violated its bounded SQL metadata contract");
+                    batchBytes += size;
+                    batchItems.Add(item);
+                }
+            }
+            var workflowBudget = Math.Max(0, metadataBudget - checked((int)batchBytes));
+            var workflowResolution = await ResolveWorkflowMetadataAsync(hub, matchingPartition,
+                batchItems.Where(x => x.WorkflowId.HasValue && IsWorkflowTask(x.TaskType))
+                .Select(x => x.WorkflowId!.Value).Distinct().ToArray(),
+                workflowBudget, ct);
+            for (var i = 0; i < batchItems.Count; i++)
+            {
+                var item = batchItems[i];
+                if (item.WorkflowId is not { } workflowId || !IsWorkflowTask(item.TaskType)) continue;
+                if (workflowResolution.Values.TryGetValue(workflowId, out var metadata) && batchBytes + metadata.WireBytes <= metadataBudget)
+                {
+                    batchItems[i] = item with { DefinitionId = metadata.DefinitionId,
+                        DefinitionVersion = metadata.DefinitionVersion, WorkflowMetadataComplete = metadata.Complete,
+                        WorkflowMetadataExpiresAt = metadata.ExpiresAt };
+                    batchBytes += metadata.WireBytes;
+                }
+            }
+            if (batchBytes > metadataBudget)
+                throw new InvalidOperationException("Candidate hydration exceeded its combined metadata budget");
+            return new(batchItems, oversizedIds.Count, checked((int)batchBytes), workflowResolution.Error, oversizedIds);
+        }
     }
 
     private async Task<WorkflowMetadataResolution> ResolveWorkflowMetadataAsync(string hub,
@@ -410,5 +547,12 @@ internal sealed class HubCandidateReader : IHubCandidateDiscovery
     private static bool IsWorkflowTask(string taskType) =>
         taskType is "__workflow__" or "__native_workflow__";
 
-
+    // Kept beside the SQL so plan reproduction and production use precisely
+    // the same parameter budget after UUID array wire bytes are reserved.
+    internal static int HydrationMetadataBudget(int byteLimit, int requestedIdCount)
+    {
+        if (requestedIdCount < 1 || byteLimit < requestedIdCount * 16)
+            throw new ArgumentOutOfRangeException(nameof(requestedIdCount));
+        return byteLimit - requestedIdCount * 16;
+    }
 }

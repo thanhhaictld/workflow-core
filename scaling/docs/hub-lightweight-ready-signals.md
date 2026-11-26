@@ -1,7 +1,7 @@
 # Lightweight PostgreSQL readiness signals (MVP)
 
 **Implemented on** `feat/hub-parallel-shard-admission-mvp` / PR #40.
-**Schema migrations**: `scaling/sql/036_hub_lightweight_shard_signals.sql` (after 035) and `scaling/sql/040_hub_remove_exact_task_id_hints.sql` (after 039).
+**Schema migration**: `scaling/sql/036_hub_lightweight_shard_signals.sql` (apply **after** 035).
 
 ## Before and after
 
@@ -24,7 +24,7 @@ Multiple rows in one statement for the same `(hub, partition_id % 64)` generate 
 
 Workflow and task mutation endpoints still wake legacy matchers and readiness SSE subscribers. With PostgreSQL notifications enabled, their unpartitioned wakeups leave candidate discovery to the committed database signal and periodic recovery. Setting `WFC_HUB_PG_NOTIFY_ENABLED=false` retains local hub-wide candidate wakeups.
 
-Migration 040 removes the old per-row exact-ID trigger. Existing row data is preserved, and the statement-level bucket signals remain. Explicit legacy outbox sessions remain supported as a compatibility/test path. **Never enable an outbox dispatcher without configuring the producer to write to that outbox.** The removal is tracked in the [retirement decision](decision-retire-exact-task-id-hints.md).
+**Experimental exact-ID mode:** Explicit `wfc.hub_candidate_task_id_hints='on'` retains the existing per-row exact-task-ID trigger, including invalidations after a claim or completion. It is not the standard MVP path; `make ups-16` keeps this mode disabled. Explicit legacy outbox sessions remain supported as a compatibility/test path. **Never enable an outbox dispatcher without configuring the producer to write to that outbox.**
 
 ### Targeted discovery
 

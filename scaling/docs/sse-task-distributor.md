@@ -138,6 +138,40 @@ A credit rejected by an owner after reassignment returns a non-success status an
 - `POST /api/hub/tasks/{id}/heartbeat`, `/complete` and failure endpoints remain unchanged.
 - The stream is forwarded from a non-owner Gateway to the current owner via a trusted peer URL. Nginx buffering is disabled on this SSE route, and the non-owner Hub flushes each relay chunk to preserve actual push latency.
 
+The task distributor is independently enabled with `WFC_HUB_TASK_SSE_PUSH=true` (default OFF in the golden preset). The worker capacity-fanout mode is independently controlled by `WFC_HUB_WORKER_CAPACITY_FANOUT`; task SSE takes precedence over fanout when both flags are true. Push-session mode takes precedence over these modes when `WFC_HUB_PUSH_ENABLED` is true. With push sessions, task SSE, and capacity fanout disabled, workers use the fenced pull fallback at `/workers/tasks:claim`; `/workers/tasks:poll` remains available to the retained task SSE and capacity-fanout modes. Readiness hints remain available. The removed `WFC_HUB_LONG_POLL_ENABLED` switch controlled only the retired single rotating long-poll worker mode and is not a prerequisite here. Multiple Hub namespaces in a single worker lane continue using the fenced pull fallback. Unlike the first SSE prototype, a lane with fewer worker slots than shards can use the globally shared credits.
+
+## 5. Limitations and important tradeoffs
+
+1. **No durable worker sessions:** disconnect invalidates ephemeral credits; PostgreSQL is authoritative for task leases. Delivery after claim can still be lost before the worker receives it, requiring lease expiry and idempotent external handlers.
+2. **No true two-way stream:** SSE sends tasks; the worker sends one-shot grants, heartbeats and completion over REST. One HTTP credit offer per leased task (and per empty wait) may cost more than batching or a gRPC stream.
+3. **Rebalancing is heuristic, not optimal:** recently active shards receive preference, but a periodic fair rotation protects other shards. Empty offers can occupy a slot for up to 2 seconds before being transferred.
+4. **SSE owner checks add DB reads:** checking the matching epoch every ~2 seconds per idle stream improves HA safety but can increase PostgreSQL load; measure before production enablement.
+5. **No durable delivery ACK, tenant-level fair scheduling or exactly-once external effects:** event arrival is not durable completion, and resource policies must still be enforced on every PostgreSQL claim.
+6. **Do not infer throughput advantage from functional E2E:** compare OFF → SSE → OFF with stable controls and separate Hub/PostgreSQL/processor CPU budgets.
+
+## 6. Run locally
+
+The old `obs-offboarding-sse-*` Make benchmark sequence below has been retired.
+To start the retained mode with the owner-recovery stack, configure the local
+`.env`, set the mode flags in the PowerShell environment, then launch directly:
+
+```powershell
+make obs-setup
+$env:WFC_HUB_TASK_SSE_PUSH='true'
+$env:WFC_HUB_WORKER_CAPACITY_FANOUT='false'
+$env:WFC_HUB_PUSH_ENABLED='false' # isolate task SSE from push sessions
+pwsh -NoProfile -File scripts/owner-recovery.ps1 up -Processors 8
+pwsh -NoProfile -File scripts/owner-recovery.ps1 ps
+pwsh -NoProfile -File scripts/owner-recovery.ps1 logs
+```
+
+Use the current Make targets (`make ups-16`, `make obs-config`, `make obs-ps`,
+`make obs-logs`, and `make obs-down`) for the golden preset and routine
+inspection. That preset leaves task SSE disabled. For a run with task SSE,
+keep the direct script process environment above set; clear those overrides and
+run `make ups-16` to restore the golden configuration. The Compose stack keeps
+its existing PostgreSQL volumes and migration history.
+
 ### Validation
 
 [Dedicated SSE E2E CI](../../.github/workflows/workflow-hub-sse-push-e2e.yml) builds the .NET code, checks global credit and epoch-specific unit tests, completes 100 real unordered / partition FIFO / keyed FIFO workflows, then stops Hub A, waits for matching ownership expiry and verifies a fresh keyed-FIFO cohort under the surviving Hub.

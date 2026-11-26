@@ -12,8 +12,8 @@ public sealed class HubCandidateMatcherProfileTests(ITestOutputHelper output)
 {
     private sealed class Discovery(string hub, HubTaskCandidate[] candidates) : IHubCandidateDiscovery
     {
-        public Task<HubCandidateHorizon> CaptureHorizonAsync(string requestedHub, CancellationToken ct) =>
-            Task.FromResult(new HubCandidateHorizon(candidates.Length, DateTime.UtcNow));
+        public Task<HubCandidateHorizon> CaptureHorizonAsync(string requestedHub, int matchingPartition, int partitionCount, CancellationToken ct) =>
+            Task.FromResult(new HubCandidateHorizon(candidates.Length, DateTime.UtcNow, HasExpiredCandidates: false));
 
         public Task<HubCandidatePage> ReadPageAsync(string requestedHub, int bucket,
             HubCandidateStream stream, HubCandidateHorizon horizon, HubCandidateCursor? cursor,
@@ -27,6 +27,11 @@ public sealed class HubCandidateMatcherProfileTests(ITestOutputHelper output)
             return Task.FromResult(new HubCandidatePage(items, next,
                 items.Length < pageSize, items.Length * 256));
         }
+
+        public Task<HubCandidateHydrationPage> HydrateAsync(string requestedHub, int matchingPartition,
+            int partitionCount, IReadOnlyList<Guid> ids, int byteLimit, CancellationToken ct) =>
+            Task.FromResult(new HubCandidateHydrationPage(candidates.Where(x => x.HubId == requestedHub &&
+                x.PartitionId % partitionCount == matchingPartition && ids.Contains(x.Id)).ToArray(), 0, 0));
     }
 
     [Theory]

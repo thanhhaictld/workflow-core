@@ -14,7 +14,7 @@ namespace WorkflowCore.Hub.Scheduling;
 public sealed class HubSchedulingOptions
 {
     public bool Enabled { get; set; } = true;
-    public int PollIntervalMs { get; set; } = 500;
+    public int PollIntervalMs { get; set; } = 1000;
     public int BatchSize { get; set; } = 100;
     public int MaxConcurrentBatches { get; set; } = 2;
 }
