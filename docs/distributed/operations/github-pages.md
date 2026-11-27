@@ -39,9 +39,28 @@ Open `http://127.0.0.1:8000/`. Build without starting a server:
 ```bash
 python scripts/check_docs_site.py
 mkdocs build --clean
+python scripts/check_mermaid_output.py
 ```
 
 Generated HTML goes to `site/` (ignored by Git).
+
+## Why Mermaid currently appears as code on GitHub Pages
+
+The repository's actual [Pages deployment from November 26, 2026](https://github.com/thanhhaictld/workflow-core/actions/runs/45849886423) ran **Jekyll** and generated `docs/_site/`. That is the default **Deploy from a branch** mode. It does **not** build `mkdocs.yml`, so Material's Mermaid JavaScript is never loaded even if GitHub's repository Markdown preview recognizes \`\`\`mermaid fences.
+
+The correct publishing pipeline is the custom **Documentation (GitHub Pages)** GitHub Actions workflow. It installs `mkdocs-material`, runs `mkdocs build --clean`, verifies the generated Mermaid HTML, uploads `site/`, then deploys that static HTML.
+
+**Change the repository's Pages Source, not the Mermaid syntax:**
+
+1. Open **Settings → Pages → Build and deployment**.
+2. Change **Source** from **Deploy from a branch** to **GitHub Actions**.
+3. Merge the documentation PR into `master`. The workflow `.github/workflows/docs-pages.yml` intentionally does **not** publish unmerged PR content.
+4. In **Actions → Documentation (GitHub Pages)**, confirm both jobs passed. The new Mermaid smoke test must pass in the **build** job.
+5. Reload the site. Under **Distributed Hub → Overview** or **Architecture → Runtime overview**, the flowchart should appear as an interactive SVG, not a fenced code block.
+
+If the job is still named **pages build and deployment** and its logs say `Jekyll`, GitHub Pages is continuing to publish from the branch/Jekyll source instead of the MkDocs Actions artifact.
+
+See the [Material for MkDocs Mermaid reference](https://squidfunk.github.io/mkdocs-material/reference/diagrams/) for the supported fence configuration. GitHub Pages itself is a static host; it doesn't interpret Mermaid, but it serves Material's HTML and JavaScript which render Mermaid in the browser.
 
 ## Enable deployment from GitHub Actions
 
