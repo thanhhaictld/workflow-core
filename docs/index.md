@@ -1,34 +1,34 @@
-# Workflow Core
+# Workflow Core documentation
 
-Workflow Core is a light weight workflow engine targeting .NET Standard.  Think: long running processes with multiple tasks that need to track state.  It supports pluggable persistence and concurrency providers to allow for multi-node clusters.
+Welcome to the **Workflow Core** documentation site. This repository includes the original embeddable workflow engine **and** a separately hosted **Distributed Workflow Hub** runtime. Choose the runtime you want to build.
 
-## Installing
+| | Distributed Workflow Hub | Original Workflow Core |
+| --- | --- | --- |
+| Best for | Durable distributed workflow execution, REST/SSE processors, Hub scale-out and PostgreSQL-authoritative matching | Embeddable workflow execution within a .NET application |
+| Where code lives | `scaling/` | `src/`, `test/` |
+| How it starts | Hub Gateway plus separate native Provisioner / processors | `AddWorkflow`, `IWorkflowHost` |
+| First tutorial | [Day 1: first durable workflow](distributed/tutorials/day-1-first-workflow.md) | [Original getting started](getting-started.md) |
+| Scale-out tutorial | [Day 2: two Hub replicas](distributed/tutorials/day-2-multi-hub.md) | [Multi-node clusters](multi-node-clusters.md) |
 
-Install the NuGet package "WorkflowCore"
+## Learn Distributed Workflow Hub
 
-Using nuget
+[Start with the two-day learning path](distributed/learning-path.md){ .md-button .md-button--primary }
+[Explore Hub architecture](distributed/architecture/index.md){ .md-button }
+
+```mermaid
+flowchart LR
+    A["Day 1: Hub + PostgreSQL + .NET app"] --> B["Day 2: two Hubs + processors"]
+    B --> C["Throughput / latency A-B benchmark"]
+    C --> D["PostgreSQL HA and scaling choices"]
 ```
-PM> Install-Package WorkflowCore
-```
 
-Using .net cli
-```
-dotnet add package WorkflowCore
-```
+!!! important "Different runtimes, different instructions"
+    The Hub-native processors do not connect to PostgreSQL and should not start the original `IWorkflowHost` poller. The original Workflow Core docs remain available in the **Original Workflow Core** navigation section. Historical `scaling/docs/` investigations remain in the [engineering archive](distributed/reference/engineering-archive.md).
 
-## Fluent API
+## Useful paths
 
-Define workflows with the fluent API.
-
-```c#
-public class MyWorkflow : IWorkflow
-{
-    public void Build(IWorkflowBuilder<MyData> builder)
-    {    
-        builder
-           .StartWith<Task1>()
-           .Then<Task2>()
-           .Then<Task3>;
-    }
-}
-```
+- [Distributed Hub overview](distributed/index.md)
+- [Reference configuration](distributed/reference/configuration.md)
+- [Run locally and monitor](distributed/operations/deployment.md)
+- [Publish with GitHub Pages](distributed/operations/github-pages.md)
+- [Source repository](https://github.com/thanhhaictld/workflow-core)

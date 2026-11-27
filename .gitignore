@@ -263,3 +263,7 @@ scaling/observability/.build-resolv.conf
 /scaling/benchmarks/hub-candidate-enrichment-stageB/
 /scaling/benchmarks/hub-candidate-enrichment-stageB/*
 /scaling/benchmarks/
+
+# Generated MkDocs / GitHub Pages site and local Python environment
+/site/
+/.venv/

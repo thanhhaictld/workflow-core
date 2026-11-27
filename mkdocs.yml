@@ -1,21 +1,93 @@
-site_name: Workflow Core
+site_name: Workflow Core | Distributed Hub
+site_description: Build, scale, and operate Workflow Core and the PostgreSQL-backed distributed Hub.
+site_url: https://thanhhaictld.github.io/workflow-core/
+repo_url: https://github.com/thanhhaictld/workflow-core
+repo_name: thanhhaictld/workflow-core
+edit_uri: edit/master/docs/
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
 nav:
-    - Home: index.md
-    - Getting started: getting-started.md
-    - External events: external-events.md
-    - Activity workers: activities.md
-    - Error handling: error-handling.md
-    - Control structures: control-structures.md
-    - Saga transactions: sagas.md
-    - JSON / YAML Definitions: json-yaml.md
-    - Persistence: persistence.md
-    - Middleware: workflow-middleware.md
-    - Multi-node clusters: multi-node-clusters.md
-    - Redis providers: redis.md
-    - ASP.NET Core: using-with-aspnet-core.md
-    - Elasticsearch plugin: elastic-search.md
-    - Test helpers: test-helpers.md
-    - Extensions: extensions.md
-    - Azure AI Foundry: azure-ai-foundry.md
-    - Samples: samples.md
-theme: readthedocs
+  - Home: index.md
+  - Distributed Hub:
+      - Overview: distributed/index.md
+      - Learning path: distributed/learning-path.md
+      - Tutorials:
+          - Day 1 · First workflow: distributed/tutorials/day-1-first-workflow.md
+          - Day 2 · Two Hubs / one database: distributed/tutorials/day-2-multi-hub.md
+          - Day 2 · Batching and latency: distributed/tutorials/day-2-batching.md
+          - Day 2 · PostgreSQL topologies: distributed/tutorials/day-2-postgresql.md
+          - Benchmark worksheet: distributed/tutorials/benchmark-worksheet.md
+      - Architecture:
+          - Runtime overview: distributed/architecture/index.md
+          - Matching, leasing and SSE: distributed/architecture/matching-and-leases.md
+      - Operations:
+          - Deploy and observe: distributed/operations/deployment.md
+          - Throughput tuning: distributed/operations/performance-tuning.md
+          - GitHub Pages publishing: distributed/operations/github-pages.md
+      - Reference:
+          - Configuration flags: distributed/reference/configuration.md
+          - Troubleshooting: distributed/reference/troubleshooting.md
+          - Engineering archive: distributed/reference/engineering-archive.md
+  - Original Workflow Core:
+      - Introduction: getting-started.md
+      - Activity workers: activities.md
+      - Control structures: control-structures.md
+      - External events: external-events.md
+      - Error handling: error-handling.md
+      - Saga transactions: sagas.md
+      - JSON / YAML definitions: json-yaml.md
+      - Persistence: persistence.md
+      - Middleware: workflow-middleware.md
+      - Multi-node clusters: multi-node-clusters.md
+      - Redis providers: redis.md
+      - ASP.NET Core: using-with-aspnet-core.md
+      - Elasticsearch plugin: elastic-search.md
+      - Test helpers: test-helpers.md
+      - Extensions: extensions.md
+      - Azure AI Foundry: azure-ai-foundry.md
+      - Samples: samples.md
+      - Performance: performance.md
+      - Enhanced test reporting: enhanced-test-reporting.md
