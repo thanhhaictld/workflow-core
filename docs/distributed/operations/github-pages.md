@@ -46,7 +46,7 @@ Generated HTML goes to `site/` (ignored by Git).
 
 ## Why Mermaid currently appears as code on GitHub Pages
 
-The repository's actual [Pages deployment from November 26, 2026](https://github.com/thanhhaictld/workflow-core/actions/runs/45849886423) ran **Jekyll** and generated `docs/_site/`. That is the default **Deploy from a branch** mode. It does **not** build `mkdocs.yml`, so Material's Mermaid JavaScript is never loaded even if GitHub's repository Markdown preview recognizes \`\`\`mermaid fences.
+The repository's actual [Pages deployment from November 26, 2026](https://github.com/thanhhaictld/workflow-core/actions/runs/45849886423) ran **Jekyll** and generated `docs/_site/`. That is the default **Deploy from a branch** mode. It does **not** build `mkdocs.yml`, so Material's Mermaid JavaScript is never loaded even if GitHub's repository Markdown preview recognizes Mermaid code fences.
 
 The correct publishing pipeline is the custom **Documentation (GitHub Pages)** GitHub Actions workflow. It installs `mkdocs-material`, runs `mkdocs build --clean`, verifies the generated Mermaid HTML, uploads `site/`, then deploys that static HTML.
 
